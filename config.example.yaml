@@ -1,0 +1,11 @@
+# Client config (copy → config.yaml)
+server:
+  base_url: "https://localhost:9443"
+  ws_url:   "wss://localhost:9443/events"
+
+  # Bỏ khối tls khi test trên plain HTTP dev
+  tls:
+    ca_cert:     "./certs/ca.crt"
+    client_cert: "./certs/client.crt"
+    client_key:  "./certs/client.key"
+    verify_hostname: true

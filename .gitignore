@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+server.env
+config.yaml
+data/
+logs/
+docker/certs/
+certs/
+*.har
+*.csv
+.DS_Store
