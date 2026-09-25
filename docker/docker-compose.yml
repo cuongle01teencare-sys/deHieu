@@ -1,0 +1,101 @@
+name: dehieu
+
+# deHieu server stack
+#
+# Chỉ nginx-mtls expose port ra host (9443). Mọi service khác chỉ nói chuyện
+# qua internal network. Chrome giữ lại nhưng disabled by default —
+# `docker compose --profile browser up` mới bật.
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  pgdata:
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    env_file:
+      - path: ../server.env
+        required: true
+        format: raw
+    environment:
+      POSTGRES_USER: dehieu
+      POSTGRES_DB: dehieu
+    ports:
+      - "127.0.0.1:5432:5432"   # bind localhost only để DBeaver connect
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dehieu"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]  # pub/sub only, không persist
+    networks: [backend]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  poller:
+    build:
+      context: ..
+      dockerfile: docker/services/poller/Dockerfile
+    env_file:
+      - path: ../server.env
+        required: true
+        format: raw          # KHÔNG interpolate $ trong values (cookie chứa $)
+    volumes:
+      - ../logs:/app/logs    # errlog dump ra host: <repo>/logs/errors/YYYY-MM-DD/
+    depends_on:
+      timescaledb: { condition: service_healthy }
+      redis:       { condition: service_healthy }
+    networks: [backend]
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/services/api/Dockerfile
+    env_file:
+      - path: ../server.env
+        required: true
+        format: raw
+    volumes:
+      - ../logs:/app/logs
+    depends_on:
+      timescaledb: { condition: service_healthy }
+      redis:       { condition: service_healthy }
+    networks: [backend]
+    expose: ["8080"]
+    restart: unless-stopped
+
+  nginx-mtls:
+    image: nginx:1.27-alpine
+    depends_on: [api]
+    ports:
+      - "9443:9443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    networks: [backend]
+    restart: unless-stopped
+
+  # ---------- optional: Chrome cho token-refresh flow sau này ----------
+  chrome:
+    image: browserless/chromium:latest
+    profiles: ["browser"]
+    expose: ["9222"]
+    command: >
+      chromium --headless=new --no-sandbox --disable-gpu
+      --remote-debugging-address=0.0.0.0 --remote-debugging-port=9222
+      --remote-allow-origins=*
+    networks: [backend]
+    restart: unless-stopped
