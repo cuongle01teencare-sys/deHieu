@@ -10,9 +10,16 @@ Nội dung file:
     - response (HAR-like: status, headers, body preview — do caller cung cấp)
     - extra   (dict tuỳ ý — payload snippet, iter number, ...)
 
+Context propagation qua contextvars:
+    Loop set_context() 1 lần đầu iter với snap+iteration+cursor. Mọi
+    errlog.dump() gọi sâu bên trong (VD từ ensure_stubs) tự động merge
+    context này vào — không cần plumbing param dài. Contextvars là
+    per-asyncio-task nên live_loop vs prematch_loop không đè lên nhau.
+
 Đây là SCAFFOLD. Sau này upgrade sang structured logger (Sentry, Loki, ELK)
 chỉ cần thay hàm dump() — interface caller không đổi.
 """
+import contextvars
 import json
 import logging
 import os
@@ -37,6 +44,25 @@ def _slug(s: str) -> str:
 # Nếu response body vượt ngưỡng này (chars), tách ra file .body.json riêng
 # và trong file exception chỉ giữ preview + reference.
 BODY_INLINE_LIMIT = 4096
+
+
+# ─────────────── Context propagation ───────────────
+# Loop set 1 lần đầu iter, mọi dump() bên trong tự merge.
+_ctx: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "errlog_ctx", default=None
+)
+
+
+def set_context(*, request: Optional[dict] = None,
+                response: Optional[dict] = None,
+                extra: Optional[dict] = None) -> None:
+    """Set context cho task hiện tại. Overwrites toàn bộ context trước đó
+    (không merge). Gọi lần nữa để update, gọi clear_context() để xoá."""
+    _ctx.set({"request": request, "response": response, "extra": extra or {}})
+
+
+def clear_context() -> None:
+    _ctx.set(None)
 
 
 def dump(
@@ -65,6 +91,20 @@ def dump(
         extra:    dict context tuỳ ý (iteration, cursor, ...).
     """
     try:
+        # Merge với context của task hiện tại. Explicit args ưu tiên.
+        ctx = _ctx.get() or {}
+        if request is None:
+            request = ctx.get("request")
+        if response is None:
+            response = ctx.get("response")
+        merged_extra: dict = {}
+        ctx_extra = ctx.get("extra") or {}
+        if ctx_extra:
+            merged_extra.update(ctx_extra)
+        if extra:
+            merged_extra.update(extra)
+        extra = merged_extra or None
+
         now = datetime.now()
         day_dir = LOG_ROOT / "errors" / now.strftime("%Y-%m-%d")
         day_dir.mkdir(parents=True, exist_ok=True)

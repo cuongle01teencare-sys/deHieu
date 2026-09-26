@@ -13,6 +13,19 @@ import asyncpg
 from typing import Optional
 
 from server.common.config import settings
+from server.common import errlog
+
+
+class OrphanReferenceEvent(Exception):
+    """Non-fatal: FK-referenced id chưa có row thực trong parent table → stub
+    được tạo. Không phải crash, chỉ để errlog tracking cho investigation sau.
+    Xem đây như 'feature signal' rằng Betby gửi ref không đầy đủ."""
+    def __init__(self, kind: str, ids: list):
+        self.kind = kind
+        self.ids = ids
+        preview = ids[:20]
+        more = f" (+{len(ids) - 20} more)" if len(ids) > 20 else ""
+        super().__init__(f"Auto-stubbed {kind}: {preview}{more}")
 
 
 SCHEMA = """
@@ -169,7 +182,11 @@ EXCEPTION WHEN OTHERS THEN NULL;
 END $$;
 CREATE INDEX IF NOT EXISTS idx_period_scores_match_ts ON period_scores(match_id, ts DESC);
 
--- ─────────────── VIEWS ───────────────
+-- ─────────────── VIEW ───────────────
+-- 1 view duy nhất: metadata + latest score + bet_url. LATERAL JOIN dùng
+-- idx_score_events_match_ts nên cost ~= 1 index lookup / row.
+-- Drop v_matches_with_score cũ (đã merge vào đây).
+DROP VIEW IF EXISTS v_matches_with_score;
 
 CREATE OR REPLACE VIEW v_matches_full AS
 SELECT
@@ -198,6 +215,12 @@ SELECT
     away.name                 AS away_name,
     away.country_code         AS away_country,
     away.abbreviation         AS away_abbr,
+    -- Latest score snapshot (NULL nếu match chưa có score_event nào)
+    ls.ts                     AS last_score_ts,
+    ls.home_score,
+    ls.away_score,
+    ls.period,
+    ls.match_status,
     -- Direct URL mở trận trên CSGOEmpire (Betby SPA đọc `bt-path` param).
     -- NULL nếu thiếu bất kỳ slug nào (không thể build URL hợp lệ).
     CASE
@@ -214,21 +237,11 @@ LEFT JOIN categories  c ON c.id = t.category_id
 LEFT JOIN match_competitors mch ON mch.match_id = m.id AND mch.side = 'home'
 LEFT JOIN competitors home ON home.id = mch.competitor_id
 LEFT JOIN match_competitors mca ON mca.match_id = m.id AND mca.side = 'away'
-LEFT JOIN competitors away ON away.id = mca.competitor_id;
-
-CREATE OR REPLACE VIEW v_matches_with_score AS
-SELECT
-    f.*,
-    ls.ts           AS last_score_ts,
-    ls.home_score,
-    ls.away_score,
-    ls.period,
-    ls.match_status
-FROM v_matches_full f
+LEFT JOIN competitors away ON away.id = mca.competitor_id
 LEFT JOIN LATERAL (
     SELECT ts, home_score, away_score, period, match_status
     FROM score_events se
-    WHERE se.match_id = f.match_id
+    WHERE se.match_id = m.id
     ORDER BY ts DESC
     LIMIT 1
 ) ls ON TRUE;
@@ -261,25 +274,51 @@ class Database:
     # Đảm bảo id tồn tại trước khi ghi row có FK trỏ tới. INSERT ... DO NOTHING
     # nên không đè lên record đã có thông tin đầy đủ.
 
-    async def ensure_sport_stubs(self, ids) -> None:
+    async def ensure_sport_stubs(self, ids) -> list:
+        """Tạo stub cho các sport_id chưa tồn tại. RETURNING id chỉ trả về
+        row thực sự được INSERT (không phải on-conflict-do-nothing) — dùng để
+        log event 1 lần duy nhất cho mỗi id mới. Trả list new stubbed ids."""
         ids = [i for i in set(ids) if i]
         if not ids:
-            return
+            return []
         async with self._require_pool().acquire() as conn:
-            await conn.executemany(
-                "INSERT INTO sports (id) VALUES ($1) ON CONFLICT (id) DO NOTHING",
-                [(i,) for i in ids],
+            rows = await conn.fetch(
+                "INSERT INTO sports (id) SELECT * FROM unnest($1::text[]) "
+                "ON CONFLICT (id) DO NOTHING RETURNING id",
+                ids,
             )
+        new_stubs = [r["id"] for r in rows]
+        if new_stubs:
+            errlog.dump(
+                "orphan_sport",
+                OrphanReferenceEvent("sport", new_stubs),
+                extra={"stubbed_ids": new_stubs, "count": len(new_stubs),
+                       "note": "Betby ref sport_id không có trong sports{} — "
+                               "stub đã tạo với name=NULL. Xem lại payload "
+                               "để biết Betby có gửi bổ sung sau này không."},
+            )
+        return new_stubs
 
-    async def ensure_category_stubs(self, ids) -> None:
+    async def ensure_category_stubs(self, ids) -> list:
         ids = [i for i in set(ids) if i]
         if not ids:
-            return
+            return []
         async with self._require_pool().acquire() as conn:
-            await conn.executemany(
-                "INSERT INTO categories (id) VALUES ($1) ON CONFLICT (id) DO NOTHING",
-                [(i,) for i in ids],
+            rows = await conn.fetch(
+                "INSERT INTO categories (id) SELECT * FROM unnest($1::text[]) "
+                "ON CONFLICT (id) DO NOTHING RETURNING id",
+                ids,
             )
+        new_stubs = [r["id"] for r in rows]
+        if new_stubs:
+            errlog.dump(
+                "orphan_category",
+                OrphanReferenceEvent("category", new_stubs),
+                extra={"stubbed_ids": new_stubs, "count": len(new_stubs),
+                       "note": "Betby ref category_id không có trong categories{} — "
+                               "stub đã tạo với name=NULL."},
+            )
+        return new_stubs
 
     # ─────────────── DIMENSION UPSERTS (batch) ───────────────
     # Nguyên tắc: mọi upsert dimension đều dùng COALESCE với NULLIF cho các
@@ -362,21 +401,36 @@ class Database:
 
     # ─────────────── MATCHES ───────────────
 
-    async def upsert_match(self, m: dict):
+    async def upsert_match(self, m: dict) -> bool:
+        """Upsert match. Nếu match đã có `ended_at` (bị mark ended trước đó
+        vì Betby ngừng phát tín hiệu — có thể là halftime, glitch, v.v.),
+        CLEAR `ended_at` để tiếp tục nhận data. Trả True nếu vừa reactivate
+        (caller có thể log).
+
+        Rationale (option 2): Betby's "vắng mặt = ended" không đủ chính xác
+        (10-20% false positive khi giữa hiệp). Thay vì thử đoán tín hiệu end
+        thật, mình chấp nhận reactivate mỗi khi thấy data trở lại. Chỉ trận
+        THẬT SỰ end mới không bao giờ reappear → ended_at giữ nguyên.
+        """
         async with self._require_pool().acquire() as conn:
-            await conn.execute("""
+            row = await conn.fetchrow("""
+                WITH old AS (SELECT ended_at FROM matches WHERE id = $1)
                 INSERT INTO matches (id, sport_id, tournament_id, scheduled_at,
                                      virtual, slug)
                 VALUES ($1, $2, $3, to_timestamp($4), $5, $6)
                 ON CONFLICT (id) DO UPDATE SET
                     last_seen_at  = NOW(),
+                    ended_at      = NULL,
                     sport_id      = COALESCE(EXCLUDED.sport_id,      matches.sport_id),
                     tournament_id = COALESCE(EXCLUDED.tournament_id, matches.tournament_id),
                     scheduled_at  = COALESCE(EXCLUDED.scheduled_at,  matches.scheduled_at)
+                RETURNING COALESCE((SELECT ended_at IS NOT NULL FROM old), FALSE)
+                          AS was_ended
             """,
                 m["id"], m.get("sport_id"), m.get("tournament_id"),
                 m.get("scheduled"), m.get("virtual", False), m.get("slug"),
             )
+            return bool(row and row["was_ended"])
 
     async def upsert_match_competitors(self, rows: list[dict]):
         if not rows:
@@ -428,7 +482,7 @@ class Database:
         if sport:
             args.append(sport)
             conds.append(f"sport_id = ${len(args)}")
-        q = "SELECT * FROM v_matches_with_score"
+        q = "SELECT * FROM v_matches_full"
         if conds:
             q += " WHERE " + " AND ".join(conds)
         args.append(int(limit))

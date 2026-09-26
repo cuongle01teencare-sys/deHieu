@@ -17,8 +17,11 @@ from datetime import datetime, timezone
 
 from server.common.config import settings
 from server.common.db import db
+from server.common import errlog
 from server.common.errlog import dump as errlog_dump
-from server.common.redis_bus import bus, CH_SCORES, CH_MATCHES, CH_MATCH_ENDED, CH_STATUS
+from server.common.redis_bus import (
+    bus, CH_SCORES, CH_MATCHES, CH_MATCH_ENDED, CH_MATCH_REOPENED, CH_STATUS,
+)
 from server.poller.auth import AuthClient
 from server.poller.sptpub_client import SptpubClient
 from server.poller.parser import (
@@ -91,7 +94,17 @@ async def _process_live_payload(payload: dict, seen_scores: dict) -> tuple[int, 
     # Cache event blob theo mid để tra period_scores khi score đổi
     blobs = _events(payload)
     for m in iter_matches(payload):
-        await db.upsert_match(m)
+        reactivated = await db.upsert_match(m)
+        if reactivated:
+            # Match từng ended → giờ có data lại. Có thể là false-positive
+            # end (halftime/glitch) hoặc thật sự resume. Log + publish để
+            # consumer downstream (Slack bot, dashboard) tự quyết định.
+            log.info("[live] match REACTIVATED (was ended): %s", m["id"])
+            await bus.publish(CH_MATCH_REOPENED, {
+                "match_id": m["id"],
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "source": "live",
+            })
         if m["id"] not in seen_scores:
             m_new += 1
             # Tra tên home/away từ blob để publish (không lưu vào matches nữa)
@@ -140,7 +153,14 @@ async def _process_prematch_payload(payload: dict, seen_matches: set) -> tuple[i
 
     blobs = _events(payload)
     for m in iter_matches(payload):
-        await db.upsert_match(m)
+        reactivated = await db.upsert_match(m)
+        if reactivated:
+            log.info("[prematch] match REACTIVATED (was ended): %s", m["id"])
+            await bus.publish(CH_MATCH_REOPENED, {
+                "match_id": m["id"],
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "source": "prematch",
+            })
         if m["id"] not in seen_matches:
             m_new += 1
             seen_matches.add(m["id"])
@@ -171,10 +191,22 @@ async def live_loop(state: PollerState):
     while not state.stop.is_set():
         state.live_iter += 1
         t0 = time.perf_counter()
-        snap: dict = {"request": None, "response": None}
         try:
             payload, snap = await state.client.poll_live()
+            # Set context ngay khi có snap — mọi errlog.dump sâu bên trong
+            # (ensure_stubs, DB errors, ...) tự pickup HAR + iteration info.
+            errlog.set_context(
+                request=snap.get("request"),
+                response=snap.get("response"),
+                extra={
+                    "loop": "live",
+                    "iteration": state.live_iter,
+                    "cursor": state.client.last_version_live,
+                    "seen_scores_count": len(seen_scores),
+                },
+            )
             if not payload:
+                errlog.clear_context()
                 await asyncio.sleep(interval)
                 continue
 
@@ -186,17 +218,10 @@ async def live_loop(state: PollerState):
                          state.live_iter, m_total, m_new, s_new, dt_ms)
         except Exception as e:
             log.exception("[live] iter error: %s", e)
-            errlog_dump(
-                "live_loop",
-                e,
-                request=snap.get("request"),
-                response=snap.get("response"),
-                extra={
-                    "iteration": state.live_iter,
-                    "cursor": state.client.last_version_live,
-                    "seen_scores_count": len(seen_scores),
-                },
-            )
+            # Context đã set ở trên → errlog_dump tự attach HAR + iter info
+            errlog_dump("live_loop", e)
+        finally:
+            errlog.clear_context()
         await asyncio.sleep(interval)
 
     log.info("live_loop stopped")
@@ -211,10 +236,20 @@ async def prematch_loop(state: PollerState):
     while not state.stop.is_set():
         state.prematch_iter += 1
         t0 = time.perf_counter()
-        snap: dict = {"request": None, "response": None}
         try:
             payload, snap = await state.client.poll_prematch()
+            errlog.set_context(
+                request=snap.get("request"),
+                response=snap.get("response"),
+                extra={
+                    "loop": "prematch",
+                    "iteration": state.prematch_iter,
+                    "cursor": state.client.last_version_prematch,
+                    "seen_matches_count": len(seen_matches),
+                },
+            )
             if not payload:
+                errlog.clear_context()
                 await asyncio.sleep(interval)
                 continue
 
@@ -226,17 +261,9 @@ async def prematch_loop(state: PollerState):
                          state.prematch_iter, m_total, m_new, dt_ms)
         except Exception as e:
             log.exception("[prematch] iter error: %s", e)
-            errlog_dump(
-                "prematch_loop",
-                e,
-                request=snap.get("request"),
-                response=snap.get("response"),
-                extra={
-                    "iteration": state.prematch_iter,
-                    "cursor": state.client.last_version_prematch,
-                    "seen_matches_count": len(seen_matches),
-                },
-            )
+            errlog_dump("prematch_loop", e)
+        finally:
+            errlog.clear_context()
         await asyncio.sleep(interval)
 
     log.info("prematch_loop stopped")

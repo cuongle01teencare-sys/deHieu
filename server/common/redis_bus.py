@@ -10,6 +10,7 @@ from server.common.config import settings
 CH_SCORES = "scores.updated"
 CH_MATCHES = "matches.new"
 CH_MATCH_ENDED = "matches.ended"
+CH_MATCH_REOPENED = "matches.reopened"   # match từng ended, nay có data trở lại
 CH_STATUS = "poller.status"
 
 
