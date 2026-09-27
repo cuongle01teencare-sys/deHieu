@@ -1,16 +1,8 @@
-"""
-Client-side wrapper:
-    - REST calls tới `/api/matches...`
-    - WebSocket subscribe `/events`
-"""
-import asyncio
-import json
+"""Client-side REST wrapper — gọi /api/matches, /api/platforms/.../odds."""
 import ssl
-from typing import Any, AsyncIterator, Optional
-from urllib.parse import urlencode
+from typing import Any, Optional
 
 import httpx
-import websockets
 
 from client.config import ServerConfig
 from client.core.connection import build_ssl_context
@@ -28,11 +20,29 @@ class ApiClient:
         )
 
     # ---------- REST ----------
-    async def list_matches(self, tournament: Optional[str] = None, limit: int = 50):
-        params: dict[str, Any] = {"limit": limit}
-        if tournament:
-            params["tournament"] = tournament
+    async def list_matches(self, **filters):
+        """Passthrough tất cả filter làm query params. Filter được support:
+        tournament, sport, phase, virtual, team, has_odds, since, until, limit.
+        Value None sẽ bị strip."""
+        params: dict[str, Any] = {k: v for k, v in filters.items() if v is not None}
+        params.setdefault("limit", 50)
         r = await self._http.get("/api/matches", params=params)
+        r.raise_for_status()
+        return r.json()
+
+    async def matches_count(self, **filters):
+        params: dict[str, Any] = {k: v for k, v in filters.items() if v is not None}
+        r = await self._http.get("/api/matches/count", params=params)
+        r.raise_for_status()
+        return r.json()
+
+    async def stats(self):
+        r = await self._http.get("/api/stats")
+        r.raise_for_status()
+        return r.json()
+
+    async def find(self, text: str, limit: int = 20):
+        r = await self._http.get("/api/find", params={"text": text, "limit": limit})
         r.raise_for_status()
         return r.json()
 
@@ -53,17 +63,10 @@ class ApiClient:
         r = await self._http.get("/health")
         return r.json()
 
-    # ---------- WebSocket ----------
-    async def stream(self, match_id: Optional[str] = None) -> AsyncIterator[dict]:
-        url = self.cfg.ws_url
-        if match_id:
-            url += "?" + urlencode({"match_id": match_id})
-        async with websockets.connect(url, ssl=self.ssl_ctx) as ws:
-            async for msg in ws:
-                try:
-                    yield json.loads(msg)
-                except json.JSONDecodeError:
-                    continue
+    async def odds(self, platform: str, slug: str):
+        r = await self._http.get(f"/api/platforms/{platform}/matches/{slug}/odds")
+        r.raise_for_status()
+        return r.json()
 
     async def close(self):
         await self._http.aclose()

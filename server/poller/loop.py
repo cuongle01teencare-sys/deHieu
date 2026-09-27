@@ -1,33 +1,33 @@
 """
-Poller loops (phase 1).
+Poller loops.
 
-Chạy 2 async task song song trong 1 process:
-  - live_loop      : poll /api/v4/live/... mỗi POLL_LIVE_SECONDS (mặc định 1s)
-  - prematch_loop  : poll /api/v4/prematch/... mỗi POLL_PREMATCH_SECONDS (30s)
+Chạy 4 async task song song trong 1 process:
+  - live_loop        : poll /api/v4/live/... mỗi POLL_LIVE_SECONDS (mặc định 1s)
+  - prematch_loop    : poll /api/v4/prematch/... mỗi POLL_PREMATCH_SECONDS (30s)
+  - descriptors_loop : refresh market dict + statuses + per-event player names
+  - status_loop      : heartbeat log mỗi 60s
 
 Chia sẻ:
-  - `db`, `bus`, `client` (SptpubClient) — thread-safe qua asyncio
+  - `db`, `client` (SptpubClient) — thread-safe qua asyncio
   - `seen_scores` — dict theo dõi state, mỗi loop có bản riêng để tránh race
-  - `auth` — refresh JWT có lock để 2 loop không refresh đồng thời
+
+sptpub public API không cần auth — không có JWT refresh, không có bootstrap.
 """
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
 
 from server.common.config import settings
 from server.common.db import db
 from server.common import errlog
 from server.common.errlog import dump as errlog_dump
-from server.common.redis_bus import (
-    bus, CH_SCORES, CH_MATCHES, CH_MATCH_ENDED, CH_MATCH_REOPENED, CH_STATUS,
-)
-from server.poller.auth import AuthClient
 from server.poller.sptpub_client import SptpubClient
 from server.poller.parser import (
     iter_matches, iter_score_events, iter_removed_ids,
     iter_sports, iter_categories, iter_tournaments,
     iter_competitors, iter_match_competitors, iter_period_scores_for,
+    iter_market_odds, iter_matches_with_player_props,
+    parse_market_descriptors, parse_event_descriptions,
     _events,
 )
 
@@ -36,28 +36,17 @@ log = logging.getLogger("poller")
 
 class PollerState:
     """Container cho state chia sẻ giữa 2 loop."""
-    def __init__(self, auth: AuthClient, client: SptpubClient):
-        self.auth = auth
+    def __init__(self, client: SptpubClient):
         self.client = client
-        self.refresh_lock = asyncio.Lock()
         self.stop = asyncio.Event()
         self.live_iter = 0
         self.prematch_iter = 0
         self.live_seen = 0
         self.prematch_seen = 0
-
-    async def refresh_if_needed(self, response_status: int) -> bool:
-        """Gọi khi gặp 401/403. Refresh JWT có lock để tránh song song."""
-        if response_status not in (401, 403):
-            return False
-        async with self.refresh_lock:
-            try:
-                await self.auth.refresh_betby()
-                return True
-            except Exception as e:
-                log.error("refresh_betby failed: %s", e)
-                self.stop.set()
-                return False
+        # match_id nào có player-props markets → descriptors_loop sẽ fetch
+        # per-event descriptions cho những trận này (lookup tên player).
+        # Cùng dict để track last-fetched-ts (0 = chưa fetch bao giờ).
+        self.player_props_events: dict[str, float] = {}
 
 
 async def _upsert_dimensions(payload: dict) -> None:
@@ -70,8 +59,21 @@ async def _upsert_dimensions(payload: dict) -> None:
     await db.upsert_competitors(list(iter_competitors(payload)))
 
 
-async def _process_live_payload(payload: dict, seen_scores: dict) -> tuple[int, int, int]:
-    """Ghi dimensions + matches + m:n + score events + period_scores.
+async def _ingest_odds_and_track_props(payload: dict, state: "PollerState") -> tuple[int, int]:
+    """Bóc markets từ payload → UPSERT odds_current + INSERT odds_history (dedup).
+    Đồng thời track trận có player-props markets để descriptors_loop biết fetch.
+    Return (touched, changed) — dùng cho log."""
+    odds_rows = list(iter_market_odds(payload))
+    touched, changed = await db.ingest_odds(state.client.platform, odds_rows)
+    # Track player-props events (idempotent — chỉ set khi chưa có)
+    for mid in iter_matches_with_player_props(payload):
+        state.player_props_events.setdefault(mid, 0.0)
+    return touched, changed
+
+
+async def _process_live_payload(payload: dict, seen_scores: dict,
+                                 state: "PollerState") -> tuple[int, int, int]:
+    """Ghi dimensions + matches + m:n + score events + period_scores + odds.
     Return (m_count, m_new, s_new).
     Cũng xử lý match bị remove khỏi live view (events[id]: null)."""
     m_count = s_new = m_new = 0
@@ -81,10 +83,6 @@ async def _process_live_payload(payload: dict, seen_scores: dict) -> tuple[int, 
         seen_scores.pop(removed_mid, None)
         was_marked = await db.mark_ended(removed_mid)
         if was_marked:
-            await bus.publish(CH_MATCH_ENDED, {
-                "match_id": removed_mid,
-                "ts": datetime.now(timezone.utc).isoformat(),
-            })
             log.info("[live] match ended: %s", removed_mid)
 
     # 1) Dimensions trước (FK dependency)
@@ -94,30 +92,14 @@ async def _process_live_payload(payload: dict, seen_scores: dict) -> tuple[int, 
     # Cache event blob theo mid để tra period_scores khi score đổi
     blobs = _events(payload)
     for m in iter_matches(payload):
-        reactivated = await db.upsert_match(m)
+        reactivated = await db.upsert_match(m, phase="live")
         if reactivated:
             # Match từng ended → giờ có data lại. Có thể là false-positive
-            # end (halftime/glitch) hoặc thật sự resume. Log + publish để
-            # consumer downstream (Slack bot, dashboard) tự quyết định.
+            # end (halftime/glitch) hoặc thật sự resume. Chỉ log — consumer
+            # sau này có thể query `matches` với `ended_at IS NULL` để biết.
             log.info("[live] match REACTIVATED (was ended): %s", m["id"])
-            await bus.publish(CH_MATCH_REOPENED, {
-                "match_id": m["id"],
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "source": "live",
-            })
         if m["id"] not in seen_scores:
             m_new += 1
-            # Tra tên home/away từ blob để publish (không lưu vào matches nữa)
-            desc = (blobs.get(m["id"]) or {}).get("desc") or {}
-            comps = desc.get("competitors") or []
-            await bus.publish(CH_MATCHES, {
-                "match_id": m["id"],
-                "home": (comps[0].get("name") if len(comps) > 0 else None),
-                "away": (comps[1].get("name") if len(comps) > 1 else None),
-                "sport_id": m["sport_id"],
-                "tournament_id": m["tournament_id"],
-                "source": "live",
-            })
         m_count += 1
     await db.upsert_match_competitors(list(iter_match_competitors(payload)))
 
@@ -133,50 +115,36 @@ async def _process_live_payload(payload: dict, seen_scores: dict) -> tuple[int, 
         periods = iter_period_scores_for(blobs.get(mid) or {})
         if periods:
             await db.insert_period_scores(mid, periods)
-        await bus.publish(CH_SCORES, {
-            "match_id": mid,
-            "home_score": evt["home_score"], "away_score": evt["away_score"],
-            "period": evt["period"], "match_status": evt["match_status"],
-            "ts": datetime.now(timezone.utc).isoformat(),
-        })
         s_new += 1
+
+    # 4) Odds ingestion (piggy-back trên cùng payload)
+    await _ingest_odds_and_track_props(payload, state)
 
     return m_count, m_new, s_new
 
 
-async def _process_prematch_payload(payload: dict, seen_matches: set) -> tuple[int, int]:
-    """Ghi dimensions + matches + m:n từ prematch payload (chưa có score).
+async def _process_prematch_payload(payload: dict, seen_matches: set,
+                                     state: "PollerState") -> tuple[int, int]:
+    """Ghi dimensions + matches + m:n + odds từ prematch payload (chưa có score).
     Return (m_count, m_new)."""
     m_count = m_new = 0
 
     await _upsert_dimensions(payload)
 
-    blobs = _events(payload)
+    blobs = _events(payload)   # noqa: F841 — giữ để nhất quán với live path
     for m in iter_matches(payload):
-        reactivated = await db.upsert_match(m)
+        reactivated = await db.upsert_match(m, phase="prematch")
         if reactivated:
             log.info("[prematch] match REACTIVATED (was ended): %s", m["id"])
-            await bus.publish(CH_MATCH_REOPENED, {
-                "match_id": m["id"],
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "source": "prematch",
-            })
         if m["id"] not in seen_matches:
             m_new += 1
             seen_matches.add(m["id"])
-            desc = (blobs.get(m["id"]) or {}).get("desc") or {}
-            comps = desc.get("competitors") or []
-            await bus.publish(CH_MATCHES, {
-                "match_id": m["id"],
-                "home": (comps[0].get("name") if len(comps) > 0 else None),
-                "away": (comps[1].get("name") if len(comps) > 1 else None),
-                "sport_id": m["sport_id"],
-                "tournament_id": m["tournament_id"],
-                "scheduled": m.get("scheduled"),
-                "source": "prematch",
-            })
         m_count += 1
     await db.upsert_match_competitors(list(iter_match_competitors(payload)))
+
+    # Odds ingestion (piggy-back)
+    await _ingest_odds_and_track_props(payload, state)
+
     return m_count, m_new
 
 
@@ -210,7 +178,7 @@ async def live_loop(state: PollerState):
                 await asyncio.sleep(interval)
                 continue
 
-            m_total, m_new, s_new = await _process_live_payload(payload, seen_scores)
+            m_total, m_new, s_new = await _process_live_payload(payload, seen_scores, state)
             dt_ms = (time.perf_counter() - t0) * 1000
             state.live_seen = len(seen_scores)
             if s_new or m_new:
@@ -253,7 +221,7 @@ async def prematch_loop(state: PollerState):
                 await asyncio.sleep(interval)
                 continue
 
-            m_total, m_new = await _process_prematch_payload(payload, seen_matches)
+            m_total, m_new = await _process_prematch_payload(payload, seen_matches, state)
             dt_ms = (time.perf_counter() - t0) * 1000
             state.prematch_seen = len(seen_matches)
             if m_new:
@@ -269,59 +237,125 @@ async def prematch_loop(state: PollerState):
     log.info("prematch_loop stopped")
 
 
+async def descriptors_loop(state: PollerState):
+    """
+    Loop chậm (mặc định 1h): refresh 2 từ điển bất biến trên sptpub.
+      - /api/v3/descriptions/.../markets/en   → odds.market_descriptors
+      - /api/v1/descriptions/statuses/en      → odds.status_labels
+    Cộng thêm sub-loop nhanh hơn: quét state.player_props_events, fetch
+    per-event descriptions (players + tên market đã render) cho trận đến
+    tuổi refresh (poll_event_descriptions_seconds).
+    """
+    slow = settings.poll_descriptors_seconds
+    per_event = settings.poll_event_descriptions_seconds
+
+    async def _refresh_global():
+        try:
+            markets = await state.client.fetch_market_descriptors()
+            if markets:
+                rows = list(parse_market_descriptors(markets))
+                await db.upsert_market_descriptors(state.client.platform, rows)
+                log.info("[descriptors] market dict refreshed: %d markets", len(rows))
+        except Exception as e:
+            log.exception("[descriptors] market fetch failed: %s", e)
+            errlog_dump("descriptors_market", e)
+        try:
+            statuses = await state.client.fetch_statuses()
+            if statuses:
+                await db.upsert_status_labels(state.client.platform, statuses)
+                log.info("[descriptors] status dict refreshed: %d codes", len(statuses))
+        except Exception as e:
+            log.exception("[descriptors] status fetch failed: %s", e)
+            errlog_dump("descriptors_status", e)
+
+    async def _refresh_one_event(event_id: str):
+        try:
+            payload = await state.client.fetch_event_descriptions(event_id)
+            if not payload:
+                return
+            players, overrides = parse_event_descriptions(payload)
+            if players:
+                await db.upsert_players(state.client.platform, players)
+            if overrides:
+                await db.upsert_event_market_overrides(
+                    state.client.platform, event_id, overrides,
+                )
+            log.info("[descriptors] event=%s players=%d overrides=%d",
+                     event_id, len(players), len(overrides))
+        except Exception as e:
+            log.warning("[descriptors] event=%s fetch failed: %s", event_id, e)
+            errlog_dump("descriptors_event", e,
+                        extra={"event_id": event_id})
+
+    # Boot: refresh global immediately (khi database vẫn còn trống).
+    await _refresh_global()
+    last_global = time.time()
+
+    while not state.stop.is_set():
+        # Tick nhanh — 5s — kiểm tra per-event và global.
+        await asyncio.sleep(5.0)
+        now = time.time()
+
+        # Global refresh
+        if now - last_global >= slow:
+            await _refresh_global()
+            last_global = now
+
+        # Per-event: fetch tối đa 3 trận/tick để không dồn burst.
+        due = [mid for mid, ts in state.player_props_events.items()
+               if now - ts >= per_event]
+        for mid in due[:3]:
+            await _refresh_one_event(mid)
+            state.player_props_events[mid] = time.time()
+
+    log.info("descriptors_loop stopped")
+
+
 async def status_loop(state: PollerState):
-    """Heartbeat mỗi 60s: log + publish Redis."""
+    """Heartbeat mỗi 60s: chỉ log (không publish, đã bỏ Redis)."""
     while not state.stop.is_set():
         await asyncio.sleep(60)
         log.info("heartbeat live=%d/%d prematch=%d/%d",
                  state.live_iter, state.live_seen,
                  state.prematch_iter, state.prematch_seen)
-        try:
-            await bus.publish(CH_STATUS, {
-                "live_iter": state.live_iter, "live_seen": state.live_seen,
-                "prematch_iter": state.prematch_iter, "prematch_seen": state.prematch_seen,
-                "ts": datetime.now(timezone.utc).isoformat(),
-            })
-        except Exception:
-            pass
 
 
 # ---------- entry ----------
 
 async def run_poller():
-    log.info("Poller starting. live=%.2fs prematch=%.2fs brand=%s",
-             settings.poll_live_seconds, settings.poll_prematch_seconds,
-             settings.csgo_brand_id)
+    log.info("Poller starting. live=%s(%.2fs) prematch=%s(%.2fs) brand=%s",
+             "ON" if settings.poll_live_enabled else "OFF",
+             settings.poll_live_seconds,
+             "ON" if settings.poll_prematch_enabled else "OFF",
+             settings.poll_prematch_seconds,
+             settings.sptpub_brand_id)
 
     await db.connect()
-    await bus.connect()
-    log.info("DB + Redis connected")
+    log.info("DB connected")
 
-    auth = AuthClient()
+    client = SptpubClient(
+        brand_id=settings.sptpub_brand_id,
+        base_url=settings.sptpub_base,
+        user_agent=settings.sptpub_user_agent,
+    )
+    state = PollerState(client)
+
+    # Build task list theo flag — chỉ include loop được bật.
+    # descriptors_loop + status_loop luôn bật (rẻ, chỉ log/heartbeat).
+    tasks = [descriptors_loop(state), status_loop(state)]
+    if settings.poll_live_enabled:
+        tasks.append(live_loop(state))
+    else:
+        log.info("live_loop DISABLED (POLL_LIVE_ENABLED=false)")
+    if settings.poll_prematch_enabled:
+        tasks.append(prematch_loop(state))
+    else:
+        log.info("prematch_loop DISABLED (POLL_PREMATCH_ENABLED=false)")
+
     try:
-        await auth.bootstrap()
-        log.info("Bootstrap OK.")
-    except Exception as e:
-        log.error("Bootstrap failed: %s", e)
-        log.error("Sleeping 30s before exit để tránh hammering server.")
-        await auth.close()
-        await bus.close()
-        await db.close()
-        await asyncio.sleep(30)
-        return
-
-    client = SptpubClient(auth.sptpub, settings.csgo_brand_id, settings.sptpub_base)
-    state = PollerState(auth, client)
-
-    try:
-        await asyncio.gather(
-            live_loop(state),
-            prematch_loop(state),
-            status_loop(state),
-        )
+        await asyncio.gather(*tasks)
     finally:
         state.stop.set()
-        await auth.close()
-        await bus.close()
+        await client.close()
         await db.close()
         log.info("Poller stopped.")

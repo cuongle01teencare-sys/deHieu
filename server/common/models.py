@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class MatchDTO(BaseModel):
-    """Phản chiếu view v_matches_full / v_matches_with_score — join sports +
+    """Phản chiếu view v_csgoempire_matches_full / v_csgoempire_matches_with_score — join sports +
     tournaments + categories + competitors. Field `id` alias sang `match_id`
     để backward-compat với client cũ."""
     id: str = Field(alias="match_id")
@@ -15,6 +15,8 @@ class MatchDTO(BaseModel):
     first_seen_at: Optional[datetime] = None
     last_seen_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
+    # 'prematch' | 'live' | 'ended' | None (chưa từng được poll_live/prematch thấy)
+    phase: Optional[str] = None
 
     sport_id: Optional[str] = None
     sport_name: Optional[str] = None
@@ -38,7 +40,7 @@ class MatchDTO(BaseModel):
     away_country: Optional[str] = None
     away_abbr: Optional[str] = None
 
-    # Chỉ có trong v_matches_with_score (list endpoint)
+    # Chỉ có trong v_csgoempire_matches_with_score (list endpoint)
     last_score_ts: Optional[datetime] = None
     home_score: Optional[int] = None
     away_score: Optional[int] = None

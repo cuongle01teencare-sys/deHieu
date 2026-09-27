@@ -1,6 +1,6 @@
 # deHieu
 
-Server-side score polling platform + CLI client.
+Server-side sports data polling platform (matches / scores / markets / odds) + CLI client.
 
 ## Kiến trúc
 
@@ -8,25 +8,37 @@ Server-side score polling platform + CLI client.
 ┌─────────── Docker stack (server) ──────────────────────────┐
 │                                                             │
 │  poller ──HTTP──► sptpub API ──► TimescaleDB               │
-│     │                                ▲                      │
-│     └── publish ──► Redis ──► api (FastAPI)                │
-│                                      │                      │
-│                                      ▼                      │
-│                         nginx-mtls :9443 (TLS 1.3 + mTLS)   │
-│                                      │                      │
-│  chrome (optional, profile=browser)  │                      │
-└──────────────────────────────────────┼──────────────────────┘
-                                       │
-                              wss/https (client cert)
-                                       │
-                                  ┌────▼────┐
-                                  │  CLI    │  Rich REPL
-                                  └─────────┘
+│                                     ▲                       │
+│                                     │                       │
+│                                api (FastAPI)                │
+│                                     │                       │
+│                                     ▼                       │
+│                        nginx-mtls :9443 (TLS 1.3 + mTLS)    │
+│                                     │                       │
+│  chrome (optional, profile=browser) │                       │
+└─────────────────────────────────────┼───────────────────────┘
+                                      │
+                                 https (client cert)
+                                      │
+                                 ┌────▼────┐
+                                 │  CLI    │  Rich REPL
+                                 └─────────┘
 ```
 
-- **poller**: loop async, gọi `/api/v4/live/brand/{id}/en/{version}`, ghi TimescaleDB, publish sang Redis khi có event
-- **api**: FastAPI với REST (`/api/matches`) và WS (`/events`) — WS chỉ subscribe Redis rồi fanout
-- **client**: REPL Python, gọi REST + WS qua mTLS
+- **poller**: 4 async loop trong 1 process — `live` (1s), `prematch` (30s),
+  `descriptors` (market dict + statuses + per-event player names),
+  `status` (heartbeat log). Ghi thẳng TimescaleDB, không dùng pub/sub.
+- **api**: FastAPI REST — `/api/matches`, `/api/matches/{id}/scores`,
+  `/api/platforms/{platform}/matches/{slug}/odds`.
+- **client**: REPL Python, gọi REST qua mTLS.
+
+Schema DB tách 2 namespace:
+- `public` — source-of-truth thông tin từ csgoempire: sports, categories,
+  tournaments, competitors, matches, score_events, period_scores.
+- `odds`  — markets/odds platform-agnostic: market_descriptors, players,
+  event_market_overrides, status_labels, odds_current, odds_history
+  (Timescale hypertable). Sau này add platform khác chỉ việc INSERT với
+  `platform='<name>'`.
 
 ## Bước cài
 
@@ -34,10 +46,12 @@ Server-side score polling platform + CLI client.
 
 ```bash
 cd docker
-cp ../server.env.example ../server.env      # sửa password + creds
-bash scripts/gen-certs.sh vps.example.com
+cp ../server.env.example ../server.env      # sửa cookie + device_id + TOTP
+bash scripts/gen-certs.sh localhost         # sinh CA + server + client cert
 docker compose up -d --build
 ```
+
+3 container chạy: `timescaledb`, `poller`, `api`, `nginx-mtls`.
 
 ### Client
 
@@ -56,8 +70,7 @@ uv run python -m main
 >>> matches limit=20
 >>> match 2714859373016002596
 >>> scores 2714859373016002596 limit=100
->>> stream                                   # tail all events
->>> stream match=2714859373016002596        # tail 1 trận
+>>> odds csgoempire alliance-3dmax-2715306923066007564
 >>> quit
 ```
 
@@ -67,10 +80,10 @@ uv run python -m main
 deHieu/
 ├── docker/               # compose + nginx + Dockerfiles
 ├── server/               # poller + api (Python)
-│   ├── common/           # config, db, redis_bus, models
+│   ├── common/           # config, db, models
 │   ├── poller/           # auth, sptpub_client, parser, loop
-│   └── api/              # app, routes_query, routes_stream
-├── client                  # client REPL
+│   └── api/              # app, routes_query, routes_odds
+├── client                # client REPL
 │   ├── cli/              # repl, commands, ui
 │   ├── core/             # api_client, connection (TLS)
 │   └── config.py
@@ -84,7 +97,9 @@ deHieu/
 ## Roadmap
 
 - [x] Poll HTTP thuần, giữ Chrome ở compose profile
+- [x] Odds + markets ingestion (piggy-back trên live/prematch payload)
+- [x] Per-event descriptions (player name mapping cho player-props)
 - [ ] Chrome-based login flow (phase 2) — refresh cookie khi hết hạn
 - [ ] Continuous aggregates của Timescale (score changes/hour/tournament)
-- [ ] Auth mTLS cho REST/WS đã có sẵn qua nginx; API có thể check X-Client-CN
-- [ ] Consumer example (Slack/Discord webhook khi có bàn thắng)
+- [ ] Auth mTLS cho REST đã có sẵn qua nginx; API có thể check X-Client-CN
+- [ ] WebSocket streaming (phase sau — thêm lại Redis khi cần)

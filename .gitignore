@@ -12,3 +12,4 @@ certs/
 *.har
 *.csv
 .DS_Store
+dumps

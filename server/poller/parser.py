@@ -183,3 +183,120 @@ def iter_removed_ids(payload: dict) -> Iterator[str]:
     for mid, blob in events.items():
         if blob is None:
             yield mid
+
+
+# ─────────────── ODDS / MARKETS ───────────────
+# Format của `markets` trong mỗi event blob:
+#   markets = {
+#     "<market_id>": {
+#         "<specifier_key>": {                # "" khi market không có specifier
+#             "<outcome_id>": {"k": "1.88"}
+#         }
+#     }
+#   }
+# `k` = decimal odds (string). Specifier key ví dụ "mapnr=1|hcp=-2.5".
+#
+# Player-props markets (60040/60041/60043) có `player=od:player:...` trong
+# specifier_key. Loop dùng PLAYER_PROP_MARKET_IDS để biết trận nào cần
+# fetch per-event descriptions endpoint để lookup tên player.
+
+PLAYER_PROP_MARKET_IDS = {"60040", "60041", "60043"}
+
+
+def _decimal_or_none(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def iter_market_odds(payload: dict) -> Iterator[dict]:
+    """Yield mỗi outcome trong payload dưới dạng row phẳng, sẵn cho DB.
+    Row = {match_id, market_id, specifier_key, outcome_id, decimal_odds}."""
+    for mid, blob in _events(payload).items():
+        markets = blob.get("markets") or {}
+        if not isinstance(markets, dict):
+            continue
+        for market_id, buckets in markets.items():
+            if not isinstance(buckets, dict):
+                continue
+            for spec_key, outcomes in buckets.items():
+                if not isinstance(outcomes, dict):
+                    continue
+                for outcome_id, obj in outcomes.items():
+                    if not isinstance(obj, dict):
+                        continue
+                    odds = _decimal_or_none(obj.get("k"))
+                    if odds is None:
+                        continue
+                    yield {
+                        "match_id": str(mid),
+                        "market_id": str(market_id),
+                        "specifier_key": spec_key or "",
+                        "outcome_id": str(outcome_id),
+                        "decimal_odds": odds,
+                    }
+
+
+def iter_matches_with_player_props(payload: dict) -> Iterator[str]:
+    """Yield match_id có ít nhất 1 player-props market → caller fetch
+    per-event descriptions cho những trận này để có tên player."""
+    for mid, blob in _events(payload).items():
+        markets = blob.get("markets") or {}
+        if isinstance(markets, dict) and (set(markets.keys()) & PLAYER_PROP_MARKET_IDS):
+            yield str(mid)
+
+
+# ─────────────── DESCRIPTOR PARSERS ───────────────
+# Được gọi bởi descriptors_loop / on-demand fetch, không phải từ payload live.
+
+def parse_market_descriptors(payload: dict) -> Iterator[dict]:
+    """/api/v3/descriptions/brand/{brand}/markets/en → dict {market_id: {...}}.
+    Yield row cho db.upsert_market_descriptors."""
+    if not isinstance(payload, dict):
+        return
+    for market_id, m in payload.items():
+        if not isinstance(m, dict):
+            continue
+        yield {
+            "id": str(market_id),
+            "name": m.get("name"),
+            "market_type": m.get("market_type"),
+            "specifiers": m.get("specifiers") or [],
+            "variants": m.get("variants") or {},
+        }
+
+
+def parse_event_descriptions(payload: dict) -> tuple[list[dict], list[dict]]:
+    """/api/v3/descriptions/brand/{brand}/event/{event_id}/en →
+       {players: [...], markets: {market_id: {name, variants{spec_key: [{name, outcomes}]}}}}
+
+    Trả (players_rows, overrides_rows):
+      players_rows   = [{id, name, competitor_id}, ...]
+      overrides_rows = [{market_id, specifier_key, market_name, outcomes[]}, ...]"""
+    players = []
+    for p in (payload.get("players") or []):
+        if not isinstance(p, dict) or not p.get("id"):
+            continue
+        players.append({
+            "id": p["id"],
+            "name": (p.get("name") or "").strip() or None,
+            "competitor_id": p.get("competitor_id"),
+        })
+
+    overrides = []
+    for market_id, m in (payload.get("markets") or {}).items():
+        if not isinstance(m, dict):
+            continue
+        for spec_key, variant_list in (m.get("variants") or {}).items():
+            # variant_list là list of {name, outcomes[]}. Thường có 1 phần tử.
+            if not isinstance(variant_list, list) or not variant_list:
+                continue
+            v = variant_list[0]
+            overrides.append({
+                "market_id": str(market_id),
+                "specifier_key": spec_key or "",
+                "market_name": v.get("name") or m.get("name"),
+                "outcomes": v.get("outcomes") or [],
+            })
+    return players, overrides

@@ -1,11 +1,13 @@
 # Client config (copy → config.yaml)
+#
+# Path cert relative đến cwd — mặc định user chạy `uv run python -m main` từ
+# repo root, và `bash scripts/gen-certs.sh` sinh cert vào `docker/certs/`.
 server:
   base_url: "https://localhost:9443"
-  ws_url:   "wss://localhost:9443/events"
 
-  # Bỏ khối tls khi test trên plain HTTP dev
+  # Bỏ khối tls khi test trên plain HTTP dev (VD trỏ base_url tới http://localhost:8080)
   tls:
-    ca_cert:     "./certs/ca.crt"
-    client_cert: "./certs/client.crt"
-    client_key:  "./certs/client.key"
+    ca_cert: "./docker/certs/ca.crt"
+    client_cert: "./docker/certs/client.crt"
+    client_key: "./docker/certs/client.key"
     verify_hostname: true

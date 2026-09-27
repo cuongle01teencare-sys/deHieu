@@ -8,28 +8,11 @@ class Settings(BaseSettings):
     # DB
     database_url: str = "postgresql://dehieu:changeme@timescaledb:5432/dehieu"
 
-    # Redis
-    redis_url: str = "redis://redis:6379/0"
-
-    # Poller auth — phase 1: dán Cookie header value copy từ browser
-    # Extract: F12 → Network → 1 request tới csgoempire.com/api → phải chuột → Copy → Copy as cURL
-    # → tách phần `-H "cookie: ..."` → paste vào CSGO_COOKIE_HEADER
-    csgo_cookie_header: str = ""              # "name1=v1; name2=v2; ..."
-    csgo_bearer_token: str = ""               # dự phòng, hiện chưa dùng
-
-    # Device identifier — extract từ HAR: header `x-empire-device-identifier`
-    # Cùng giá trị với query `?uuid=...` trong /api/v2/metadata
-    csgo_device_id: str = ""                  # ví dụ: "ad615e93-1ede-4eb4-814d-83ae7b95994b"
-    csgo_env_class: str = "green"             # x-env-class header
-
-    # TOTP secret (base32) lấy khi setup 2FA. Poller tự compute code 6 số mỗi 30s.
-    # Để trống nếu account chưa bật 2FA (poller sẽ gửi "0000" placeholder).
-    csgo_totp_secret: str = ""
-
-    csgo_base: str = "https://csgoempire.com"
-    csgo_brand_id: str = "2432911154364948480"
+    # sptpub polling — read-only public API, không cần auth (verified qua HAR).
+    # Xem docs/platforms/csgoempire.md.
     sptpub_base: str = "https://api-h-c7818b61-608.sptpub.com"
-    csgo_user_agent: str = (
+    sptpub_brand_id: str = "2432911154364948480"   # brand csgoempire trên sptpub
+    sptpub_user_agent: str = (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36 Edg/153.0.0.0"
     )
@@ -42,8 +25,53 @@ class Settings(BaseSettings):
                     object.__setattr__(self, name, val[1:-1])
 
     # Poller loops (chạy song song, interval riêng)
+    # Flags bật/tắt loop — tạm thời có thể tập trung 1 loop khi debug hoặc
+    # tiết kiệm tài nguyên. `poll_live_enabled=False` → live_loop KHÔNG start
+    # (skip trong asyncio.gather). Không đụng descriptors_loop, prematch_loop,
+    # status_loop.
+    poll_live_enabled: bool = False
+    poll_prematch_enabled: bool = True
+
     poll_live_seconds: float = 1.0            # score real-time
     poll_prematch_seconds: float = 30.0       # odds/schedule
+    # Từ điển market descriptor + status labels — refresh chậm (không đổi thường).
+    poll_descriptors_seconds: float = 3600.0
+    # Per-event descriptions (players + market override) — chỉ fetch cho trận
+    # có player-props markets. Mỗi trận refetch mỗi <interval>s.
+    poll_event_descriptions_seconds: float = 300.0
+
+
+    # ─── Polymarket WebSocket ingestor (Phase 2A) ───
+    poly_ws_url: str = "wss://ws-subscriptions-frontend-clob.polymarket.com/ws/market"
+    # Cứ N giây re-check subscription map từ DB; nếu đổi thì reconnect.
+    poly_ws_refresh_seconds: int = 60
+    # Batch flush interval (giây). Buffer > poly_ws_flush_max cũng flush.
+    poly_ws_flush_seconds: float = 0.5
+    poly_ws_flush_max: int = 100
+    # Backoff khi WS lỗi.
+    poly_ws_reconnect_backoff_seconds: int = 5
+    # Flag bật/tắt WS ingestor.
+    poly_ws_enabled: bool = True
+
+    # ─── Polymarket poller ───
+    # Interval giữa 2 lần fetch keyset. 60s là đủ nhẹ vì gamma-api CDN cache 300s.
+    poly_poll_interval_seconds: float = 60.0
+    # Cửa sổ prematch: fetch event có startTime trong [NOW, NOW + window_hours].
+    poly_window_hours: int = 168   # 7 ngày
+    # Số event tối đa 1 lần fetch (page size).
+    poly_page_limit: int = 100
+    # Bật/tắt polymarket poller (như POLL_PREMATCH_ENABLED cho sptpub).
+    poly_poll_enabled: bool = True
+
+    # ─── Arb detector (Phase 3) ───
+    arb_poll_interval_seconds: float = 2.0
+    # Freshness cho odds. Default 300s (5 phút) để cover prematch — sptpub chỉ
+    # bump updated_at khi odds đổi thật, không bump per-cycle. Prematch odds
+    # có thể đứng yên vài phút → nếu freshness quá chặt sẽ miss arb prematch.
+    # Live-only setup: giảm xuống 15-30s.
+    arb_freshness_seconds: int = 300
+    arb_min_edge_improvement_pct: float = 0.5
+    arb_enabled: bool = True
 
     # API
     api_host: str = "0.0.0.0"
