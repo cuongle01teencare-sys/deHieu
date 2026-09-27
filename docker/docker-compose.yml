@@ -15,7 +15,11 @@ volumes:
 
 services:
   timescaledb:
-    image: timescale/timescaledb:latest-pg16
+    # Image `-ha` (High Availability) — chính thức của Timescale, bao gồm sẵn:
+    # timescaledb, timescaledb_toolkit, pg_cron, pg_stat_statements, postgis, ...
+    # Base Debian, PGDATA mặc định /home/postgres/pgdata/data — override về
+    # /var/lib/postgresql/data để dùng chung volume `pgdata` cũ (không migrate).
+    image: timescale/timescaledb-ha:pg16
     env_file:
       - path: ../server.env
         required: true
@@ -23,6 +27,16 @@ services:
     environment:
       POSTGRES_USER: dehieu
       POSTGRES_DB: dehieu
+      PGDATA: /var/lib/postgresql/data
+    # -c args truyền cho postmaster:
+    #   shared_preload_libraries — bắt buộc để pg_cron activate
+    #   cron.database_name       — pg_cron chỉ lưu job/log trong DB này
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_preload_libraries=timescaledb,pg_cron"
+      - "-c"
+      - "cron.database_name=dehieu"
     ports:
       - "127.0.0.1:5432:5432"   # bind localhost only để DBeaver connect
     volumes:
@@ -31,16 +45,6 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dehieu"]
-      interval: 5s
-      retries: 10
-
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--save", "", "--appendonly", "no"]  # pub/sub only, không persist
-    networks: [backend]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       retries: 10
 
@@ -56,9 +60,61 @@ services:
       - ../logs:/app/logs    # errlog dump ra host: <repo>/logs/errors/YYYY-MM-DD/
     depends_on:
       timescaledb: { condition: service_healthy }
-      redis:       { condition: service_healthy }
     networks: [backend]
     restart: unless-stopped
+
+
+  polymarket-poller:
+    # Cùng image với poller (sptpub) — chỉ đổi CMD. Reuse deps trong 1 build.
+    build:
+      context: ..
+      dockerfile: docker/services/poller/Dockerfile
+    env_file:
+      - path: ../server.env
+        required: true
+        format: raw
+    volumes:
+      - ../logs:/app/logs
+    depends_on:
+      timescaledb: { condition: service_healthy }
+    networks: [backend]
+    restart: unless-stopped
+    command: ["python", "-m", "server.poller.polymarket"]
+
+  polymarket-ws-ingestor:
+    build:
+      context: ..
+      dockerfile: docker/services/poller/Dockerfile
+    env_file:
+      - path: ../server.env
+        required: true
+        format: raw
+    volumes:
+      - ../logs:/app/logs
+    depends_on:
+      timescaledb: { condition: service_healthy }
+      polymarket-poller: { condition: service_started }
+    networks: [backend]
+    restart: unless-stopped
+    command: ["python", "-m", "server.poller.polymarket.ws"]
+
+  arb-detector:
+    build:
+      context: ..
+      dockerfile: docker/services/poller/Dockerfile
+    env_file:
+      - path: ../server.env
+        required: true
+        format: raw
+    volumes:
+      - ../logs:/app/logs
+    depends_on:
+      timescaledb: { condition: service_healthy }
+      polymarket-poller: { condition: service_started }
+      polymarket-ws-ingestor: { condition: service_started }
+    networks: [backend]
+    restart: unless-stopped
+    command: ["python", "-m", "server.arb"]
 
   api:
     build:
@@ -72,7 +128,6 @@ services:
       - ../logs:/app/logs
     depends_on:
       timescaledb: { condition: service_healthy }
-      redis:       { condition: service_healthy }
     networks: [backend]
     expose: ["8080"]
     restart: unless-stopped
