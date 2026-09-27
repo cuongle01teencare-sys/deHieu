@@ -73,6 +73,13 @@ class Settings(BaseSettings):
     arb_min_edge_improvement_pct: float = 0.5
     arb_enabled: bool = True
 
+    # ─── Notifications (Discord for now) ───
+    # URL webhook Discord (channel settings → Integrations → Webhooks →
+    # Copy URL). Rỗng ⇒ tắt notify. Không log URL này ra stdout.
+    discord_webhook_url: str = ""
+    # Chỉ notify arb có edge >= threshold này (%). Default 0 = mọi arb mới.
+    notify_min_edge_pct: float = 0.0
+
     # API
     api_host: str = "0.0.0.0"
     api_port: int = 8080

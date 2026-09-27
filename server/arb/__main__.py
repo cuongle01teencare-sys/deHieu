@@ -19,6 +19,7 @@ import sys
 
 from server.common.config import settings
 from server.common.db import db
+from server.common import notifier
 
 log = logging.getLogger("arb.detector")
 
@@ -104,6 +105,13 @@ async def _run_cycle(min_improvement_pct: float, freshness_seconds: int) -> dict
     n_touch = await db.touch_arbs(to_touch)
     n_insert = await db.insert_arbs(to_insert)
 
+    # Fire-and-forget notify cho các arb VỪA insert. Chỉ gửi nếu có webhook
+    # cấu hình (notifier tự check settings.discord_webhook_url).
+    if to_insert and settings.discord_webhook_url:
+        asyncio.create_task(
+            notifier.notify_arbs(to_insert, db.fetch_match_teams)
+        )
+
     return {
         "matches_scanned": len(complete),
         "opens_before": len(all_opens),
@@ -153,6 +161,7 @@ async def main():
             sleep = max(0.0, settings.arb_poll_interval_seconds - elapsed)
             await asyncio.sleep(sleep)
     finally:
+        await notifier.close()
         await db.close()
 
 
