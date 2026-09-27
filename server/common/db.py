@@ -10,6 +10,7 @@ Migration: từ schema cũ (matches ôm home_id/name, away_id/name) → backfill
 competitors + match_competitors rồi DROP cột. Idempotent.
 """
 import json
+import re
 import asyncpg
 from typing import Optional
 
@@ -824,6 +825,22 @@ EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE '[migration] backfill sptpub 186 failed: %', SQLERRM;
 END $$;
 
+-- 8b) Backfill canonical cho sptpub Map Winner market 330 (mapnr 1..5).
+--     specifier_key thường có dạng "mapnr=N". Extract N bằng regex.
+DO $$ BEGIN
+    UPDATE odds.odds_current
+    SET canonical_market  = 'winner_map_' || (regexp_match(specifier_key, 'mapnr\s*[=:]\s*(\d+)'))[1],
+        canonical_outcome = CASE outcome_id WHEN '4' THEN 'home' WHEN '5' THEN 'away' END
+    WHERE platform = 'sptpub'
+      AND market_id = '330'
+      AND outcome_id IN ('4', '5')
+      AND canonical_outcome IS NULL
+      AND specifier_key ~ 'mapnr\s*[=:]\s*[1-5]\b';
+    RAISE NOTICE '[migration] backfill sptpub market 330 (map winner) OK';
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE '[migration] backfill sptpub 330 failed: %', SQLERRM;
+END $$;
+
 
 -- ─── VIEW: v_arb_live ───
 -- Reference v_matched_pairs → phải đặt SAU v_matched_pairs (cùng schema block).
@@ -956,15 +973,36 @@ LEFT JOIN odds.odds_current oc_sa
 """
 
 
-# Canonical outcome map cho sptpub (market_id, outcome_id) → (canonical_market, canonical_outcome).
-# Chỉ include market đã verify từ HAR + market_descriptors:
-#   186 = 2-way winner (esports, tennis single, cricket regular). Outcome 4=home, 5=away.
-# 1x2 (market_id=1, outcomes 1/2/3) chưa add — cần schema 3-way (thêm 'draw'), defer.
-# Racing/Outright markets skip vì không có tương ứng bên poly.
-_SPTPUB_CANONICAL_MAP: dict = {
-    ("186", "4"): ("winner", "home"),
-    ("186", "5"): ("winner", "away"),
-}
+# Canonical mapping cho sptpub. Function-based vì map winner cần parse
+# specifier_key. Trả (canonical_market, canonical_outcome) hoặc (None,None).
+#   186 = 2-way match winner.        Outcome 4=home, 5=away.
+#   330 = 2-way map winner (mapnr 1..5). Cùng outcome layout.
+# 1x2 (market_id=1) chưa add — cần schema 3-way (thêm 'draw'), defer.
+_MAPNR_RE = re.compile(r"mapnr\s*[=:]\s*(\d+)")
+_MAP_WINNER_MARKET_ID = "330"
+_MAX_MAPNR = 5
+
+
+def _canonical_for_sptpub(market_id: str,
+                           specifier_key: str,
+                           outcome_id: str) -> tuple:
+    if outcome_id not in ("4", "5"):
+        return (None, None)
+    side = "home" if outcome_id == "4" else "away"
+    if market_id == "186":
+        return ("winner", side)
+    if market_id == _MAP_WINNER_MARKET_ID:
+        sk = specifier_key or ""
+        m = _MAPNR_RE.search(sk)
+        if m:
+            n = int(m.group(1))
+        elif sk.strip().isdigit():
+            n = int(sk.strip())
+        else:
+            return (None, None)
+        if 1 <= n <= _MAX_MAPNR:
+            return (f"winner_map_{n}", side)
+    return (None, None)
 
 
 class Database:
@@ -1472,11 +1510,14 @@ class Database:
         không phải maintain PL/pgSQL, log rõ khi có thay đổi."""
         if not odds_rows:
             return 0, 0
-        # Enrich mỗi row với (canonical_market, canonical_outcome) qua lookup map.
+        # Enrich mỗi row với (canonical_market, canonical_outcome) qua function.
         # Row không match → canonical = None (không phá schema, chỉ không tham gia arb).
         for r in odds_rows:
-            key = (str(r["market_id"]), str(r["outcome_id"]))
-            cm, co = _SPTPUB_CANONICAL_MAP.get(key, (None, None))
+            cm, co = _canonical_for_sptpub(
+                str(r["market_id"]),
+                str(r.get("specifier_key") or ""),
+                str(r["outcome_id"]),
+            )
             r["_canonical_market"] = cm
             r["_canonical_outcome"] = co
 
@@ -1758,8 +1799,9 @@ class Database:
 
     async def fetch_poly_ws_subscription_map(self) -> dict:
         """Build map {token_id: {canonical_match_id, condition_id, outcome_index}}
-        cho các market moneyline đã map. WS ingestor subscribe theo token_id
-        rồi lookup ngược qua map này để biết ghi vào canonical match nào."""
+        cho các market moneyline + Map N Winner đã map. WS ingestor subscribe
+        theo token_id rồi lookup ngược qua map này để biết ghi vào canonical
+        match nào."""
         async with self._require_pool().acquire() as conn:
             rows = await conn.fetch("""
                 SELECT
@@ -1770,7 +1812,10 @@ class Database:
                 FROM polymarket.markets pm
                 JOIN polymarket.match_map mm  ON mm.event_id = pm.event_id
                 CROSS JOIN LATERAL unnest(pm.clob_token_ids) WITH ORDINALITY AS tok(token_id, ord)
-                WHERE pm.market_type = 'moneyline'
+                WHERE (
+                    pm.market_type = 'moneyline'
+                    OR pm.group_title ~* '^Map\\s+[1-5]\\s+Winner$'
+                )
                   AND (pm.end_date IS NULL OR pm.end_date > NOW() - INTERVAL '2 hours')
             """)
             return {
@@ -1852,21 +1897,35 @@ class Database:
                     if t.get("best_ask") and float(t["best_ask"]) > 0
                 ]
                 if canonical_rows:
-                    # Lookup home/away_token_id cho các condition_id trong batch → biết
-                    # tick.token_id thuộc side nào để set canonical_outcome.
+                    # Lookup home/away_token_id + market kind (moneyline / Map N Winner)
+                    # cho các condition_id trong batch → biết tick.token_id thuộc side
+                    # nào và canonical_market gì.
                     cond_ids = list({t["condition_id"] for t in canonical_rows})
                     mk_rows = await conn.fetch("""
-                        SELECT condition_id, home_token_id, away_token_id
+                        SELECT condition_id, home_token_id, away_token_id,
+                               market_type, group_title,
+                               (regexp_match(COALESCE(group_title,''),
+                                             '^Map\\s+([1-5])\\s+Winner$', 'i'))[1]
+                                 AS map_number
                         FROM polymarket.markets
                         WHERE condition_id = ANY($1::text[])
-                          AND market_type = 'moneyline'
+                          AND (
+                            market_type = 'moneyline'
+                            OR group_title ~* '^Map\\s+[1-5]\\s+Winner$'
+                          )
                     """, cond_ids)
-                    side_map = {}  # (condition_id, token_id) -> 'home' | 'away'
+                    # (condition_id, token_id) -> ('home'|'away', canonical_market_str)
+                    side_map: dict = {}
                     for r in mk_rows:
+                        map_n = r["map_number"]
+                        cmkt = f"winner_map_{map_n}" if map_n else "winner"
                         if r["home_token_id"]:
-                            side_map[(r["condition_id"], r["home_token_id"])] = "home"
+                            side_map[(r["condition_id"], r["home_token_id"])] = ("home", cmkt)
                         if r["away_token_id"]:
-                            side_map[(r["condition_id"], r["away_token_id"])] = "away"
+                            side_map[(r["condition_id"], r["away_token_id"])] = ("away", cmkt)
+
+                    def _ce(t):
+                        return side_map.get((t["condition_id"], t["token_id"])) or (None, None)
 
                     await conn.executemany("""
                         INSERT INTO odds.odds_current
@@ -1881,25 +1940,36 @@ class Database:
                             updated_at        = NOW()
                     """, [(t["canonical_match_id"], t["condition_id"], t["token_id"],
                            1.0 / float(t["best_ask"]),
-                           # canonical_market = 'winner' nếu là moneyline mapped, else None
-                           "winner" if (t["condition_id"], t["token_id"]) in side_map else None,
-                           side_map.get((t["condition_id"], t["token_id"])))
+                           _ce(t)[1],  # canonical_market (winner / winner_map_N / None)
+                           _ce(t)[0])  # canonical_outcome (home / away / None)
                           for t in canonical_rows])
 
                 return len(ticks), len(changed)
 
-    async def fetch_fresh_canonical_pairs(self, freshness_seconds: int) -> list[dict]:
+    async def fetch_fresh_canonical_pairs(
+        self, freshness_seconds: int, exclude_live: bool = False
+    ) -> list[dict]:
+        """Trả rows cho MỌI canonical_market: 'winner' + 'winner_map_1..5'.
+        Detector tự group theo (match_id, canonical_market).
+
+        `exclude_live=True` bỏ mọi match đang phase='live'."""
+        phase_clause = (
+            "AND (SELECT phase FROM matches WHERE id = oc.match_id) "
+            "IS DISTINCT FROM 'live'"
+            if exclude_live else ""
+        )
         async with self._require_pool().acquire() as conn:
-            rows = await conn.fetch("""
-                SELECT match_id, canonical_outcome AS side,
+            rows = await conn.fetch(f"""
+                SELECT match_id, canonical_market, canonical_outcome AS side,
                        platform, decimal_odds, updated_at
-                FROM odds.odds_current
-                WHERE canonical_market = 'winner'
+                FROM odds.odds_current oc
+                WHERE canonical_market IS NOT NULL
                   AND canonical_outcome IN ('home', 'away')
                   AND platform IN ('sptpub', 'polymarket')
                   AND decimal_odds IS NOT NULL
                   AND decimal_odds > 0
                   AND updated_at > NOW() - make_interval(secs => $1)
+                  {phase_clause}
             """, freshness_seconds)
             return [dict(r) for r in rows]
 
@@ -1973,6 +2043,47 @@ class Database:
                 return None
             return (row["home_name"], row["away_name"])
 
+    async def fetch_arb_notify_info(self, canonical_match_id: str) -> dict:
+        """Enrich cho Discord embed: team names + link cả 2 platform.
+
+        Trả dict {home_name, away_name, csgoempire_url, polymarket_url},
+        các field có thể None nếu slug thiếu / chưa có mapping polymarket.
+        Trả dict rỗng nếu không tìm thấy match."""
+        async with self._require_pool().acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT
+                    home.name AS home_name,
+                    away.name AS away_name,
+                    m.phase   AS phase,
+                    CASE
+                        WHEN s.slug IS NOT NULL AND c.slug IS NOT NULL
+                         AND t.slug IS NOT NULL AND m.slug IS NOT NULL
+                        THEN 'https://csgoempire.com/match-betting?bt-path=/'
+                             || s.slug || '/' || c.slug || '/'
+                             || t.slug || '/' || m.slug || '-' || m.id
+                    END AS csgoempire_url,
+                    CASE
+                        WHEN pe.slug IS NOT NULL
+                        THEN 'https://polymarket.com/event/' || pe.slug
+                    END AS polymarket_url
+                FROM matches m
+                LEFT JOIN sports      s ON s.id = m.sport_id
+                LEFT JOIN tournaments t ON t.id = m.tournament_id
+                LEFT JOIN categories  c ON c.id = t.category_id
+                LEFT JOIN match_competitors mch
+                       ON mch.match_id = m.id AND mch.side = 'home'
+                LEFT JOIN competitors home ON home.id = mch.competitor_id
+                LEFT JOIN match_competitors mca
+                       ON mca.match_id = m.id AND mca.side = 'away'
+                LEFT JOIN competitors away ON away.id = mca.competitor_id
+                LEFT JOIN polymarket.match_map mm
+                       ON mm.canonical_match_id = m.id
+                LEFT JOIN polymarket.events pe
+                       ON pe.event_id = mm.event_id
+                WHERE m.id = $1
+            """, canonical_match_id)
+            return dict(row) if row else {}
+
     async def fetch_poly_moneyline_markets_for_event(self, event_id: str) -> list[dict]:
         """Trả markets moneyline của 1 poly event với outcomes + clob_token_ids +
         home/away_token_id hiện tại (để dedup no-op UPDATE)."""
@@ -1982,6 +2093,26 @@ class Database:
                        home_token_id, away_token_id
                 FROM polymarket.markets
                 WHERE event_id = $1 AND market_type = 'moneyline'
+            """, event_id)
+            return [dict(r) for r in rows]
+
+    async def fetch_poly_arb_eligible_markets_for_event(self, event_id: str) -> list[dict]:
+        """Moneyline (match winner) + Map N Winner (parse từ group_title).
+        Trả thêm cột `map_number`: NULL = match winner, 1..5 = map N.
+        Dùng để sync home/away tokens cho toàn bộ market arb-eligible."""
+        async with self._require_pool().acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT condition_id, outcomes, clob_token_ids,
+                       home_token_id, away_token_id,
+                       market_type, group_title,
+                       (regexp_match(COALESCE(group_title,''),
+                                     '^Map\\s+([1-5])\\s+Winner$', 'i'))[1] AS map_number
+                FROM polymarket.markets
+                WHERE event_id = $1
+                  AND (
+                    market_type = 'moneyline'
+                    OR group_title ~* '^Map\\s+[1-5]\\s+Winner$'
+                  )
             """, event_id)
             return [dict(r) for r in rows]
 

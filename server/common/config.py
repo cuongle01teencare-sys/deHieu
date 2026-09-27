@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     arb_freshness_seconds: int = 300
     arb_min_edge_improvement_pct: float = 0.5
     arb_enabled: bool = True
+    # False ⇒ bỏ mọi match phase='live' khi detect arb (không insert, không
+    # notify). Áp dụng cho CẢ csgoempire và polymarket (dùng chung
+    # canonical_match_id — filter một chỗ là chặn cả 2). Open arb đang live
+    # sẽ bị close với reason=stale_odds trong cycle kế tiếp vì match rơi
+    # khỏi fresh set.
+    arb_live_enabled: bool = True
 
     # ─── Notifications (Discord for now) ───
     # URL webhook Discord (channel settings → Integrations → Webhooks →

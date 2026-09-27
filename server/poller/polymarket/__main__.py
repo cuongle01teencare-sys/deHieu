@@ -263,7 +263,9 @@ async def _sync_canonical_tokens_for_event(event_id: str,
     if not home_norm or not away_norm:
         return 0
 
-    markets = await db.fetch_poly_moneyline_markets_for_event(event_id)
+    # Sync tokens cho moneyline (match winner) + Map N Winner (N=1..5).
+    # Cùng thuật toán name-match vì cả 2 loại đều 2-outcome team-vs-team.
+    markets = await db.fetch_poly_arb_eligible_markets_for_event(event_id)
     updated = 0
     for m in markets:
         outcomes = m["outcomes"] or []
@@ -282,9 +284,11 @@ async def _sync_canonical_tokens_for_event(event_id: str,
             away_tok = clob_ids[idx]
             home_tok = clob_ids[1 - idx]
         else:
-            log.warning("[sync-token] event=%s market=%s outcomes=%s KHÔNG match "
+            kind = f"Map {m['map_number']} Winner" if m.get("map_number") else "moneyline"
+            log.warning("[sync-token] event=%s %s market=%s outcomes=%s KHÔNG match "
                         "canonical home=%r away=%r",
-                        event_id, m["condition_id"][:16], outcomes, home_name, away_name)
+                        event_id, kind, m["condition_id"][:16], outcomes,
+                        home_name, away_name)
             continue
 
         # Chỉ UPDATE khi khác (tránh no-op)

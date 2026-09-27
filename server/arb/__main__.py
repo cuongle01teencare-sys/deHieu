@@ -29,6 +29,21 @@ DIRECTIONS = [
 ]
 
 
+def _direction_for(canonical_market: str, base_direction: str) -> str:
+    """Encode canonical_market vào direction để tận dụng unique index
+    (canonical_match_id, direction) — mỗi (match × market × side) 1 open arb.
+    match winner giữ nguyên tên cũ (backward-compat với arb đang open).
+      'winner'          → 'sptpub_home_poly_away'
+      'winner_map_3'    → 'map3_sptpub_home_poly_away'
+    """
+    if canonical_market == "winner":
+        return base_direction
+    if canonical_market.startswith("winner_map_"):
+        n = canonical_market.split("_")[-1]
+        return f"map{n}_{base_direction}"
+    return f"{canonical_market}_{base_direction}"
+
+
 def _compute_arb(sptpub_odds: float, poly_odds: float) -> tuple[float, float]:
     """Trả (sum_inverse, edge_percent). edge_percent = 0 nếu không phải arb.
     Return (inf, 0) nếu odds <= 0 (bookmaker suspend market, poly no ask, ...)."""
@@ -39,18 +54,24 @@ def _compute_arb(sptpub_odds: float, poly_odds: float) -> tuple[float, float]:
     return sum_inv, edge_pct
 
 
-async def _run_cycle(min_improvement_pct: float, freshness_seconds: int) -> dict:
-    rows = await db.fetch_fresh_canonical_pairs(freshness_seconds)
-    match_quotes: dict = {}
+async def _run_cycle(min_improvement_pct: float, freshness_seconds: int,
+                     exclude_live: bool = False) -> dict:
+    rows = await db.fetch_fresh_canonical_pairs(
+        freshness_seconds, exclude_live=exclude_live
+    )
+    # Group theo (match_id, canonical_market). Mỗi group là 1 arb-detection
+    # unit riêng — match winner và từng map winner được xử lý độc lập.
+    match_market_quotes: dict = {}
     for r in rows:
-        match_quotes.setdefault(r["match_id"], {})[
+        key = (r["match_id"], r["canonical_market"])
+        match_market_quotes.setdefault(key, {})[
             (r["platform"], r["side"])
         ] = (float(r["decimal_odds"]), r["updated_at"])
 
     required = [("sptpub", "home"), ("sptpub", "away"),
                 ("polymarket", "home"), ("polymarket", "away")]
     complete = {
-        mid: q for mid, q in match_quotes.items()
+        key: q for key, q in match_market_quotes.items()
         if all(k in q for k in required)
     }
 
@@ -60,10 +81,13 @@ async def _run_cycle(min_improvement_pct: float, freshness_seconds: int) -> dict
     to_insert: list = []
     to_touch: list = []
     to_close: list = []
-    complete_keys = set(complete.keys())
+    # Set các direction đã có odds tươi → dùng để phát hiện arb open bị stale.
+    fresh_directions: set = set()
 
-    for mid, quotes in complete.items():
-        for direction, sside, pside in DIRECTIONS:
+    for (mid, canonical_market), quotes in complete.items():
+        for base_dir, sside, pside in DIRECTIONS:
+            direction = _direction_for(canonical_market, base_dir)
+            fresh_directions.add((mid, direction))
             sptpub_odds, sptpub_ts = quotes[("sptpub", sside)]
             poly_odds, poly_ts = quotes[("polymarket", pside)]
             sum_inv, edge_pct = _compute_arb(sptpub_odds, poly_odds)
@@ -74,31 +98,27 @@ async def _run_cycle(min_improvement_pct: float, freshness_seconds: int) -> dict
                     to_close.append((existing["id"], "edge_negative"))
                 continue
 
+            base_row = {
+                "canonical_match_id": mid, "direction": direction,
+                "canonical_market": canonical_market,
+                "sptpub_side": sside, "poly_side": pside,
+                "sptpub_odds": sptpub_odds, "poly_odds": poly_odds,
+                "sum_inverse": sum_inv, "edge_percent": edge_pct,
+                "sptpub_updated_at": sptpub_ts, "poly_updated_at": poly_ts,
+            }
             if existing is None:
-                to_insert.append({
-                    "canonical_match_id": mid, "direction": direction,
-                    "sptpub_side": sside, "poly_side": pside,
-                    "sptpub_odds": sptpub_odds, "poly_odds": poly_odds,
-                    "sum_inverse": sum_inv, "edge_percent": edge_pct,
-                    "sptpub_updated_at": sptpub_ts, "poly_updated_at": poly_ts,
-                })
+                to_insert.append(base_row)
             else:
                 improvement = edge_pct - float(existing["edge_percent"])
                 if improvement >= min_improvement_pct:
                     to_close.append((existing["id"], "improved"))
-                    to_insert.append({
-                        "canonical_match_id": mid, "direction": direction,
-                        "sptpub_side": sside, "poly_side": pside,
-                        "sptpub_odds": sptpub_odds, "poly_odds": poly_odds,
-                        "sum_inverse": sum_inv, "edge_percent": edge_pct,
-                        "sptpub_updated_at": sptpub_ts, "poly_updated_at": poly_ts,
-                    })
+                    to_insert.append(base_row)
                 else:
                     to_touch.append((existing["id"], edge_pct, sptpub_ts, poly_ts))
 
-    # Close open arbs whose match no longer in fresh set
+    # Close open arbs không còn odds tươi (mỗi direction xét riêng).
     for (mid, direction), row in open_map.items():
-        if mid not in complete_keys:
+        if (mid, direction) not in fresh_directions:
             to_close.append((row["id"], "stale_odds"))
 
     n_close = await db.close_arbs(to_close)
@@ -109,11 +129,14 @@ async def _run_cycle(min_improvement_pct: float, freshness_seconds: int) -> dict
     # cấu hình (notifier tự check settings.discord_webhook_url).
     if to_insert and settings.discord_webhook_url:
         asyncio.create_task(
-            notifier.notify_arbs(to_insert, db.fetch_match_teams)
+            notifier.notify_arbs(to_insert, db.fetch_arb_notify_info)
         )
 
     return {
-        "matches_scanned": len(complete),
+        # complete key = (match_id, canonical_market); đếm distinct match_id
+        # cho stat "matches_scanned" để nghĩa không đổi so với version cũ.
+        "matches_scanned": len({k[0] for k in complete}),
+        "markets_scanned": len(complete),
         "opens_before": len(all_opens),
         "inserted": n_insert,
         "closed": n_close,
@@ -130,10 +153,12 @@ async def main():
         log.info("ARB_ENABLED=false — exit")
         return
 
-    log.info("arb-detector: poll=%.1fs freshness=%ds min_improve=%.2f%%",
+    log.info("arb-detector: poll=%.1fs freshness=%ds min_improve=%.2f%% "
+             "live=%s",
              settings.arb_poll_interval_seconds,
              settings.arb_freshness_seconds,
-             settings.arb_min_edge_improvement_pct)
+             settings.arb_min_edge_improvement_pct,
+             "on" if settings.arb_live_enabled else "off")
 
     await db.connect()
     log.info("DB connected")
@@ -147,14 +172,18 @@ async def main():
                 stats = await _run_cycle(
                     settings.arb_min_edge_improvement_pct,
                     settings.arb_freshness_seconds,
+                    exclude_live=not settings.arb_live_enabled,
                 )
                 dt = asyncio.get_event_loop().time() - t0
-                if stats["inserted"] or stats["closed"] or (iteration % 30 == 0):
-                    log.info("cycle #%d: matches=%d opens=%d "
-                             "insert=%d close=%d touch=%d dt=%.2fs",
-                             iteration, stats["matches_scanned"],
-                             stats["opens_before"], stats["inserted"],
-                             stats["closed"], stats["touched"], dt)
+                # Log MỌI cycle — kể cả no-op. Dòng đậm hơn khi có
+                # insert/close để dễ mắt scan qua log.
+                marker = "*" if (stats["inserted"] or stats["closed"]) else " "
+                log.info("cycle #%d %s matches=%d markets=%d opens=%d "
+                         "insert=%d close=%d touch=%d dt=%.2fs",
+                         iteration, marker, stats["matches_scanned"],
+                         stats["markets_scanned"], stats["opens_before"],
+                         stats["inserted"], stats["closed"],
+                         stats["touched"], dt)
             except Exception as e:
                 log.exception("cycle #%d error: %s", iteration, e)
             elapsed = asyncio.get_event_loop().time() - t0

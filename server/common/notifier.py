@@ -74,24 +74,65 @@ def _edge_color(edge_pct: float) -> int:
     return 0x3498DB       # blue — mild
 
 
-def _build_discord_embed(opp: dict, home: Optional[str], away: Optional[str]) -> dict:
+_PHASE_BADGE = {
+    "live":     "🔴 LIVE",
+    "prematch": "⏳ PREMATCH",
+    "ended":    "⚫ ENDED",
+}
+
+
+def _build_discord_embed(opp: dict, info: dict) -> dict:
     edge = float(opp["edge_percent"])
     sum_inv = float(opp["sum_inverse"])
+    home = info.get("home_name")
+    away = info.get("away_name")
+    csgo_url = info.get("csgoempire_url")
+    poly_url = info.get("polymarket_url")
+    phase = info.get("phase")
+    phase_tag = _PHASE_BADGE.get(phase)
+    if phase_tag is None:
+        log.warning("arb notify: canonical_match_id=%s có phase=%r "
+                    "(không match live/prematch/ended)",
+                    opp["canonical_match_id"], phase)
     match_line = f"{home} vs {away}" if home and away else opp["canonical_match_id"]
+
+    # Team đặt cược trên mỗi platform — dùng team name thay vì
+    # (home)/(away) để tránh nhầm với label riêng của polymarket UI.
+    # sptpub_side / poly_side là 'home' | 'away' theo CANONICAL sptpub.
+    def _team_for(side: str) -> str:
+        if side == "home" and home: return home
+        if side == "away" and away: return away
+        return side  # fallback nếu thiếu tên
+
+    sptpub_team = _team_for(opp["sptpub_side"])
+    poly_team   = _team_for(opp["poly_side"])
+
+    sptpub_val = f"`{float(opp['sptpub_odds']):.3f}` → **{sptpub_team}**"
+    if csgo_url:
+        sptpub_val += f"\n[open on csgoempire]({csgo_url})"
+    poly_val = f"`{float(opp['poly_odds']):.3f}` → **{poly_team}**"
+    if poly_url:
+        poly_val += f"\n[open on polymarket]({poly_url})"
+
+    # Market badge: 'winner' → "Match", 'winner_map_N' → "Map N".
+    cmkt = opp.get("canonical_market") or "winner"
+    if cmkt.startswith("winner_map_"):
+        market_tag = f"🗺️ Map {cmkt.rsplit('_', 1)[-1]}"
+    else:
+        market_tag = "🏆 Match"
+
+    title = f"{market_tag}  ·  Arb {edge:.2f}%  ·  {match_line}"
+    if phase_tag:
+        title = f"{phase_tag}  ·  {title}"
+
     return {
-        "title": f"Arb {edge:.2f}%  ·  {match_line}",
+        "title": title,
         "description": _fmt_direction(opp["direction"], home, away),
         "color": _edge_color(edge),
         "fields": [
-            {"name": "sptpub odds",
-             "value": f"`{float(opp['sptpub_odds']):.3f}` ({opp['sptpub_side']})",
-             "inline": True},
-            {"name": "poly odds",
-             "value": f"`{float(opp['poly_odds']):.3f}` ({opp['poly_side']})",
-             "inline": True},
-            {"name": "sum⁻¹",
-             "value": f"`{sum_inv:.4f}`",
-             "inline": True},
+            {"name": "sptpub odds", "value": sptpub_val, "inline": True},
+            {"name": "poly odds",   "value": poly_val,   "inline": True},
+            {"name": "sum⁻¹",       "value": f"`{sum_inv:.4f}`", "inline": True},
         ],
         "footer": {"text": f"match_id={opp['canonical_match_id']}"},
     }
@@ -122,12 +163,13 @@ async def _send_discord(embeds: list[dict]) -> None:
 
 # ────────────────── Public entrypoint ──────────────────
 
-async def notify_arbs(opportunities: list[dict], enrich_teams) -> None:
+async def notify_arbs(opportunities: list[dict], enrich_info) -> None:
     """Gửi thông báo cho danh sách arb mới insert.
 
-    ``enrich_teams`` là async callable ``(canonical_match_id) -> (home, away)|None``
-    (thường là ``db.fetch_match_teams``). Truyền vào để notifier không phụ
-    thuộc trực tiếp module ``db``, tránh circular import.
+    ``enrich_info`` là async callable ``(canonical_match_id) -> dict`` với
+    keys ``home_name``, ``away_name``, ``csgoempire_url``, ``polymarket_url``
+    (thường là ``db.fetch_arb_notify_info``). Truyền vào để notifier không
+    phụ thuộc trực tiếp module ``db``, tránh circular import.
 
     Không bao giờ raise — mọi exception được nuốt + log.
     """
@@ -139,22 +181,20 @@ async def notify_arbs(opportunities: list[dict], enrich_teams) -> None:
         if not filtered:
             return
 
-        # Enrich team names (concurrently)
+        # Enrich (concurrently). Fallback về {} nếu query lỗi.
         async def _one(opp):
             try:
-                res = await enrich_teams(opp["canonical_match_id"])
-                if res:
-                    return opp, res[0], res[1]
+                return opp, (await enrich_info(opp["canonical_match_id"]) or {})
             except Exception as e:
-                log.debug("enrich_teams failed for %s: %s",
+                log.debug("enrich_info failed for %s: %s",
                           opp["canonical_match_id"], e)
-            return opp, None, None
+                return opp, {}
 
-        enriched: list[tuple[dict, Any, Any]] = await asyncio.gather(
+        enriched: list[tuple[dict, dict]] = await asyncio.gather(
             *[_one(o) for o in filtered]
         )
 
-        embeds = [_build_discord_embed(o, h, a) for (o, h, a) in enriched]
+        embeds = [_build_discord_embed(o, info) for (o, info) in enriched]
 
         # Fan-out per channel. Hiện chỉ Discord.
         await _send_discord(embeds)
