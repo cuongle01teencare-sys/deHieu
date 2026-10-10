@@ -26,7 +26,6 @@ import {
   CurrentPrincipal,
   RequirePermissions,
 } from '../../auth/presentation/auth.decorators.js';
-import type { Principal } from '../../auth/domain/principal.js';
 
 const StartTaskBody = z.object({
   taskId: z.string().min(1),
@@ -165,7 +164,7 @@ export class TasksController {
   })
   async stop(
     @Param('taskId') taskId: string,
-    @CurrentPrincipal() principal?: Principal,
+    @CurrentPrincipal() principal?: { id: string },
   ) {
     return unwrap(
       await this._stop.execute({ taskId, requestedBy: principal?.id }),

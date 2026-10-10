@@ -39,6 +39,7 @@ import { PermissionsGuard } from './presentation/permissions.guard.js';
     },
     { provide: APP_GUARD, useClass: PermissionsGuard },
   ],
-  exports: [AuthorizationService],
+  // AUTHENTICATOR: cho kênh WebSocket (admin stream) dùng chung cách xác thực với REST.
+  exports: [AuthorizationService, AUTHENTICATOR],
 })
 export class AuthModule {}

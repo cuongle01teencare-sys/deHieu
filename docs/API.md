@@ -121,6 +121,34 @@ Lịch sử được ghi nền, không làm chậm việc gửi kèo.
 | POST | `/consumers/:id/pause` | `consumers:control` | Tạm dừng gửi kèo cho consumer |
 | POST | `/consumers/:id/resume` | `consumers:control` | Tiếp tục |
 
+## Vận hành (admin)
+
+| Method | Path | Quyền | Mô tả |
+|---|---|---|---|
+| GET | `/health` | công khai | Kiểm tra Dragonfly/Redis + Postgres ngay lúc gọi. 200 = ok, 503 = có phụ thuộc lỗi |
+| GET | `/admin/snapshot` | `admin:read` | Toàn cảnh: sự cố đang mở, health, tasks, nodes, consumers, số liệu arbitrage, lanes, settings |
+| GET | `/admin/incidents?open=&kind=&limit=&offset=` | `admin:read` | `open=true` → sự cố đang mở; bỏ trống → lịch sử (mới nhất trước) |
+| POST | `/admin/incidents/{key}/ack` | `admin:incidents` | Xác nhận đã biết sự cố (vẫn mở tới khi hết thật) |
+| GET | `/admin/audit?principalId=&method=&route=&from=&to=` | `admin:read` | Mọi request POST/PUT/PATCH/DELETE: ai, route, params/body (đã che bí mật), kết quả |
+| GET | `/admin/odds-transitions?room=&tenant=&to=&from=&until=` | `admin:read` | Dòng kèo xuất hiện (`from=null`), open↔suspended, bị gỡ (`to=removed` + reason). Giữ `ODDS_TRANSITION_RETENTION_DAYS` ngày |
+
+### Sự cố (mức 1)
+
+Watchdog kiểm tra mỗi 5 giây; mỗi sự cố có `key` ổn định nên chỉ mở **một lần** và báo khi **mở** và khi **hết**. Mở lại trong vòng 5 phút (chập chờn) thì ghi nhận nhưng không báo lại.
+
+| kind | key | Mức | Khi nào |
+|---|---|---|---|
+| `task.failed` | `task.failed:{taskId}` | critical | Task hết lượt khởi động lại (FAILED) |
+| `task.flapping` | `task.flapping:{taskId}` | warning | ≥ 3 lần lỗi liên tiếp |
+| `source.stale` | `source.stale:{taskId}` | critical | RUNNING nhưng không có dữ liệu quá ngưỡng: 5× `intervalMs` (≥ 30s); task stream: 15 phút |
+| `node.down` | `node.down:{nodeId}` | critical | Node mất kết nối > 15s |
+| `infra.down` | `infra.down:{dragonfly\|postgres}` | critical | Health check lỗi (kiểm tra mỗi 10s, timeout 3s) |
+| `consumer.down` | `consumer.down:{consumerId}` | critical (trader) / warning | Consumer mất kết nối > 30s |
+| `consumer.backlog` | `consumer.backlog:{consumerId}` | warning | ≥ 50 kèo chưa được ack |
+| `lane.backlog` | `lane.backlog:{lane}` | warning | ≥ 1000 cập nhật đang chờ trong làn |
+
+Kênh báo: luôn ghi log (`[Alerts]`); thêm Discord khi đặt `DISCORD_ALERT_WEBHOOK_URL`. Khi app khởi động lại, sự cố còn mở từ lần trước được đóng với `resolution = app_restart` (trạng thái trong RAM đã mất; watchdog sẽ mở lại nếu vẫn còn lỗi).
+
 ---
 
 ## WebSocket
@@ -155,3 +183,38 @@ Lý do hủy (`reason`):
 ### Microservice publisher → app (`ws://<host>:${TASK_WS_PORT}`, mặc định 3001)
 
 Dùng nội bộ bởi `pnpm start:task-runner`, xác thực bằng `TASK_WS_TOKEN`.
+
+### Dashboard admin → app (`ws://<host>:${ADMIN_WS_PORT}`, mặc định 3003)
+
+Xác thực bằng token trong `API_TOKENS` (cần quyền `admin:read`, vai trò `viewer` trở lên). Mỗi frame là một JSON.
+
+```text
+client → app
+  { "type": "hello", "token": "<token>", "topics": ["alerts","tasks","nodes","consumers","metrics"] }   // bắt buộc trong 10s
+  { "type": "subscribe",   "topics": ["signals", "room:room:cs2:alliance~sinners:game-winner"] }
+  { "type": "unsubscribe", "topics": ["signals"] }
+  { "type": "resync" }   // xin lại snapshot
+  { "type": "ping" }
+
+app → client
+  { "type": "welcome", "principal": { "id", "roles" }, "topics": [...] }
+  { "type": "snapshot", "data": <giống GET /admin/snapshot> }      // ngay sau welcome
+  { "type": "event", "event": { "type", "topic", "at", "data" } }   // theo topic đã subscribe
+  { "type": "metrics", "data": { evaluator, activeSignals, rooms, lanes, consumers, tasks } }  // mỗi ~2s
+  { "type": "room", "room": "<id>", "data": <giống GET /arbitrage/rooms/{room}> }  // khi subscribe room
+  { "type": "rejected", "reason" } | { "type": "error", "message" } | { "type": "pong" }
+```
+
+| Topic | Sự kiện (`event.type`) |
+|---|---|
+| `alerts` | `incident.opened`, `incident.resolved`, `incident.acknowledged` |
+| `tasks` | `task.state` (from → to, reason), `task.error`, `task.removed` |
+| `nodes` | `node.connected`, `node.disconnected` (kèm task bị ảnh hưởng) |
+| `consumers` | `consumer.connected`, `consumer.disconnected` |
+| `signals` | `signal.issued` (kèm `supersedes`), `signal.refreshed`, `signal.cancelled` (kèm `reason`) |
+| `odds` | `odds.transition`: xuất hiện / open↔suspended / bị gỡ |
+| `audit` | `audit.recorded` |
+| `metrics` | frame `metrics` định kỳ |
+| `room:{roomId}` | `odds.changed`: mọi thay đổi giá/trạng thái của đúng room đó (tối đa 20 room mỗi kết nối) |
+
+Không có topic stream toàn bộ odds: tần suất quá cao. Muốn xem odds thì subscribe từng room đang mở trên màn hình.

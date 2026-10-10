@@ -18,6 +18,16 @@ export const envSchema = z.object({
   API_TOKENS: z.string().default(''),
   // Ghi đè/bổ sung vai trò → quyền, JSON: {"moderator":["team-aliases:*"]}
   ROLE_PERMISSIONS: z.string().optional(),
+
+  // WebSocket: dashboard admin (xác thực bằng token trong API_TOKENS, cần quyền admin:read)
+  ADMIN_WS_PORT: z.coerce.number().int().default(3003),
+  // Discord webhook nhận cảnh báo vận hành. Để trống = chỉ ghi log.
+  DISCORD_ALERT_WEBHOOK_URL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.url().optional(),
+  ),
+  // Số ngày giữ lịch sử chuyển trạng thái odds
+  ODDS_TRANSITION_RETENTION_DAYS: z.coerce.number().int().min(1).default(7),
 });
 
 export type Env = z.infer<typeof envSchema>;

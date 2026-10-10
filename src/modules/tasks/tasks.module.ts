@@ -38,6 +38,11 @@ import { WsRemoteTaskLauncher } from './infrastructure/remote/ws-remote.task-lau
 import { InMemoryTaskRegistry } from './infrastructure/persistence/in-memory-task.registry.js';
 import { NoopTaskAlertNotifier } from './infrastructure/notifier/noop-task-alert.notifier.js';
 import { TasksController } from './presentation/tasks.controller.js';
+import { NODE_DIRECTORY } from './application/node-directory.js';
+import {
+  OPS_EVENT_BUS,
+  type OpsEventBus,
+} from '../../shared/application/ops-event-bus.js';
 
 @Module({
   controllers: [TasksController],
@@ -54,6 +59,7 @@ import { TasksController } from './presentation/tasks.controller.js';
         return launcher;
       },
     },
+    { provide: NODE_DIRECTORY, useExisting: WsRemoteTaskLauncher },
     {
       provide: TASK_LAUNCHERS,
       inject: [WsRemoteTaskLauncher],
@@ -115,7 +121,7 @@ import { TasksController } from './presentation/tasks.controller.js';
     },
   ],
   // Context khác (odds) chỉ thấy application: nghe dữ liệu + gửi lệnh cho task.
-  exports: [TaskSupervisor],
+  exports: [TaskSupervisor, NODE_DIRECTORY],
 })
 export class TasksModule implements OnModuleInit, OnApplicationShutdown {
   private readonly _logger = new Logger('Tasks');
@@ -124,20 +130,77 @@ export class TasksModule implements OnModuleInit, OnApplicationShutdown {
     @Inject(WsRemoteTaskLauncher)
     private readonly _remote: WsRemoteTaskLauncher,
     @Inject(TaskSupervisor) private readonly _supervisor: TaskSupervisor,
+    @Inject(OPS_EVENT_BUS) private readonly _ops: OpsEventBus,
   ) {}
 
-  /** Log vòng đời publisher: RUNNING/STOPPED = log, RESTARTING = warn, FAILED = error. */
+  /**
+   * Log vòng đời publisher (RUNNING/STOPPED = log, RESTARTING = warn, FAILED = error)
+   * và phát sự kiện vận hành cho admin (task + node).
+   */
   onModuleInit() {
+    this._remote.onChange((c) => {
+      const at = Date.now();
+      if (c.type === 'connected') {
+        this._logger.log(`node ${c.nodeId} đã kết nối`);
+        this._ops.publish({
+          type: 'node.connected',
+          topic: 'nodes',
+          at,
+          data: { nodeId: c.nodeId },
+        });
+      } else {
+        this._logger.warn(
+          `node ${c.nodeId} mất kết nối (task bị ảnh hưởng: ${c.affectedTasks.join(', ') || 'không có'})`,
+        );
+        this._ops.publish({
+          type: 'node.disconnected',
+          topic: 'nodes',
+          at,
+          data: { nodeId: c.nodeId, affectedTasks: [...c.affectedTasks] },
+        });
+      }
+    });
+
     this._supervisor.onLifecycle((e) => {
-      const { taskId, kind } = e.record.spec;
+      const { taskId, kind, tenant } = e.record.spec;
       const who = `${taskId} (${kind})`;
+      const at = Date.now();
+      if (e.type === 'removed') {
+        this._logger.log(`${who}: đã xóa hồ sơ`);
+        this._ops.publish({
+          type: 'task.removed',
+          topic: 'tasks',
+          at,
+          data: { taskId, kind },
+        });
+        return;
+      }
       if (e.type === 'task_error') {
+        this._ops.publish({
+          type: 'task.error',
+          topic: 'tasks',
+          at,
+          data: { taskId, kind, message: e.message, fatal: e.fatal },
+        });
         const text = `${who} báo lỗi${e.fatal ? ' nghiêm trọng' : ''}: ${e.message}`;
         if (e.fatal) this._logger.error(text);
         else this._logger.warn(text);
         return;
       }
       const to = e.record.state;
+      this._ops.publish({
+        type: 'task.state',
+        topic: 'tasks',
+        at,
+        data: {
+          taskId,
+          kind,
+          tenant,
+          from: e.from,
+          to,
+          ...(e.reason ? { reason: e.reason } : {}),
+        },
+      });
       const text = `${who}: ${e.from} → ${to}${e.reason ? ` — ${e.reason}` : ''}`;
       if (to === 'FAILED') this._logger.error(text);
       else if (to === 'RESTARTING') this._logger.warn(text);

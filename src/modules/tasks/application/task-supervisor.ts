@@ -48,6 +48,7 @@ export type TaskLifecycleEvent =
       readonly from: TaskState;
       readonly reason?: string;
     }
+  | { readonly type: 'removed'; readonly record: TaskRecord }
   | {
       readonly type: 'task_error';
       readonly record: TaskRecord;
@@ -167,6 +168,7 @@ export class TaskSupervisor {
     await this._dispose(taskId);
     this._live.delete(taskId);
     await this._registry.delete(taskId);
+    this._emit({ type: 'removed', record });
     return { status: 'SUCEED', data: record };
   }
 

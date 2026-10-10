@@ -8,6 +8,11 @@ import {
   type TaskToAppMessage,
 } from '../../application/task-protocol.js';
 import type { TaskRuntimeTarget, TaskSpec } from '../../domain/task-spec.js';
+import type {
+  NodeChange,
+  NodeDirectory,
+  NodeView,
+} from '../../application/node-directory.js';
 import {
   parseFrame,
   type AppToNodeFrame,
@@ -23,9 +28,15 @@ interface RemoteTask {
  * App là WS server; microservice (node) chủ động kết nối vào, gửi hello + token.
  * Launcher chọn node theo runtime.nodeId rồi ghép kênh task theo taskId.
  */
-export class WsRemoteTaskLauncher implements TaskLauncher {
+export class WsRemoteTaskLauncher implements TaskLauncher, NodeDirectory {
   private _server: WebSocketServer | null = null;
   private readonly _nodes = new Map<string, WebSocket>();
+  /** Mọi node từng kết nối trong lần chạy này (kể cả đã rớt) — để admin thấy node chết. */
+  private readonly _seen = new Map<
+    string,
+    { connectedAt: number | null; disconnectedAt: number | null }
+  >();
+  private readonly _nodeListeners: ((c: NodeChange) => void)[] = [];
   private readonly _tasks = new Map<
     string,
     { nodeId: string; t: RemoteTask }
@@ -49,6 +60,31 @@ export class WsRemoteTaskLauncher implements TaskLauncher {
 
   connectedNodes(): string[] {
     return [...this._nodes.keys()];
+  }
+
+  list(): NodeView[] {
+    return [...this._seen].map(([nodeId, s]) => ({
+      nodeId,
+      connected: this._nodes.has(nodeId),
+      connectedAt: s.connectedAt,
+      disconnectedAt: s.disconnectedAt,
+      tasks: [...this._tasks.values()].filter((t) => t.nodeId === nodeId)
+        .length,
+    }));
+  }
+
+  onChange(listener: (change: NodeChange) => void): void {
+    this._nodeListeners.push(listener);
+  }
+
+  private _emitNode(change: NodeChange) {
+    for (const l of this._nodeListeners) {
+      try {
+        l(change);
+      } catch {
+        // listener quan sát không được làm hỏng kết nối node
+      }
+    }
   }
 
   supports(target: TaskRuntimeTarget): boolean {
@@ -97,7 +133,13 @@ export class WsRemoteTaskLauncher implements TaskLauncher {
         nodeId = frame.nodeId;
         this._nodes.get(nodeId)?.close(); // node cũ cùng id
         this._nodes.set(nodeId, ws);
-        return this._send(ws, { type: 'welcome' });
+        this._seen.set(nodeId, {
+          connectedAt: Date.now(),
+          disconnectedAt: null,
+        });
+        this._send(ws, { type: 'welcome' });
+        this._emitNode({ type: 'connected', nodeId });
+        return;
       }
       if (!nodeId) return ws.close(); // chưa hello thì không nói chuyện
 
@@ -112,12 +154,25 @@ export class WsRemoteTaskLauncher implements TaskLauncher {
 
     ws.on('close', () => {
       if (!nodeId || this._nodes.get(nodeId) !== ws) return;
-      this._nodes.delete(nodeId);
+      const id = nodeId;
+      this._nodes.delete(id);
+      const seen = this._seen.get(id);
+      this._seen.set(id, {
+        connectedAt: seen?.connectedAt ?? null,
+        disconnectedAt: Date.now(),
+      });
+      const affected: string[] = [];
       for (const [taskId, entry] of this._tasks)
-        if (entry.nodeId === nodeId) {
+        if (entry.nodeId === id) {
+          affected.push(taskId);
           this._tasks.delete(taskId);
-          entry.t.onExit.forEach((h) => h(`NODE_DISCONNECTED: ${nodeId}`));
+          entry.t.onExit.forEach((h) => h(`NODE_DISCONNECTED: ${id}`));
         }
+      this._emitNode({
+        type: 'disconnected',
+        nodeId: id,
+        affectedTasks: affected,
+      });
     });
   }
 

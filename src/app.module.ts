@@ -9,6 +9,8 @@ import { RedisModule } from './shared/infrastructure/redis/redis.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { TasksModule } from './modules/tasks/tasks.module.js';
 import { OddsModule } from './modules/odds/odds.module.js';
+import { AdminModule } from './modules/admin/admin.module.js';
+import { OpsEventsModule } from './shared/infrastructure/ops/ops-events.module.js';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
@@ -43,9 +45,11 @@ export const observeEnabled = Boolean(
     }),
     DatabaseModule,
     RedisModule,
+    OpsEventsModule, // bus sự kiện vận hành dùng chung
     AuthModule, // xác thực + phân quyền theo quyền (permission), mở cho mọi vai trò
     TasksModule, // quản lý publisher (worker thread + microservice)
     OddsModule, // ACL → room → kèo arbitrage → consumer
+    AdminModule, // sự cố + cảnh báo, stream dashboard, audit
   ],
   controllers: [AppController],
   providers: [AppService],

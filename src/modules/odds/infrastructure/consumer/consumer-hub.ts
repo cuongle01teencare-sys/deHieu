@@ -44,6 +44,11 @@ export interface ConsumerHubOptions {
   readonly token: string;
   readonly retryIntervalMs?: number;
   readonly cancelRetryWindowMs?: number;
+  /** Báo khi consumer kết nối / mất kết nối (để admin theo dõi). */
+  readonly onPresence?: (
+    change: 'connected' | 'disconnected',
+    consumer: { consumerId: string; role: string },
+  ) => void;
 }
 
 /**
@@ -177,6 +182,7 @@ export class ConsumerHub implements EventPublisher, ConsumerControl {
         session.role = frame.role;
         this._sessions.set(session.consumerId, session);
         this._send(session, { type: 'welcome', paused: session.paused });
+        this._presence('connected', session);
         if (!session.paused) this._replay(session);
         return;
       }
@@ -189,8 +195,22 @@ export class ConsumerHub implements EventPublisher, ConsumerControl {
     });
 
     ws.on('close', () => {
-      if (session?.ws === ws) session.ws = null;
+      if (session?.ws === ws) {
+        session.ws = null;
+        this._presence('disconnected', session);
+      }
     });
+  }
+
+  private _presence(change: 'connected' | 'disconnected', s: ConsumerSession) {
+    try {
+      this._opts.onPresence?.(change, {
+        consumerId: s.consumerId,
+        role: s.role,
+      });
+    } catch {
+      // quan sát không được làm hỏng kết nối consumer
+    }
   }
 
   private _replay(s: ConsumerSession) {

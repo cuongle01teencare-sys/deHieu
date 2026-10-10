@@ -15,6 +15,13 @@
       "when": 1791609539275,
       "tag": "0001_arbitrage_signals",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791624623744,
+      "tag": "0002_admin_ops",
+      "breakpoints": true
     }
   ]
 }

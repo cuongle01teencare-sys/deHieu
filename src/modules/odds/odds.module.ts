@@ -60,6 +60,11 @@ import { ListActiveSignalsHandler } from './application/queries/list-active-sign
 import { ListConsumersHandler } from './application/queries/list-consumers.query.js';
 import { GetConsumerHubStatsHandler } from './application/queries/get-consumer-hub-stats.query.js';
 import { GetRoomHandler } from './application/queries/get-room.query.js';
+import { OpsSignalRelay } from './application/ops-signal.relay.js';
+import {
+  OPS_EVENT_BUS,
+  type OpsEventBus,
+} from '../../shared/application/ops-event-bus.js';
 import { ListRoomsHandler } from './application/queries/list-rooms.query.js';
 import { GetArbitrageStatsHandler } from './application/queries/get-arbitrage-stats.query.js';
 // infrastructure (adapter thay được: đổi 1 dòng useFactory)
@@ -113,11 +118,21 @@ const SWEEP_INTERVAL_MS = 5_000;
     },
     {
       provide: ConsumerHub,
-      inject: [ConfigService],
-      useFactory: (cfg: ConfigService<Env, true>) => {
+      inject: [ConfigService, OPS_EVENT_BUS],
+      useFactory: (cfg: ConfigService<Env, true>, ops: OpsEventBus) => {
         const hub = new ConsumerHub({
           port: cfg.get('CONSUMER_WS_PORT'),
           token: cfg.get('CONSUMER_WS_TOKEN'),
+          onPresence: (change, c) =>
+            ops.publish({
+              type:
+                change === 'connected'
+                  ? 'consumer.connected'
+                  : 'consumer.disconnected',
+              topic: 'consumers',
+              at: Date.now(),
+              data: c,
+            }),
         });
         hub.listen();
         return hub;
@@ -140,9 +155,12 @@ const SWEEP_INTERVAL_MS = 5_000;
     {
       // gửi consumer trước, rồi xếp việc ghi lịch sử (chạy nền, không chặn)
       provide: EVENT_PUBLISHER,
-      inject: [ConsumerHub, SignalHistoryRecorder],
-      useFactory: (hub: ConsumerHub, history: SignalHistoryRecorder) =>
-        new CompositeEventPublisher([hub, history]),
+      inject: [ConsumerHub, SignalHistoryRecorder, OPS_EVENT_BUS],
+      useFactory: (
+        hub: ConsumerHub,
+        history: SignalHistoryRecorder,
+        ops: OpsEventBus,
+      ) => new CompositeEventPublisher([hub, history, new OpsSignalRelay(ops)]),
     },
     {
       provide: ListSignalHistoryHandler,
@@ -207,9 +225,12 @@ const SWEEP_INTERVAL_MS = 5_000;
     // ---------- command / query handlers
     {
       provide: OddsLineApplier,
-      inject: [ODDS_ROOM_STORE, ArbitrageEvaluator],
-      useFactory: (rooms: OddsRoomStore, ev: ArbitrageEvaluator) =>
-        new OddsLineApplier(rooms, ev),
+      inject: [ODDS_ROOM_STORE, ArbitrageEvaluator, OPS_EVENT_BUS],
+      useFactory: (
+        rooms: OddsRoomStore,
+        ev: ArbitrageEvaluator,
+        ops: OpsEventBus,
+      ) => new OddsLineApplier(rooms, ev, ops),
     },
     {
       provide: LaneDispatcher,
@@ -317,6 +338,16 @@ const SWEEP_INTERVAL_MS = 5_000;
       inject: [CONSUMER_CONTROL],
       useFactory: (c: ConsumerControl) => new ControlConsumerHandler(c),
     },
+  ],
+  // Cho module admin đọc số liệu (chỉ lớp application).
+  exports: [
+    ListRoomsHandler,
+    GetArbitrageStatsHandler,
+    ListLanesHandler,
+    GetArbitrageSettingsHandler,
+    GetRoomHandler,
+    CONSUMER_CONTROL,
+    SignalHistoryRecorder,
   ],
 })
 export class OddsModule implements OnModuleInit, OnApplicationShutdown {
