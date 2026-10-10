@@ -1,0 +1,160 @@
+import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import {
+  ApiZodBody,
+  ApiZodQuery,
+} from '../../../shared/presentation/openapi.js';
+import {
+  Body,
+  Controller,
+  Get,
+  Inject,
+  NotFoundException,
+  Param,
+  Patch,
+  Query,
+} from '@nestjs/common';
+import { z } from 'zod';
+import { GetRoomHandler } from '../application/queries/get-room.query.js';
+import { ListLanesHandler } from '../application/queries/list-lanes.query.js';
+import { ListSignalHistoryHandler } from '../application/queries/list-signal-history.query.js';
+import { GetSignalHistoryHandler } from '../application/queries/get-signal-history.query.js';
+import { SIGNAL_STATUSES } from '../domain/signal-history.js';
+import { ListActiveSignalsHandler } from '../application/queries/list-active-signals.query.js';
+import { GetArbitrageSettingsHandler } from '../application/queries/get-arbitrage-settings.query.js';
+import { UpdateArbitrageSettingsHandler } from '../application/commands/update-arbitrage-settings.command.js';
+import { ODDS_PERMISSIONS as P } from '../application/odds.permissions.js';
+import { RequirePermissions } from '../../auth/presentation/auth.decorators.js';
+import { PHASES } from '../domain/phase.js';
+
+const SettingsBody = z
+  .object({
+    minMargin: z.number().min(0).max(1),
+    marginStep: z.number().positive().max(1),
+    signalTtlMs: z.number().int().positive(),
+    maxStartDriftMs: z.number().int().nonnegative(),
+    enabledPhases: z.array(z.enum(PHASES)).max(PHASES.length),
+  })
+  .partial();
+
+const HistoryQuery = z.object({
+  status: z.enum(SIGNAL_STATUSES).optional(),
+  phase: z.enum(PHASES).optional(),
+  room: z.string().optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+/** Kèo, room, lịch sử và cấu hình arbitrage. */
+@Controller('arbitrage')
+@ApiTags('Arbitrage')
+export class ArbitrageController {
+  constructor(
+    @Inject(GetRoomHandler) private readonly _room: GetRoomHandler,
+    @Inject(ListLanesHandler) private readonly _lanes: ListLanesHandler,
+    @Inject(ListSignalHistoryHandler)
+    private readonly _history: ListSignalHistoryHandler,
+    @Inject(GetSignalHistoryHandler)
+    private readonly _historyOne: GetSignalHistoryHandler,
+    @Inject(ListActiveSignalsHandler)
+    private readonly _signals: ListActiveSignalsHandler,
+    @Inject(GetArbitrageSettingsHandler)
+    private readonly _getSettings: GetArbitrageSettingsHandler,
+    @Inject(UpdateArbitrageSettingsHandler)
+    private readonly _updateSettings: UpdateArbitrageSettingsHandler,
+  ) {}
+
+  @Get('signals')
+  @RequirePermissions(P.ARBITRAGE_READ)
+  @ApiOperation({
+    summary: 'Kèo đang hiệu lực',
+    description: 'Quyền: arbitrage:read',
+  })
+  signals() {
+    return this._signals.execute();
+  }
+
+  @Get('rooms')
+  @RequirePermissions(P.ARBITRAGE_READ)
+  @ApiOperation({
+    summary: 'Odds của từng tenant trong một room',
+    description:
+      'Quyền: arbitrage:read. Giá trị là chuỗi dòng kèo {oddsA}|{oddsB}|{o|s}|{l|p}|{updatedAt}|{startsAt}|{ref}.',
+  })
+  @ApiQuery({
+    name: 'key',
+    required: true,
+    example: 'room:cs2:alliance~sinners:game-winner',
+  })
+  async room(@Query('key') room: string) {
+    const r = await this._room.execute({ room });
+    if (!r) throw new NotFoundException();
+    return r;
+  }
+
+  /** Lịch sử kèo đã phát (mới nhất trước), lọc theo trạng thái / kênh / room / khoảng thời gian. */
+  @Get('history')
+  @RequirePermissions(P.ARBITRAGE_READ)
+  @ApiOperation({
+    summary: 'Lịch sử kèo đã phát (mới nhất trước)',
+    description:
+      'Quyền: arbitrage:read. status: active | superseded | cancelled | abandoned.',
+  })
+  @ApiZodQuery(HistoryQuery)
+  history(@Query() query: unknown) {
+    return this._history.execute(HistoryQuery.parse(query));
+  }
+
+  @Get('history/:signalId')
+  @RequirePermissions(P.ARBITRAGE_READ)
+  @ApiOperation({
+    summary: 'Một kèo trong lịch sử',
+    description: 'Quyền: arbitrage:read',
+  })
+  async historyOne(@Param('signalId') signalId: string) {
+    const r = await this._historyOne.execute({ signalId });
+    if (!r) throw new NotFoundException();
+    return r;
+  }
+
+  /** Làn xử lý theo tenant × phase: hàng đợi, số đã xử lý, số cập nhật bị gộp. */
+  @Get('lanes')
+  @RequirePermissions(P.ARBITRAGE_READ)
+  @ApiOperation({
+    summary: 'Làn xử lý theo tenant × phase',
+    description:
+      'Quyền: arbitrage:read. queued / processed / coalesced (số cập nhật bị gộp) / busy.',
+  })
+  lanes() {
+    return this._lanes.execute();
+  }
+
+  @Get('settings')
+  @RequirePermissions(P.SETTINGS_READ)
+  @ApiOperation({
+    summary: 'Cấu hình arbitrage',
+    description: 'Quyền: arbitrage-settings:read',
+  })
+  getSettings() {
+    return this._getSettings.execute();
+  }
+
+  @Patch('settings')
+  @RequirePermissions(P.SETTINGS_WRITE)
+  @ApiOperation({
+    summary: 'Sửa cấu hình arbitrage (gửi trường cần đổi)',
+    description:
+      'Quyền: arbitrage-settings:write. Có hiệu lực ngay: tắt một kênh → kèo của kênh đó bị hủy (phase_disabled).',
+  })
+  @ApiZodBody(SettingsBody, {
+    prematchOnly: {
+      summary: 'Chỉ tạo kèo prematch',
+      value: { enabledPhases: ['prematch'] },
+    },
+    threshold: { summary: 'Ngưỡng 3%', value: { minMargin: 0.03 } },
+  })
+  updateSettings(@Body() body: unknown) {
+    return this._updateSettings.execute(SettingsBody.parse(body));
+  }
+}

@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?hãy đặt POSTGRES_PASSWORD trong file .env}
+      POSTGRES_DB: deHieu
+    ports:
+      - '127.0.0.1:5432:5432' # chỉ cho máy host truy cập
+    volumes:
+      # volume MỚI: dữ liệu cũ của timescale (pg16 + extension timescaledb) không dùng lại được
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d deHieu']
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  dragonfly:
+    # Dragonfly: tương thích giao thức Redis, đa luồng. v2.0.2 là bản đã chạy thử với bộ flag dưới.
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v2.0.2
+    container_name: dragonfly-cache
+    restart: unless-stopped
+    mem_limit: 768m # cao hơn maxmemory để còn chỗ cho overhead, tránh bị OOM-kill
+    ulimits:
+      memlock: -1 # Dragonfly khuyến nghị bỏ giới hạn memlock
+      nofile:
+        soft: 65535
+        hard: 65535
+    ports:
+      - '127.0.0.1:6379:6379' # chỉ cho máy host truy cập; bỏ "127.0.0.1:" nếu cần mở ra ngoài
+    command:
+      - --requirepass=${REDIS_PASSWORD:?hãy đặt REDIS_PASSWORD trong file .env}
+      # Cache thuần RAM: không snapshot định kỳ (để trống --snapshot_cron), không file dump,
+      # không mount volume → container mới là dữ liệu rỗng.
+      - --dbfilename=
+      - --maxmemory=512mb
+      # Không tự xóa key khi gần đầy (giống noeviction): ghi bị từ chối để app biết.
+      - --cache_mode=false
+      # 0 = dùng tất cả CPU. Giới hạn nếu chạy chung máy với app.
+      - --proactor_threads=0
+    # Không khai báo healthcheck riêng: kiểm tra bằng `redis-cli -a <mật khẩu> ping` từ máy host.
+
+volumes:
+  postgres_data:
+    driver: local
