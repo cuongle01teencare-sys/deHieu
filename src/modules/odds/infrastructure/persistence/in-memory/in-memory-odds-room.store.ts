@@ -1,5 +1,5 @@
 import type { OddsRoomStore } from '../../../application/odds-room.store.js';
-import type { MatchKey } from '../../../domain/match-key.js';
+import { MatchKey } from '../../../domain/match-key.js';
 import type { OddsLine } from '../../../domain/odds-line.js';
 import { OddsRoom } from '../../../domain/odds-room.js';
 
@@ -26,5 +26,14 @@ export class InMemoryOddsRoomStore implements OddsRoomStore {
     return Promise.resolve(
       new OddsRoom(key, new Map(this._rooms.get(key.toString()) ?? [])),
     );
+  }
+
+  list() {
+    const rooms: OddsRoom[] = [];
+    for (const [id, lines] of this._rooms) {
+      const key = MatchKey.parse(id);
+      if (key) rooms.push(new OddsRoom(key, new Map(lines)));
+    }
+    return Promise.resolve(rooms);
   }
 }

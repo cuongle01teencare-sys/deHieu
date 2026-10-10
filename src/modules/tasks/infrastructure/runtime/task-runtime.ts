@@ -20,6 +20,7 @@ export class TaskRuntime {
   private _running: Promise<void> | null = null;
   private _commandHandler: TaskCommandHandler | null = null;
   private _seq = 0;
+  private _lastWarn: { message: string; at: number } | null = null;
 
   constructor(
     private readonly _endpoint: TaskEndpoint,
@@ -91,6 +92,14 @@ export class TaskRuntime {
         }),
       onCommand: (handler) => {
         this._commandHandler = handler;
+      },
+      warn: (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        const now = Date.now();
+        const last = this._lastWarn;
+        if (last && last.message === message && now - last.at < 60_000) return;
+        this._lastWarn = { message, at: now };
+        this._endpoint.send({ type: 'error', fatal: false, message });
       },
     };
 

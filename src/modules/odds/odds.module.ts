@@ -60,6 +60,8 @@ import { ListActiveSignalsHandler } from './application/queries/list-active-sign
 import { ListConsumersHandler } from './application/queries/list-consumers.query.js';
 import { GetConsumerHubStatsHandler } from './application/queries/get-consumer-hub-stats.query.js';
 import { GetRoomHandler } from './application/queries/get-room.query.js';
+import { ListRoomsHandler } from './application/queries/list-rooms.query.js';
+import { GetArbitrageStatsHandler } from './application/queries/get-arbitrage-stats.query.js';
 // infrastructure (adapter thay được: đổi 1 dòng useFactory)
 import { DrizzleTeamAliasRepository } from './infrastructure/persistence/drizzle/drizzle-team-alias.repository.js';
 import { RedisOddsRoomStore } from './infrastructure/persistence/redis/redis-odds-room.store.js';
@@ -278,8 +280,27 @@ const SWEEP_INTERVAL_MS = 5_000;
     },
     {
       provide: GetRoomHandler,
-      inject: [ODDS_ROOM_STORE],
-      useFactory: (r: OddsRoomStore) => new GetRoomHandler(r),
+      inject: [ODDS_ROOM_STORE, ARBITRAGE_SETTINGS_STORE, SIGNAL_STATE_STORE],
+      useFactory: (
+        r: OddsRoomStore,
+        s: ArbitrageSettingsStore,
+        sig: SignalStateStore,
+      ) => new GetRoomHandler(r, s, sig),
+    },
+    {
+      provide: ListRoomsHandler,
+      inject: [ODDS_ROOM_STORE, ARBITRAGE_SETTINGS_STORE],
+      useFactory: (r: OddsRoomStore, s: ArbitrageSettingsStore) =>
+        new ListRoomsHandler(r, s),
+    },
+    {
+      provide: GetArbitrageStatsHandler,
+      inject: [ListRoomsHandler, ArbitrageEvaluator, SIGNAL_STATE_STORE],
+      useFactory: (
+        r: ListRoomsHandler,
+        e: ArbitrageEvaluator,
+        s: SignalStateStore,
+      ) => new GetArbitrageStatsHandler(r, e, s),
     },
     {
       provide: ListConsumersHandler,
@@ -326,7 +347,10 @@ export class OddsModule implements OnModuleInit, OnApplicationShutdown {
       const n = await this._abandon.execute({ reason: 'app_restart' });
       if (n) this._logger.warn(`đã đóng ${n} kèo còn treo từ lần chạy trước`);
     } catch (e: unknown) {
-      this._logger.error(`không đóng được kèo cũ: ${String(e)}`);
+      // DrizzleQueryError chỉ ghi câu SQL; lỗi thật của Postgres nằm ở `cause`.
+      const c = e instanceof Error ? e.cause : undefined;
+      const cause = c instanceof Error ? ` — ${c.message}` : '';
+      this._logger.error(`không đóng được kèo cũ: ${String(e)}${cause}`);
     }
 
     // adapter đầu vào: mọi publisher (worker/microservice) → use case ingest

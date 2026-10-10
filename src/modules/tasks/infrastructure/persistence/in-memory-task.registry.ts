@@ -17,4 +17,9 @@ export class InMemoryTaskRegistry implements TaskRegistry {
     this._records.set(record.spec.taskId, record);
     return Promise.resolve();
   }
+
+  delete(taskId: string) {
+    this._records.delete(taskId);
+    return Promise.resolve();
+  }
 }

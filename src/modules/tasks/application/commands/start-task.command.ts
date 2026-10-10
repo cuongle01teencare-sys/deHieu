@@ -33,6 +33,12 @@ export class StartTaskHandler implements CommandHandler<
           .map((k) => k.kind)
           .join(', ')})`,
       };
+    const checked = this._kinds.validateParams(cmd.kind, cmd.params);
+    if (!checked.ok)
+      return {
+        status: 'FAILED',
+        reason: `INVALID_PARAMS cho ${cmd.kind}:\n${checked.error}`,
+      };
     const running = (await this._supervisor.list()).find(
       (r) =>
         r.spec.kind === cmd.kind &&
@@ -44,6 +50,10 @@ export class StartTaskHandler implements CommandHandler<
         status: 'FAILED',
         reason: `KIND_ALREADY_RUNNING: ${cmd.kind} đang chạy ở task ${running.spec.taskId}`,
       };
-    return this._supervisor.start({ ...cmd, tenant: info.tenant });
+    return this._supervisor.start({
+      ...cmd,
+      params: checked.params,
+      tenant: info.tenant,
+    });
   }
 }

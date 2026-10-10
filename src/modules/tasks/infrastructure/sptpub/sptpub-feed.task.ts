@@ -44,6 +44,7 @@ export class SptPubFeedTask implements Task<SptPubFeedParams> {
         errors = 0;
       } catch (e: unknown) {
         if (ctx.signal.aborted) return;
+        ctx.warn(e);
         errors++;
         // 4xx (version hết hạn...) hoặc lỗi liên tiếp → chụp lại từ đầu
         if (

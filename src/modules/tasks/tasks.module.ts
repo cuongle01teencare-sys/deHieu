@@ -1,4 +1,10 @@
-import { Inject, Module, type OnApplicationShutdown } from '@nestjs/common';
+import {
+  Inject,
+  Logger,
+  Module,
+  type OnApplicationShutdown,
+  type OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { Env } from '../../shared/infrastructure/config/env.schema.js';
 import { TaskSupervisor } from './application/task-supervisor.js';
@@ -16,6 +22,7 @@ import {
 } from './application/task-alert.notifier.js';
 import { StartTaskHandler } from './application/commands/start-task.command.js';
 import { StopTaskHandler } from './application/commands/stop-task.command.js';
+import { DeleteTaskHandler } from './application/commands/delete-task.command.js';
 import { SendTaskCommandHandler } from './application/commands/send-task-command.command.js';
 import { ListTasksHandler } from './application/queries/list-tasks.query.js';
 import { GetTaskHandler } from './application/queries/get-task.query.js';
@@ -87,6 +94,11 @@ import { TasksController } from './presentation/tasks.controller.js';
       useFactory: (s: TaskSupervisor) => new StopTaskHandler(s),
     },
     {
+      provide: DeleteTaskHandler,
+      inject: [TaskSupervisor],
+      useFactory: (s: TaskSupervisor) => new DeleteTaskHandler(s),
+    },
+    {
       provide: SendTaskCommandHandler,
       inject: [TaskSupervisor],
       useFactory: (s: TaskSupervisor) => new SendTaskCommandHandler(s),
@@ -105,11 +117,35 @@ import { TasksController } from './presentation/tasks.controller.js';
   // Context khác (odds) chỉ thấy application: nghe dữ liệu + gửi lệnh cho task.
   exports: [TaskSupervisor],
 })
-export class TasksModule implements OnApplicationShutdown {
+export class TasksModule implements OnModuleInit, OnApplicationShutdown {
+  private readonly _logger = new Logger('Tasks');
+
   constructor(
     @Inject(WsRemoteTaskLauncher)
     private readonly _remote: WsRemoteTaskLauncher,
+    @Inject(TaskSupervisor) private readonly _supervisor: TaskSupervisor,
   ) {}
+
+  /** Log vòng đời publisher: RUNNING/STOPPED = log, RESTARTING = warn, FAILED = error. */
+  onModuleInit() {
+    this._supervisor.onLifecycle((e) => {
+      const { taskId, kind } = e.record.spec;
+      const who = `${taskId} (${kind})`;
+      if (e.type === 'task_error') {
+        const text = `${who} báo lỗi${e.fatal ? ' nghiêm trọng' : ''}: ${e.message}`;
+        if (e.fatal) this._logger.error(text);
+        else this._logger.warn(text);
+        return;
+      }
+      const to = e.record.state;
+      const text = `${who}: ${e.from} → ${to}${e.reason ? ` — ${e.reason}` : ''}`;
+      if (to === 'FAILED') this._logger.error(text);
+      else if (to === 'RESTARTING') this._logger.warn(text);
+      else if (to === 'RUNNING' || to === 'STOPPING' || to === 'STOPPED')
+        this._logger.log(text);
+      else this._logger.debug(text);
+    });
+  }
 
   async onApplicationShutdown() {
     await this._remote.close();

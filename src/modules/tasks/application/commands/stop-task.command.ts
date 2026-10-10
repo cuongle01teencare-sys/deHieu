@@ -5,6 +5,8 @@ import type { TaskSupervisor } from '../task-supervisor.js';
 
 export interface StopTaskCommand {
   readonly taskId: string;
+  /** Ai yêu cầu dừng (id principal) — ghi vào log. */
+  readonly requestedBy?: string;
 }
 
 export class StopTaskHandler implements CommandHandler<
@@ -13,7 +15,10 @@ export class StopTaskHandler implements CommandHandler<
 > {
   constructor(private readonly _supervisor: TaskSupervisor) {}
 
-  execute({ taskId }: StopTaskCommand) {
-    return this._supervisor.stop(taskId);
+  execute({ taskId, requestedBy }: StopTaskCommand) {
+    return this._supervisor.stop(
+      taskId,
+      `stop requested by ${requestedBy ?? 'unknown'}`,
+    );
   }
 }

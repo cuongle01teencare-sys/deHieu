@@ -119,8 +119,8 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
         const suspended =
           !!first.b ||
           !!second.b ||
-          Number(first.k) <= 1 ||
-          Number(second.k) <= 1;
+          !(Number(first.k) > 1) || // cũng bắt NaN / chuỗi rỗng
+          !(Number(second.k) > 1);
 
         changes.push({
           type: 'set',

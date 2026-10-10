@@ -12,15 +12,31 @@ import { OddsModule } from './modules/odds/odds.module.js';
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule();
 
+// ConfigModule chưa nạp .env ở thời điểm file này được đánh giá → tự nạp sớm (không ghi đè biến đã có).
+try {
+  process.loadEnvFile();
+} catch {
+  // không có file .env: dùng biến môi trường của hệ thống
+}
+
+/** Chỉ bật Observe khi có đủ key thật; thiếu key thì bỏ hẳn module (không gửi telemetry, không log 401). */
+export const observeEnabled = Boolean(
+  process.env.OBSERVE_APP_KEY && process.env.OBSERVE_APP_SECRET,
+);
+
 @Module({
   imports: [
     // Distributed tracing, auto-correlated logs, request/job metrics, error
     // telemetry, alarms, and more — out of the box. Sign up at https://observe.nestjs.com
-    ObserveModule.forRoot({
-      appKey: 'YOUR_APP_KEY',
-      appSecret: 'YOUR_APP_SECRET',
-      serviceId: 'nest-de-hieu-v2',
-    }),
+    ...(observeEnabled
+      ? [
+          ObserveModule.forRoot({
+            appKey: process.env.OBSERVE_APP_KEY!,
+            appSecret: process.env.OBSERVE_APP_SECRET!,
+            serviceId: process.env.OBSERVE_SERVICE_ID ?? 'nest-de-hieu-v2',
+          }),
+        ]
+      : []),
     ConfigModule.forRoot({
       isGlobal: true,
       validate: (raw) => envSchema.parse(raw),

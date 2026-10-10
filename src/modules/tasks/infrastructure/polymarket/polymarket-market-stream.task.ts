@@ -84,8 +84,9 @@ export class PolymarketMarketStreamTask implements Task<PolymarketMarketStreamPa
           ctx.emit(event, 'market');
         }
         await handle.close();
-      } catch {
+      } catch (e: unknown) {
         if (ctx.signal.aborted) return;
+        ctx.warn(e);
         if (!changed) await sleep(1_000, ctx.signal); // mất kết nối: thử lại, giữ nguyên tập token
       } finally {
         current = null;

@@ -1,4 +1,11 @@
+import type { z } from 'zod';
 import type { TaskFactory } from '../../application/task.js';
+import {
+  PolymarketEventsParamsSchema,
+  PolymarketMarketStreamParamsSchema,
+  SptPubDescriptorParamsSchema,
+  SptPubFeedParamsSchema,
+} from './task-params.schemas.js';
 import { SptPubDescriptorTask } from '../sptpub/sptpub-descriptor.task.js';
 import { SptPubFeedTask } from '../sptpub/sptpub-feed.task.js';
 import { PolymarketEventsTask } from '../polymarket/polymarket-events.task.js';
@@ -8,6 +15,8 @@ export interface TaskCatalogEntry {
   /** Nguồn dữ liệu mà task này lấy. App tự suy tenant từ kind, không nhận từ request. */
   readonly tenant: string;
   readonly create: TaskFactory;
+  /** Kiểm tra + điền mặc định cho params lúc start. */
+  readonly params: z.ZodType<Record<string, unknown>>;
 }
 
 /**
@@ -23,20 +32,28 @@ export const TASK_CATALOG: Readonly<Record<string, TaskCatalogEntry>> = {
   'sptpub.descriptor': {
     tenant: 'sptpub',
     create: () => new SptPubDescriptorTask(),
+    params: SptPubDescriptorParamsSchema,
   },
-  'sptpub.live': { tenant: 'sptpub', create: () => new SptPubFeedTask('live') },
+  'sptpub.live': {
+    tenant: 'sptpub',
+    create: () => new SptPubFeedTask('live'),
+    params: SptPubFeedParamsSchema,
+  },
   'sptpub.prematch': {
     tenant: 'sptpub',
     create: () => new SptPubFeedTask('prematch'),
+    params: SptPubFeedParamsSchema,
   },
   // polymarket: descriptor = danh sách trận + token; stream = giá (app tự tách live/prematch)
   'polymarket.descriptor': {
     tenant: 'polymarket',
     create: () => new PolymarketEventsTask(),
+    params: PolymarketEventsParamsSchema,
   },
   'polymarket.stream': {
     tenant: 'polymarket',
     create: () => new PolymarketMarketStreamTask(),
+    params: PolymarketMarketStreamParamsSchema,
   },
 };
 

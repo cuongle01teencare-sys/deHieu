@@ -120,8 +120,8 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
           : [yes.tokenId, no.tokenId];
         // seed từ snapshot: ask(yes) = bestAsk, ask(no) ≈ 1 - bestBid; stream sẽ cập nhật chính xác
         const seed: [number | null, number | null] = [
-          m.prices.bestAsk ?? null,
-          m.prices.bestBid != null ? 1 - m.prices.bestBid : null,
+          validAsk(m.prices.bestAsk),
+          validAsk(m.prices.bestBid != null ? 1 - m.prices.bestBid : null),
         ];
 
         const startsAt = Date.parse(startIso);
@@ -247,12 +247,13 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
     const t = this._tokens.get(assetId);
     const route = t && this._markets.get(t.conditionId);
     if (!t || !route) return;
-    route.asks[t.side] = ask != null && ask > 0 && ask < 1 ? ask : null;
+    route.asks[t.side] = validAsk(ask);
     touched.add(t.conditionId);
   }
 
   private _toChange(r: MarketRoute, at: number): OddsLineChange {
-    const [a, b] = r.asks;
+    const a = validAsk(r.asks[0]);
+    const b = validAsk(r.asks[1]);
     const open = a !== null && b !== null;
     return {
       type: 'set',
@@ -281,4 +282,12 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
     this._markets.delete(conditionId);
     return r ? [...r.tokens] : [];
   }
+}
+
+/**
+ * Giá (xác suất) dùng được để tính odds = 1/giá: phải nằm trong (0, 1).
+ * Giá 1 (chắc thắng / market sắp đóng) hoặc 0 (không có lệnh) → coi như không có giá → dòng suspended.
+ */
+function validAsk(ask: number | null | undefined): number | null {
+  return ask != null && Number.isFinite(ask) && ask > 0 && ask < 1 ? ask : null;
 }

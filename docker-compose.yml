@@ -39,8 +39,9 @@ services:
       - --maxmemory=512mb
       # Không tự xóa key khi gần đầy (giống noeviction): ghi bị từ chối để app biết.
       - --cache_mode=false
-      # 0 = dùng tất cả CPU. Giới hạn nếu chạy chung máy với app.
-      - --proactor_threads=0
+      # Dragonfly đòi tối thiểu 256MiB maxmemory cho MỖI luồng (0 = mọi CPU → máy 12 luồng cần 3GiB).
+      # 512mb / 256MiB = tối đa 2 luồng. Tăng luồng thì tăng maxmemory (và mem_limit) theo.
+      - --proactor_threads=2
     # Không khai báo healthcheck riêng: kiểm tra bằng `redis-cli -a <mật khẩu> ping` từ máy host.
 
 volumes:

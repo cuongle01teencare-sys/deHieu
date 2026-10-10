@@ -40,6 +40,22 @@ export type TaskDataListener = (msg: TaskDataMessage) => void | Promise<void>;
 /** Publisher dừng hẳn (FAILED sau khi hết lượt khởi động lại, hoặc admin stop). */
 export type TaskGoneListener = (record: TaskRecord) => void | Promise<void>;
 
+/** Sự kiện vòng đời để quan sát (log, alert...) — supervisor không biết ai nghe. */
+export type TaskLifecycleEvent =
+  | {
+      readonly type: 'state';
+      readonly record: TaskRecord;
+      readonly from: TaskState;
+      readonly reason?: string;
+    }
+  | {
+      readonly type: 'task_error';
+      readonly record: TaskRecord;
+      readonly message: string;
+      readonly fatal: boolean;
+    };
+export type TaskLifecycleListener = (event: TaskLifecycleEvent) => void;
+
 interface Live {
   conn: TaskConnection | null;
   desired: 'running' | 'stopped';
@@ -56,6 +72,7 @@ export class TaskSupervisor {
   private readonly _live = new Map<string, Live>();
   private readonly _listeners: TaskDataListener[] = [];
   private readonly _goneListeners: TaskGoneListener[] = [];
+  private readonly _lifecycleListeners: TaskLifecycleListener[] = [];
 
   constructor(
     private readonly _launchers: readonly TaskLauncher[],
@@ -70,6 +87,10 @@ export class TaskSupervisor {
 
   onTaskGone(listener: TaskGoneListener): void {
     this._goneListeners.push(listener);
+  }
+
+  onLifecycle(listener: TaskLifecycleListener): void {
+    this._lifecycleListeners.push(listener);
   }
 
   async start(spec: TaskSpec): Promise<OperationStatus<TaskRecord>> {
@@ -108,26 +129,45 @@ export class TaskSupervisor {
     return saved ? { status: 'SUCEED', data: saved } : { status: 'NOT_FOUND' };
   }
 
-  async stop(taskId: string): Promise<OperationStatus<TaskRecord>> {
+  /** @param reason ai/vì sao dừng — chỉ để quan sát (log). */
+  async stop(
+    taskId: string,
+    reason = 'stop requested',
+  ): Promise<OperationStatus<TaskRecord>> {
     const live = this._live.get(taskId);
     const record = await this._registry.get(taskId);
     if (!live || !record) return { status: 'NOT_FOUND' };
 
     live.desired = 'stopped';
     if (!live.conn) {
-      await this._transition(taskId, 'STOPPED');
+      await this._transition(taskId, 'STOPPED', {}, reason);
     } else {
-      await this._transition(taskId, 'STOPPING');
+      await this._transition(taskId, 'STOPPING', {}, reason);
       await new Promise<void>((resolve) => {
         live.onStopped = resolve;
         live.conn?.send({ type: 'stop' });
         this._timer(live, this._opts.stopTimeoutMs, () => resolve());
       });
       await this._dispose(taskId);
-      await this._transition(taskId, 'STOPPED');
+      await this._transition(taskId, 'STOPPED', {}, reason);
     }
     const saved = await this._registry.get(taskId);
     return saved ? { status: 'SUCEED', data: saved } : { status: 'NOT_FOUND' };
+  }
+
+  /** Xóa hồ sơ task đã dừng (STOPPED/FAILED). Task còn chạy thì phải stop trước. */
+  async remove(taskId: string): Promise<OperationStatus<TaskRecord>> {
+    const record = await this._registry.get(taskId);
+    if (!record) return { status: 'NOT_FOUND' };
+    if (isActive(record.state))
+      return {
+        status: 'FAILED',
+        reason: `TASK_STILL_ACTIVE: ${taskId} đang ${record.state}, hãy stop trước`,
+      };
+    await this._dispose(taskId);
+    this._live.delete(taskId);
+    await this._registry.delete(taskId);
+    return { status: 'SUCEED', data: record };
   }
 
   async command(
@@ -219,6 +259,12 @@ export class TaskSupervisor {
         live.pending.get(msg.commandId)?.(msg.ok, msg.error);
         return;
       case 'error':
+        this._emit({
+          type: 'task_error',
+          record,
+          message: msg.message,
+          fatal: msg.fatal,
+        });
         if (msg.fatal) await this._onCrash(taskId, msg.message);
         else await this._patch(taskId, { lastError: msg.message });
         return;
@@ -258,21 +304,28 @@ export class TaskSupervisor {
     const delay = nextRestartDelay(failures, this._opts.restartPolicy);
 
     if (delay === null) {
-      await this._transition(taskId, 'FAILED', {
-        consecutiveFailures: failures,
-        lastError: reason,
-      });
+      await this._transition(
+        taskId,
+        'FAILED',
+        { consecutiveFailures: failures, lastError: reason },
+        `${reason} (hết lượt khởi động lại sau ${failures} lần)`,
+      );
       const failed = await this._registry.get(taskId);
       if (failed) await this._notifier.taskDied(failed, reason);
       return;
     }
 
-    await this._transition(taskId, 'RESTARTING', {
-      consecutiveFailures: failures,
-      totalRestarts: record.totalRestarts + 1,
-      lastError: reason,
-      lastSeq: null, // task mới đánh seq lại từ đầu
-    });
+    await this._transition(
+      taskId,
+      'RESTARTING',
+      {
+        consecutiveFailures: failures,
+        totalRestarts: record.totalRestarts + 1,
+        lastError: reason,
+        lastSeq: null, // task mới đánh seq lại từ đầu
+      },
+      `${reason} → thử lại sau ${delay}ms (lần ${failures})`,
+    );
     this._timer(live, delay, () => this._spawn(taskId));
   }
 
@@ -317,19 +370,32 @@ export class TaskSupervisor {
     taskId: string,
     to: TaskState,
     patch: Partial<TaskRecord> = {},
+    reason?: string,
   ) {
     const r = await this._registry.get(taskId);
     if (!r || r.state === to) return this._patch(taskId, patch);
     if (!canTransition(r.state, to)) return;
-    await this._registry.save({
+    const next: TaskRecord = {
       ...r,
       ...patch,
       state: to,
       updatedAt: Date.now(),
-    });
+    };
+    await this._registry.save(next);
+    this._emit({ type: 'state', record: next, from: r.state, reason });
     if (to === 'FAILED' || to === 'STOPPED') {
       const gone = await this._registry.get(taskId);
       if (gone) for (const l of this._goneListeners) await l(gone);
+    }
+  }
+
+  private _emit(event: TaskLifecycleEvent) {
+    for (const l of this._lifecycleListeners) {
+      try {
+        l(event);
+      } catch {
+        // listener quan sát không được làm hỏng vòng đời task
+      }
     }
   }
 

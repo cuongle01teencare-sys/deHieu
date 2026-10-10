@@ -2,6 +2,7 @@
 /dist
 /node_modules
 /build
+/_to_delete
 
 # TypeScript build cache
 *.tsbuildinfo

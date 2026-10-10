@@ -18,6 +18,19 @@ import type { OddsRoomStore } from './odds-room.store.js';
 import type { SignalStateStore } from './signal-state.store.js';
 import type { ArbitrageSettingsStore } from './arbitrage-settings.js';
 
+/** Bộ đếm từ lúc app khởi động — để kiểm chứng evaluator đang làm việc. */
+export interface EvaluatorStats {
+  readonly evaluations: number;
+  readonly roomsEvaluated: number;
+  readonly lastEvaluatedAt: number | null;
+  readonly issued: number;
+  readonly refreshed: number;
+  readonly cancelled: number;
+  readonly cancelledByReason: Readonly<Record<string, number>>;
+  readonly errors: number;
+  readonly lastError: string | null;
+}
+
 /**
  * Application service: đánh giá lại một room → quyết định phát/làm mới/hủy kèo → publish.
  * Gọi sau mỗi lần một tenant ghi odds, và định kỳ (sweep) để phát lại kèo quá hạn.
@@ -34,11 +47,34 @@ export class ArbitrageEvaluator {
   /** Mỗi room chỉ một lượt đánh giá tại một thời điểm (nhiều làn có thể chạm cùng room). */
   private readonly _locks = new Map<string, Promise<void>>();
 
+  private readonly _seenRooms = new Set<string>();
+  private _stats = {
+    evaluations: 0,
+    lastEvaluatedAt: null as number | null,
+    issued: 0,
+    refreshed: 0,
+    cancelled: 0,
+    cancelledByReason: {} as Record<string, number>,
+    errors: 0,
+    lastError: null as string | null,
+  };
+
+  stats(): EvaluatorStats {
+    return {
+      ...this._stats,
+      cancelledByReason: { ...this._stats.cancelledByReason },
+      roomsEvaluated: this._seenRooms.size,
+    };
+  }
+
   evaluate(key: MatchKey, removal?: RemovalReason): Promise<void> {
     const id = key.toString();
     const prev = this._locks.get(id) ?? Promise.resolve();
     const run = prev.then(() => this._evaluate(key, removal));
-    const tail = run.catch(() => undefined);
+    const tail = run.catch((e: unknown) => {
+      this._stats.errors++;
+      this._stats.lastError = e instanceof Error ? e.message : String(e);
+    });
     this._locks.set(id, tail);
     void tail.then(() => {
       if (this._locks.get(id) === tail) this._locks.delete(id);
@@ -54,6 +90,9 @@ export class ArbitrageEvaluator {
     const room = await this._rooms.get(key);
     const roomId = key.toString();
     const now = this._now();
+    this._stats.evaluations++;
+    this._stats.lastEvaluatedAt = now;
+    this._seenRooms.add(roomId);
 
     const previous = await this._signals.getCombos(roomId);
     const decisions = decideSignals(
@@ -73,6 +112,9 @@ export class ArbitrageEvaluator {
       if (d.type === 'cancel') {
         next.delete(d.comboId);
         await this._signals.removeSignals([d.signalId]);
+        this._stats.cancelled++;
+        this._stats.cancelledByReason[d.reason] =
+          (this._stats.cancelledByReason[d.reason] ?? 0) + 1;
         events.push(
           new ArbitrageSignalCancelled(d.signalId, roomId, d.comboId, d.reason),
         );
@@ -91,6 +133,7 @@ export class ArbitrageEvaluator {
         });
         if (d.supersedes) await this._signals.removeSignals([d.supersedes]);
         await this._signals.putSignal(signal);
+        this._stats.issued++;
         events.push(new ArbitrageSignalIssued(signal, d.supersedes ?? null));
       } else {
         const signal = this._toSignal(
@@ -102,6 +145,7 @@ export class ArbitrageEvaluator {
         const prev = next.get(d.opportunity.comboId);
         if (prev) next.set(prev.comboId, { ...prev, lastIssuedAt: now });
         await this._signals.putSignal(signal);
+        this._stats.refreshed++;
         events.push(new ArbitrageSignalRefreshed(signal));
       }
     }

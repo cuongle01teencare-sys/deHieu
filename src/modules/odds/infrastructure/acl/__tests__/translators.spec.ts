@@ -181,6 +181,39 @@ describe('PolymarketOddsTranslator', () => {
     expect(sync).toHaveBeenCalledWith('subscribe', ['tA', 'tS']);
   });
 
+  it('giá 1 / 0 (market sắp đóng, không có lệnh) → dòng suspended, không ném lỗi', async () => {
+    const t = new PolymarketOddsTranslator(teams);
+    const edge = [
+      {
+        ...events[0],
+        markets: [
+          { ...events[0].markets[0], prices: { bestBid: '0', bestAsk: '1' } },
+        ],
+      },
+    ];
+    const [c] = await t.translate(
+      msg({
+        tenant: 'polymarket',
+        kind: 'polymarket.descriptor',
+        payload: edge,
+      }),
+    );
+    expect(c?.type === 'set' && c.line.props.status).toBe('suspended');
+    const [d] = await t.translate(
+      msg({
+        tenant: 'polymarket',
+        kind: 'polymarket.stream',
+        payload: {
+          topic: 'market',
+          type: 'price_change',
+          payload: { priceChanges: [{ assetId: 'tA', bestAsk: '0.49' }] },
+        },
+      }),
+    );
+    // mới có giá một bên → vẫn suspended
+    expect(d?.type === 'set' && d.line.props.status).toBe('suspended');
+  });
+
   it('price_change cập nhật odds = 1 / best ask của token', async () => {
     const t = new PolymarketOddsTranslator(teams);
     await t.translate(

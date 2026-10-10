@@ -44,6 +44,7 @@ Quyền dạng `tài-nguyên:hành-động`; `*` dùng được ở từng phầ
 | GET | `/tasks/:taskId` | `tasks:read` | Một publisher |
 | POST | `/tasks` | `tasks:manage` | Tạo + chạy publisher |
 | POST | `/tasks/:taskId/stop` | `tasks:manage` | Dừng publisher (odds của nó bị gỡ, kèo liên quan bị hủy) |
+| DELETE | `/tasks/:taskId` | `tasks:manage` | Xóa hồ sơ task đã dừng (STOPPED/FAILED); đang chạy → 400 |
 | POST | `/tasks/:taskId/commands` | `tasks:command` | Gửi lệnh vào task đang chạy, body `{ "name": "...", "data": ... }` |
 
 Body `POST /tasks`:
@@ -77,7 +78,9 @@ Trạng thái publisher: `CREATED → INITIALIZING → READY → STARTING → RU
 | Method | Path | Quyền | Mô tả |
 |---|---|---|---|
 | GET | `/arbitrage/signals` | `arbitrage:read` | Kèo đang hiệu lực |
-| GET | `/arbitrage/rooms?key=room:cs2:alliance~sinners:game-winner` | `arbitrage:read` | Odds của từng tenant trong một room (dạng chuỗi) |
+| GET | `/arbitrage/stats` | `arbitrage:read` | Tổng quan: số room (`total`, `matched` ≥2 tenant, `withCombos`, `aboveMinMargin`), `byTenant` (số dòng, open/suspended, `newestAgeMs`), bộ đếm evaluator (`evaluations`, `roomsEvaluated`, `issued`/`refreshed`/`cancelled`), `activeSignals` |
+| GET | `/arbitrage/rooms?q=&tenant=&sport=&phase=&matched=&limit=&offset=` | `arbitrage:read` | Danh sách room (id `room`, đội, tenant, `bestMargin`), sắp theo `bestMargin` giảm dần |
+| GET | `/arbitrage/rooms/{room}` ví dụ `/arbitrage/rooms/room:cs2:alliance~sinners:game-winner` | `arbitrage:read` | Chi tiết room: odds từng tenant (parse + chuỗi gốc, `ageMs`), các tổ hợp + margin, kèo đang hiệu lực |
 | GET | `/arbitrage/history?status=&phase=&room=&from=&to=&limit=50&offset=0` | `arbitrage:read` | Lịch sử kèo đã phát (mới nhất trước) |
 | GET | `/arbitrage/history/:signalId` | `arbitrage:read` | Một kèo trong lịch sử |
 | GET | `/arbitrage/lanes` | `arbitrage:read` | Làn xử lý theo tenant × phase: `queued`, `processed`, `coalesced`, `busy` |

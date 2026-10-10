@@ -40,8 +40,9 @@ export class PolymarketEventsTask implements Task<PolymarketEventsParams> {
           if (ctx.signal.aborted) return;
           ctx.emit(page.items, 'events');
         }
-      } catch {
+      } catch (e: unknown) {
         if (ctx.signal.aborted) return; // lỗi tạm thời: vòng sau thử lại
+        ctx.warn(e);
       }
       await sleep(p.intervalMs, ctx.signal);
     }

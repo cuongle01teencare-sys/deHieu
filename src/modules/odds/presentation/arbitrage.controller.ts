@@ -1,4 +1,4 @@
-import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import {
   ApiZodBody,
   ApiZodQuery,
@@ -15,6 +15,8 @@ import {
 } from '@nestjs/common';
 import { z } from 'zod';
 import { GetRoomHandler } from '../application/queries/get-room.query.js';
+import { ListRoomsHandler } from '../application/queries/list-rooms.query.js';
+import { GetArbitrageStatsHandler } from '../application/queries/get-arbitrage-stats.query.js';
 import { ListLanesHandler } from '../application/queries/list-lanes.query.js';
 import { ListSignalHistoryHandler } from '../application/queries/list-signal-history.query.js';
 import { GetSignalHistoryHandler } from '../application/queries/get-signal-history.query.js';
@@ -36,6 +38,19 @@ const SettingsBody = z
   })
   .partial();
 
+const RoomsQuery = z.object({
+  q: z.string().optional(),
+  tenant: z.string().optional(),
+  sport: z.string().optional(),
+  phase: z.enum(PHASES).optional(),
+  matched: z
+    .enum(['true', 'false'])
+    .transform((v) => v === 'true')
+    .optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
 const HistoryQuery = z.object({
   status: z.enum(SIGNAL_STATUSES).optional(),
   phase: z.enum(PHASES).optional(),
@@ -52,6 +67,9 @@ const HistoryQuery = z.object({
 export class ArbitrageController {
   constructor(
     @Inject(GetRoomHandler) private readonly _room: GetRoomHandler,
+    @Inject(ListRoomsHandler) private readonly _rooms: ListRoomsHandler,
+    @Inject(GetArbitrageStatsHandler)
+    private readonly _stats: GetArbitrageStatsHandler,
     @Inject(ListLanesHandler) private readonly _lanes: ListLanesHandler,
     @Inject(ListSignalHistoryHandler)
     private readonly _history: ListSignalHistoryHandler,
@@ -75,19 +93,38 @@ export class ArbitrageController {
     return this._signals.execute();
   }
 
+  @Get('stats')
+  @RequirePermissions(P.ARBITRAGE_READ)
+  @ApiOperation({
+    summary: 'Tổng quan: số room, evaluator, kèo đang hiệu lực',
+    description:
+      'Quyền: arbitrage:read. rooms: total / matched (≥2 tenant) / withCombos / aboveMinMargin, byTenant (số dòng, open/suspended, newestAgeMs). evaluator: số lượt đánh giá, số room đã đánh giá, issued / refreshed / cancelled (theo lý do) từ lúc app khởi động.',
+  })
+  stats() {
+    return this._stats.execute();
+  }
+
   @Get('rooms')
   @RequirePermissions(P.ARBITRAGE_READ)
   @ApiOperation({
-    summary: 'Odds của từng tenant trong một room',
+    summary: 'Danh sách room đang có',
     description:
-      'Quyền: arbitrage:read. Giá trị là chuỗi dòng kèo {oddsA}|{oddsB}|{o|s}|{l|p}|{updatedAt}|{startsAt}|{ref}.',
+      'Quyền: arbitrage:read. Mỗi dòng có `room` (id) để mở chi tiết ở GET /arbitrage/rooms/{room}, kèm đội, tenant, bestMargin. Sắp theo bestMargin giảm dần. Lọc: q (tên đội), tenant, sport, phase, matched=true (chỉ room ≥2 tenant).',
   })
-  @ApiQuery({
-    name: 'key',
-    required: true,
-    example: 'room:cs2:alliance~sinners:game-winner',
+  @ApiZodQuery(RoomsQuery)
+  rooms(@Query() query: unknown) {
+    return this._rooms.execute(RoomsQuery.parse(query));
+  }
+
+  @Get('rooms/:room')
+  @RequirePermissions(P.ARBITRAGE_READ)
+  @ApiOperation({
+    summary: 'Chi tiết một room',
+    description:
+      'Quyền: arbitrage:read. Odds từng tenant (đã parse + chuỗi gốc, ageMs), mọi tổ hợp kèm margin, và kèo đang hiệu lực của room. 404 nếu room không tồn tại.',
   })
-  async room(@Query('key') room: string) {
+  @ApiParam({ name: 'room', example: 'room:cs2:alliance~sinners:game-winner' })
+  async room(@Param('room') room: string) {
     const r = await this._room.execute({ room });
     if (!r) throw new NotFoundException();
     return r;

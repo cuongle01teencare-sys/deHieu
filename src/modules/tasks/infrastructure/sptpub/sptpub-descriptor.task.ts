@@ -21,8 +21,9 @@ export class SptPubDescriptorTask implements Task<SptPubDescriptorParams> {
     while (!ctx.signal.aborted) {
       try {
         ctx.emit(await getJson(url, ctx.signal, 30_000), 'markets');
-      } catch {
+      } catch (e: unknown) {
         if (ctx.signal.aborted) return; // lỗi tạm thời: vòng sau thử lại
+        ctx.warn(e);
       }
       await sleep(p.intervalMs, ctx.signal);
     }

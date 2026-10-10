@@ -4,6 +4,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Inject,
   NotFoundException,
@@ -15,12 +16,17 @@ import { z } from 'zod';
 import type { OperationStatus } from '../../../shared/domain/domain-repository.js';
 import { StartTaskHandler } from '../application/commands/start-task.command.js';
 import { StopTaskHandler } from '../application/commands/stop-task.command.js';
+import { DeleteTaskHandler } from '../application/commands/delete-task.command.js';
 import { SendTaskCommandHandler } from '../application/commands/send-task-command.command.js';
 import { ListTasksHandler } from '../application/queries/list-tasks.query.js';
 import { GetTaskHandler } from '../application/queries/get-task.query.js';
 import { ListTaskKindsHandler } from '../application/queries/list-task-kinds.query.js';
 import { TASK_PERMISSIONS as P } from '../application/task.permissions.js';
-import { RequirePermissions } from '../../auth/presentation/auth.decorators.js';
+import {
+  CurrentPrincipal,
+  RequirePermissions,
+} from '../../auth/presentation/auth.decorators.js';
+import type { Principal } from '../../auth/domain/principal.js';
 
 const StartTaskBody = z.object({
   taskId: z.string().min(1),
@@ -96,6 +102,7 @@ export class TasksController {
   constructor(
     @Inject(StartTaskHandler) private readonly _start: StartTaskHandler,
     @Inject(StopTaskHandler) private readonly _stop: StopTaskHandler,
+    @Inject(DeleteTaskHandler) private readonly _delete: DeleteTaskHandler,
     @Inject(SendTaskCommandHandler)
     private readonly _command: SendTaskCommandHandler,
     @Inject(ListTasksHandler) private readonly _list: ListTasksHandler,
@@ -156,8 +163,24 @@ export class TasksController {
     description:
       'Quyền: tasks:manage. Odds của publisher bị gỡ, kèo liên quan bị hủy (publisher_stopped).',
   })
-  async stop(@Param('taskId') taskId: string) {
-    return unwrap(await this._stop.execute({ taskId }));
+  async stop(
+    @Param('taskId') taskId: string,
+    @CurrentPrincipal() principal?: Principal,
+  ) {
+    return unwrap(
+      await this._stop.execute({ taskId, requestedBy: principal?.id }),
+    );
+  }
+
+  @Delete(':taskId')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Xóa hồ sơ task đã dừng',
+    description:
+      'Quyền: tasks:manage. Chỉ xóa được task ở trạng thái STOPPED hoặc FAILED (đang chạy → 400, hãy stop trước). Không có → 404.',
+  })
+  async remove(@Param('taskId') taskId: string) {
+    return unwrap(await this._delete.execute({ taskId }));
   }
 
   @Post(':taskId/commands')

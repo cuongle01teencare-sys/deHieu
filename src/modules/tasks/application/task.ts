@@ -13,6 +13,11 @@ export interface TaskContext<TParams = unknown> {
   emit(payload: unknown, channel?: string): void;
   /** Lệnh điều khiển từ app trong lúc chạy, vd subscribe/unsubscribe assetIds. */
   onCommand(handler: TaskCommandHandler): void;
+  /**
+   * Báo lỗi KHÔNG làm chết task (vd lỗi mạng, sẽ thử lại vòng sau).
+   * App ghi vào lastError và log warn. Cùng một thông báo bị gộp trong 60s.
+   */
+  warn(error: unknown): void;
 }
 
 export type TaskCommandHandler = (
