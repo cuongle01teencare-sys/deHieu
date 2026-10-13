@@ -9,11 +9,13 @@ export type TaskState =
   | 'RESTARTING'
   | 'FAILED';
 
+// Admin dừng được task ở mọi trạng thái đang sống (kể cả lúc đang khởi tạo):
+// có kết nối → STOPPING → STOPPED, chưa có kết nối → STOPPED ngay.
 const TRANSITIONS: Record<TaskState, readonly TaskState[]> = {
-  CREATED: ['INITIALIZING', 'FAILED'],
-  INITIALIZING: ['READY', 'FAILED', 'RESTARTING'],
+  CREATED: ['INITIALIZING', 'FAILED', 'STOPPED'],
+  INITIALIZING: ['READY', 'FAILED', 'RESTARTING', 'STOPPING', 'STOPPED'],
   READY: ['STARTING', 'STOPPING', 'FAILED', 'RESTARTING'],
-  STARTING: ['RUNNING', 'FAILED', 'RESTARTING'],
+  STARTING: ['RUNNING', 'FAILED', 'RESTARTING', 'STOPPING'],
   RUNNING: ['STOPPING', 'FAILED', 'RESTARTING'],
   STOPPING: ['STOPPED', 'FAILED'],
   STOPPED: [],

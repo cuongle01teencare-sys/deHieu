@@ -51,6 +51,8 @@ export function MatchesPage() {
         <option value="">Mọi môn</option>
         <option value="cs2">CS2</option>
         <option value="lol">LoL</option>
+        <option value="dota2">Dota 2</option>
+        <option value="valorant">Valorant</option>
       </Select>
       <Select value={f.tenant} onChange={(e) => setF({ ...f, tenant: e.target.value })} className="md:w-36" aria-label="Tenant">
         <option value="">Mọi tenant</option>

@@ -7,4 +7,6 @@ export const ODDS_PERMISSIONS = {
   TEAM_ALIASES_WRITE: 'team-aliases:write',
   CONSUMERS_READ: 'consumers:read',
   CONSUMERS_CONTROL: 'consumers:control',
+  /** Thêm/sửa/xóa kênh thông báo (Discord, Telegram, Slack) và hạng kèo. */
+  CONSUMERS_MANAGE: 'consumers:manage',
 } as const;

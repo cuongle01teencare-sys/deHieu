@@ -1,6 +1,6 @@
 'use client';
 
-import { Crosshair, Gamepad2, Swords } from 'lucide-react';
+import { Castle, Crosshair, Gamepad2, Swords, Target } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { fmtStamp, fmtStarts } from '@/lib/format';
 import { SPORT_LABEL } from '@/lib/markets';
@@ -9,7 +9,7 @@ import { useNow } from '@/hooks/use-now';
 import { Hint } from './ui/tooltip';
 import { Pill } from './ui/status';
 
-const SPORT_ICON: Record<string, typeof Crosshair> = { cs2: Crosshair, lol: Swords };
+const SPORT_ICON: Record<string, typeof Crosshair> = { cs2: Crosshair, lol: Swords, dota2: Castle, valorant: Target };
 
 export function SportIcon({ sport, className }: { sport: string; className?: string }) {
   const Icon = SPORT_ICON[sport] ?? Gamepad2;

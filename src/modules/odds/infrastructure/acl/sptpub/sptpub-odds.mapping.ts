@@ -9,6 +9,8 @@ import {
 export const SPTPUB_SPORTS: Readonly<Record<string, string>> = {
   '109': 'cs2', // Counter-Strike
   '110': 'lol',
+  '111': 'dota2',
+  '194': 'valorant',
 };
 
 export interface SptPubMarketMapping {

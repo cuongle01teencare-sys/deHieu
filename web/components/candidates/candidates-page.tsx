@@ -68,6 +68,8 @@ export function CandidatesPage() {
               <option value="">Mọi môn</option>
               <option value="cs2">CS2</option>
               <option value="lol">LoL</option>
+              <option value="dota2">Dota 2</option>
+              <option value="valorant">Valorant</option>
             </Select>
             <Select value={minScore} onChange={(e) => setMinScore(e.target.value)} className="w-36" aria-label="Điểm tối thiểu">
               {['0.5', '0.6', '0.7', '0.8', '0.9'].map((v) => (

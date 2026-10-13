@@ -24,6 +24,7 @@ import { Table, TD, TH, THead, TR } from '../ui/table';
 import { TenantDot } from '../ui/tenant';
 import { AgeSince, LiveStamp } from '../ui/values';
 import { JsonBlock, Mono } from '../ui/code';
+import { Hint } from '../ui/tooltip';
 import { DrawerSection } from '../room-drawer';
 
 const STALE = 60_000;
@@ -72,7 +73,7 @@ export function PublisherPage() {
         {stopped ? (
           <>
             <MenuItem icon={<Play />} disabledReason={manage} onSelect={() => setAction({ type: 'restart', task: t })}>
-              Tạo lại
+              Chạy lại
             </MenuItem>
             <MenuItem icon={<Trash2 />} danger disabledReason={manage} onSelect={() => setAction({ type: 'delete', task: t })}>
               Xóa hồ sơ
@@ -91,7 +92,7 @@ export function PublisherPage() {
     <div>
       <PageHeader
         title="Publisher & Node"
-        description="Task thu thập dữ liệu từ tenant. Mỗi kind chạy một instance; quá 5 lần lỗi liên tiếp → FAILED."
+        description="Task thu thập dữ liệu từ tenant. Descriptor chạy được nhiều task (vd mỗi môn một task), các kind khác chỉ một; quá 5 lần lỗi liên tiếp → FAILED. Task lưu bền tự chạy lại khi app khởi động."
         meta={<LiveStamp at={snapshotAt} />}
         actions={
           <Button variant="primary" onClick={() => setCreating(true)} disabledReason={manage} className="hidden md:inline-flex">
@@ -120,7 +121,10 @@ export function PublisherPage() {
               {tasks.map((t) => (
                 <li key={t.spec.taskId} onClick={() => openDetail(t.spec.taskId)} className={cn('flex min-h-16 cursor-pointer items-center gap-3 border-b border-line py-3', detailId === t.spec.taskId && '-mx-4 bg-accent-soft px-4')}>
                   <div className="min-w-0 flex-1">
-                    <div className="num truncate text-body text-fg">{t.spec.taskId}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="num truncate text-body text-fg">{t.spec.taskId}</span>
+                      {t.spec.persist ? <Pill tone="info">Lưu bền</Pill> : null}
+                    </div>
                     <div className="mt-0.5 flex items-center gap-1.5 text-caption text-muted-fg">
                       <TenantDot tenant={t.spec.tenant} />
                       <span className="num truncate">{t.spec.kind}</span>
@@ -153,7 +157,18 @@ export function PublisherPage() {
                 {tasks.map((t) => (
                   <Fragment key={t.spec.taskId}>
                     <TR interactive highlight={detailId === t.spec.taskId} onClick={() => openDetail(t.spec.taskId)}>
-                      <TD className="num text-fg">{t.spec.taskId}</TD>
+                      <TD className="num text-fg">
+                        <span className="flex items-center gap-2">
+                          {t.spec.taskId}
+                          {t.spec.persist ? (
+                            <Hint content="Lưu bền: tự chạy lại khi app khởi động (trừ khi đã bị dừng)">
+                              <span>
+                                <Pill tone="info">Lưu bền</Pill>
+                              </span>
+                            </Hint>
+                          ) : null}
+                        </span>
+                      </TD>
                       <TD>
                         <span className="flex items-center gap-1.5">
                           <TenantDot tenant={t.spec.tenant} />
@@ -285,7 +300,7 @@ function TaskDetail({
             </Button>
             {stopped ? (
               <Button variant="primary" disabledReason={manage} onClick={() => onAction({ type: 'restart', task })}>
-                <Play /> Tạo lại
+                <Play /> Chạy lại
               </Button>
             ) : (
               <Button variant="danger" disabledReason={manage} onClick={() => onAction({ type: 'stop', task })}>
@@ -310,6 +325,7 @@ function TaskDetail({
                 ['Kind', <span key="k" className="num">{task.spec.kind}</span>],
                 ['Tenant', <span key="t" className="num">{task.spec.tenant}</span>],
                 ['Chạy trên', <span key="n" className="num">{nodeOf(task)}</span>],
+                ['Lưu bền', task.spec.persist ? (stopped ? 'Có · đã dừng, không tự chạy khi khởi động' : 'Có · tự chạy lại khi app khởi động') : 'Không'],
                 ['Heartbeat', task.lastHeartbeatAt ? <span key="h" className="num">{fmtAge(now - task.lastHeartbeatAt)} trước</span> : '—'],
                 ['Dữ liệu cuối', task.lastDataAt ? <span key="d" className="num">{fmtAge(now - task.lastDataAt)} trước</span> : '—'],
                 ['Seq', <span key="s" className="num">{task.lastSeq ?? '—'}</span>],
@@ -340,6 +356,7 @@ function CreateTask({ open, onOpenChange, nodes, onCreated }: { open: boolean; o
   const [kind, setKind] = useState('');
   const [taskId, setTaskId] = useState('');
   const [runtime, setRuntime] = useState('worker');
+  const [persist, setPersist] = useState(true);
   const [values, setValues] = useState<Record<string, string | boolean>>({});
   const [busy, setBusy] = useState(false);
   const info = kinds?.find((k) => k.kind === kind);
@@ -347,6 +364,7 @@ function CreateTask({ open, onOpenChange, nodes, onCreated }: { open: boolean; o
   useEffect(() => {
     if (!info) return;
     setTaskId(info.kind.replace('.', '-'));
+    setPersist(true);
     setValues(Object.fromEntries(info.params.map((p) => [p.name, p.type === 'boolean' ? Boolean(p.default) : p.default === undefined ? '' : p.type === 'number[]' && Array.isArray(p.default) ? p.default.join(', ') : typeof p.default === 'object' ? JSON.stringify(p.default) : String(p.default)])));
   }, [info]);
   useEffect(() => {
@@ -371,7 +389,7 @@ function CreateTask({ open, onOpenChange, nodes, onCreated }: { open: boolean; o
       } else params[p.name] = v;
     }
     setBusy(true);
-    const r = await mutate('tasks', { method: 'POST', body: { taskId, kind, runtime: runtime === 'worker' ? { type: 'worker' } : { type: 'remote', nodeId: runtime }, params } }, `Đã tạo task ${taskId}`);
+    const r = await mutate('tasks', { method: 'POST', body: { taskId, kind, persist, runtime: runtime === 'worker' ? { type: 'worker' } : { type: 'remote', nodeId: runtime }, params } }, `Đã tạo task ${taskId}`);
     setBusy(false);
     if (r) {
       onOpenChange(false);
@@ -418,6 +436,7 @@ function CreateTask({ open, onOpenChange, nodes, onCreated }: { open: boolean; o
               ))}
             </Select>
           </Field>
+          {info?.multiInstance ? <p className="-mt-3 text-caption text-muted-fg">Kind này chạy được nhiều task song song, vd mỗi môn một task với tagIds riêng.</p> : null}
           <Field label="taskId" htmlFor="taskId" help="Duy nhất. Dùng trong log, sự cố và thông báo.">
             <Input id="taskId" value={taskId} onChange={(e) => setTaskId(e.target.value)} className="num" />
           </Field>
@@ -431,6 +450,9 @@ function CreateTask({ open, onOpenChange, nodes, onCreated }: { open: boolean; o
                 </option>
               ))}
             </Select>
+          </Field>
+          <Field label="Lưu bền" htmlFor="persist" help="Bật: lưu vào database, lần khởi động app sau tự chạy lại. Xóa task sẽ xóa luôn bản lưu.">
+            <Switch id="persist" checked={persist} onCheckedChange={setPersist} label="Lưu bền" />
           </Field>
           {info?.params.length ? <div className="h-px bg-line" /> : null}
           {info?.params.map((p) => (
@@ -486,7 +508,7 @@ function ActionDialogs({ action, onClose, onDone }: { action: Action; onClose: (
         onOpenChange={(v) => !v && onClose()}
         tone="danger"
         title={`Dừng ${t?.spec.taskId ?? ''}?`}
-        description="Odds do task này cung cấp sẽ bị gỡ và mọi kèo liên quan bị hủy (publisher_stopped)."
+        description={`Odds do task này cung cấp sẽ bị gỡ và mọi kèo liên quan bị hủy (publisher_stopped).${t?.spec.persist ? ' Task lưu bền vẫn được giữ nhưng sẽ không tự chạy khi app khởi động lại.' : ''}`}
         confirmLabel="Dừng task"
         loading={busy}
         onConfirm={() => run(() => mutate(`tasks/${id}/stop`, { method: 'POST' }, `Đã dừng ${t?.spec.taskId}`))}
@@ -496,7 +518,7 @@ function ActionDialogs({ action, onClose, onDone }: { action: Action; onClose: (
         onOpenChange={(v) => !v && onClose()}
         tone="danger"
         title={`Xóa hồ sơ ${t?.spec.taskId ?? ''}?`}
-        description="Chỉ xóa hồ sơ task đã dừng. Không ảnh hưởng dữ liệu đã thu."
+        description={`Chỉ xóa hồ sơ task đã dừng. Không ảnh hưởng dữ liệu đã thu.${t?.spec.persist ? ' Bản lưu bền trong database cũng bị xóa.' : ''}`}
         confirmLabel="Xóa"
         loading={busy}
         onConfirm={() => run(() => mutate(`tasks/${id}`, { method: 'DELETE' }, `Đã xóa ${t?.spec.taskId}`))}
@@ -504,18 +526,11 @@ function ActionDialogs({ action, onClose, onDone }: { action: Action; onClose: (
       <Confirm
         open={action?.type === 'restart'}
         onOpenChange={(v) => !v && onClose()}
-        title={`Tạo lại ${t?.spec.taskId ?? ''}?`}
-        description="Backend không có lệnh restart riêng. UI sẽ xóa hồ sơ đã dừng rồi tạo task mới với cùng kind, node và tham số."
-        confirmLabel="Tạo lại"
+        title={`Chạy lại ${t?.spec.taskId ?? ''}?`}
+        description={t?.spec.persist ? 'Chạy lại với cùng kind, node và tham số. Task lưu bền sẽ tự chạy lại ở lần khởi động app sau.' : 'Chạy lại với cùng kind, node và tham số.'}
+        confirmLabel="Chạy lại"
         loading={busy}
-        onConfirm={() =>
-          run(async () => {
-            if (!t) return null;
-            const removed = await mutate(`tasks/${id}`, { method: 'DELETE' });
-            if (!removed) return null;
-            return mutate('tasks', { method: 'POST', body: { taskId: t.spec.taskId, kind: t.spec.kind, runtime: t.spec.runtime, params: t.spec.params } }, `Đã tạo lại ${t.spec.taskId}`);
-          })
-        }
+        onConfirm={() => run(() => mutate(`tasks/${id}/start`, { method: 'POST' }, `Đã chạy lại ${t?.spec.taskId}`))}
       />
       <Panel
         open={action?.type === 'command'}

@@ -384,7 +384,7 @@ Backend phát hiện và giao tín hiệu. Việc thông báo ra ngoài hoặc �
 
 `prematch` nghĩa là trước trận; `live` nghĩa là đang diễn ra. Dòng `suspended` vẫn có thể nằm trong room nhưng không được ghép để tạo cơ hội. Với Polymarket, thiếu ask dùng được ở một phía sẽ tạo dòng suspended; giá 0 hoặc 1 không được dùng để tính odds mở.
 
-Adapter cấu hình hiện tại giữ cài đặt trong RAM. Restart backend đưa cài đặt arbitrage về mặc định. Trạng thái tín hiệu active và các session consumer cũng được giữ trong RAM; không nên nhầm chúng với lịch sử đã lưu.
+Cài đặt arbitrage, hạng kèo, kênh thông báo và task có bật **Lưu bền** được ghi vào Postgres và tự nạp lại khi backend khởi động. Task lưu bền đã bị dừng vẫn giữ trạng thái dừng sau restart. Trạng thái tín hiệu active và các session consumer WebSocket vẫn chỉ nằm trong RAM; không nên nhầm chúng với lịch sử đã lưu.
 
 ### Mở màn hình nào để xem việc gì?
 
@@ -418,7 +418,8 @@ Web yêu cầu đăng nhập và chuyển tiếp các thao tác backend qua BFF 
 | `coalesced` tăng                             | Làn đang gộp cập nhật cũ; xem kèm queued, thời gian xử lý và lỗi, không kết luận đó là parse lỗi |
 | Consumer connected nhưng không nhận tín hiệu | Kiểm tra pause, tín hiệu active, thời hạn và các lần phát tiếp theo                              |
 | `pendingDeliveries` tăng                     | Consumer có gửi ACK đúng deliveryId không? Có đang mất kết nối không?                            |
-| Cấu hình vừa đổi bị mất sau restart          | Adapter cài đặt hiện giữ trong RAM                                                               |
+| Cấu hình vừa đổi bị mất sau restart          | Đã chạy migration `0003` chưa? Log khởi động có báo lỗi đọc cấu hình đã lưu không?               |
+| Kênh thông báo không nhận kèo                | Kênh có bật không? Kèo có thuộc hạng kênh đã chọn không? Bấm “Gửi tin kiểm tra” để xem lỗi       |
 
 Nếu chạy trong repo, có thể lấy mẫu API và stream công khai của Polymarket bằng:
 

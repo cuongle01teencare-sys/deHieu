@@ -9,7 +9,7 @@ export interface BackendResponse {
 }
 
 /** Chỉ cho phép chuyển tiếp các nhóm API này (không mở toàn bộ backend qua web). */
-const ALLOWED = /^(arbitrage|admin|tasks|consumers|team-aliases)(\/|$)/;
+const ALLOWED = /^(arbitrage|admin|tasks|consumers|notify|team-aliases)(\/|$)/;
 
 export const isAllowedPath = (path: string): boolean =>
   ALLOWED.test(path) && !path.includes('..');

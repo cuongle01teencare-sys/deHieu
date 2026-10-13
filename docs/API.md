@@ -43,8 +43,9 @@ Quyền dạng `tài-nguyên:hành-động`; `*` dùng được ở từng phầ
 | GET    | `/tasks/kinds`            | `tasks:read`    | Các `kind` app chạy được và tenant tương ứng                                  |
 | GET    | `/tasks/:taskId`          | `tasks:read`    | Một publisher                                                                 |
 | POST   | `/tasks`                  | `tasks:manage`  | Tạo + chạy publisher                                                          |
-| POST   | `/tasks/:taskId/stop`     | `tasks:manage`  | Dừng publisher (odds của nó bị gỡ, kèo liên quan bị hủy)                      |
-| DELETE | `/tasks/:taskId`          | `tasks:manage`  | Xóa hồ sơ task đã dừng (STOPPED/FAILED); đang chạy → 400                      |
+| POST   | `/tasks/:taskId/start`    | `tasks:manage`  | Chạy lại task đã dừng/lỗi với đúng spec cũ (giữ cờ `persist`)                 |
+| POST   | `/tasks/:taskId/stop`     | `tasks:manage`  | Dừng publisher (odds của nó bị gỡ, kèo liên quan bị hủy); task lưu bền giữ lại nhưng không tự chạy khi khởi động |
+| DELETE | `/tasks/:taskId`          | `tasks:manage`  | Xóa hồ sơ task đã dừng (STOPPED/FAILED), xóa cả bản lưu bền; đang chạy → 400  |
 | POST   | `/tasks/:taskId/commands` | `tasks:command` | Gửi lệnh vào task đang chạy, body `{ "name": "...", "data": ... }`            |
 
 Body `POST /tasks`:
@@ -54,19 +55,26 @@ Body `POST /tasks`:
   "taskId": "sptpub-live",          // duy nhất
   "kind": "sptpub.live",            // xem bảng kind bên dưới; tenant được app tự suy từ kind
   "runtime": { "type": "worker" },  // hoặc { "type": "remote", "nodeId": "node-1" }
-  "params": { ... }                 // tham số riêng của kind
+  "params": { ... },                // tham số riêng của kind
+  "persist": true                   // tùy chọn: lưu Postgres, khởi động app sau tự chạy lại
 }
 ```
 
+**Lưu bền (`persist`)**: task được ghi vào bảng `persisted_tasks`. Lúc app khởi động, task `running` tự chạy lại
+(task trên node chưa kết nối → chờ node kết nối rồi chạy), task đã bị Stop chỉ hiện ở trạng thái `STOPPED`.
+Bỏ trống `persist` khi tạo lại cùng `taskId` = giữ như hồ sơ cũ.
+
 Mỗi tenant có 3 khái niệm dữ liệu: **descriptor** (metadata), **live**, **prematch**.
-Mỗi `kind` chỉ chạy **một** instance (start trùng → `400 KIND_ALREADY_RUNNING`).
+`polymarket.descriptor` và `sptpub.descriptor` chạy được **nhiều** instance (vd mỗi môn một task polymarket với `tagIds` riêng).
+Các kind còn lại chỉ chạy **một** instance (start trùng → `400 KIND_ALREADY_RUNNING`).
+Môn hỗ trợ: CS2, LoL, Dota 2, Valorant (polymarket `cs2`/`lol`/`dota2`/`val`; sptpub sport `109`/`110`/`111`/`194`).
 
 | kind                    | Khái niệm                                          | params                                                                                         |
 | ----------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `sptpub.descriptor`     | descriptor                                         | `baseUrl`, `brandId`, `lang`, `intervalMs` (60000)                                             |
 | `sptpub.live`           | live                                               | `baseUrl`, `brandId`, `lang`, `intervalMs` (1000), `maxConsecutiveErrors?`                     |
 | `sptpub.prematch`       | prematch                                           | `baseUrl`, `brandId`, `lang`, `intervalMs` (2000), `maxConsecutiveErrors?`                     |
-| `polymarket.descriptor` | descriptor (danh sách trận + token)                | `tagIds` (vd `[100639]`), `intervalMs` (30000), `live?`, `pageSize?`, `endpoints?`             |
+| `polymarket.descriptor` | descriptor (danh sách trận + token)                | `tagIds` (vd `[65]` LoL, `[100780]` CS2, `[102366]` Dota 2, `[101672]` Valorant), `intervalMs` (30000), `live?`, `pageSize?`, `endpoints?` |
 | `polymarket.stream`     | live + prematch (app tự tách theo trạng thái trận) | `assetIds?`, `resubscribeDebounceMs?`, `endpoints?` — token do app tự gửi qua lệnh `subscribe` |
 
 `kind` không có trong danh mục → `400 UNKNOWN_KIND`.
@@ -102,6 +110,7 @@ Cấu hình:
 | `enabledPhases`   | `["live","prematch"]` | Kênh được tạo kèo. Tắt một kênh → kèo đang sống của kênh đó bị hủy (`phase_disabled`), odds vẫn được cập nhật |
 
 Kèo có bất kỳ chân nào live thì `phase = live`.
+Cấu hình được lưu vào Postgres (bảng `app_settings`, key `arbitrage`) và tự nạp lại khi app khởi động.
 
 ### Lịch sử kèo
 
@@ -130,6 +139,33 @@ giờ bắt đầu trong giới hạn, margin đạt ngưỡng và kênh đượ
 | GET    | `/consumers/hub`        | `consumers:read`    | `activeSignals`, `pendingDeliveries`, danh sách kèo đang sống, consumer |
 | POST   | `/consumers/:id/pause`  | `consumers:control` | Tạm dừng gửi kèo cho consumer                                           |
 | POST   | `/consumers/:id/resume` | `consumers:control` | Tiếp tục                                                                |
+
+### Kênh thông báo và hạng kèo
+
+Admin tự đặt tên hạng kèo (vd "VIP" ≥ 5%, "Super VIP" ≥ 10%) và gắn hạng cho từng kênh Discord/Telegram/Slack.
+Kênh nhận **kèo mới** (kể cả kèo ghi đè, ghi "Kèo cập nhật") và **tin hủy** của kèo nó đã nhận; không gửi lần phát lại (refreshed).
+Kênh không chọn hạng nào = nhận mọi kèo. Một kèo có thể thuộc nhiều hạng (vd 12% thuộc cả VIP và Super VIP).
+Bot giao dịch qua WebSocket không bị ảnh hưởng (vẫn nhận mọi kèo). Tất cả lưu trong Postgres, tự nạp khi khởi động.
+
+| Method | Path                          | Quyền              | Mô tả                                                                                       |
+| ------ | ----------------------------- | ------------------ | ------------------------------------------------------------------------------------------- |
+| GET    | `/notify/tiers`               | `consumers:read`   | Hạng kèo, sắp theo `minMargin`                                                              |
+| POST   | `/notify/tiers`               | `consumers:manage` | `{ "name": "VIP", "minMargin": 0.05, "maxMargin": null }` — kèo trong `[min, max)`; tên không trùng |
+| PUT    | `/notify/tiers/:id`           | `consumers:manage` | Sửa hạng                                                                                    |
+| DELETE | `/notify/tiers/:id`           | `consumers:manage` | Xóa hạng, gỡ khỏi mọi kênh                                                                  |
+| GET    | `/notify/channels`            | `consumers:read`   | Kênh (bí mật đã che) + `status`: `sent`, `failed`, `queued`, `lastError`…                   |
+| POST   | `/notify/channels`            | `consumers:manage` | Thêm kênh, xem ví dụ bên dưới                                                               |
+| PUT    | `/notify/channels/:id`        | `consumers:manage` | Sửa kênh; bỏ trống `webhookUrl`/`botToken` = giữ giá trị cũ                                 |
+| DELETE | `/notify/channels/:id`        | `consumers:manage` | Xóa kênh                                                                                    |
+| POST   | `/notify/channels/:id/test`   | `consumers:manage` | Gửi tin kiểm tra ngay; lỗi → 400 kèm thông báo của nền tảng                                 |
+
+```jsonc
+{ "name": "Discord VIP", "enabled": true, "tierIds": ["<id hạng VIP>"],
+  "config": { "type": "discord", "webhookUrl": "https://discord.com/api/webhooks/..." } }
+{ "name": "Telegram", "tierIds": [],
+  "config": { "type": "telegram", "botToken": "123456:ABC...", "chatId": "-1001234567890" } }
+{ "name": "Slack", "config": { "type": "slack", "webhookUrl": "https://hooks.slack.com/services/..." } }
+```
 
 ## Vận hành (admin)
 

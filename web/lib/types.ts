@@ -46,6 +46,8 @@ export interface TaskRecord {
     kind: string;
     params: Record<string, unknown>;
     runtime: { type: 'worker' } | { type: 'remote'; nodeId: string };
+    /** Lưu bền: tự chạy lại khi app khởi động. */
+    persist?: boolean;
   };
   state: TaskState;
   consecutiveFailures: number;
@@ -397,7 +399,42 @@ export interface TaskKindParam {
 export interface TaskKindInfo {
   kind: string;
   tenant: string;
+  /** Cho phép nhiều task cùng kind chạy song song. */
+  multiInstance?: boolean;
   paramsSchema?: unknown;
   concept?: 'descriptor' | 'live' | 'prematch' | 'stream';
   params?: TaskKindParam[];
+}
+
+/** Hạng kèo do admin tự đặt tên. Margin dạng tỉ lệ (0.05 = 5%). */
+export interface SignalTier {
+  id: string;
+  name: string;
+  minMargin: number;
+  /** null = không giới hạn trên. */
+  maxMargin: number | null;
+}
+
+export type NotifyChannelType = 'discord' | 'telegram' | 'slack';
+
+export interface NotifyChannelStatus {
+  sent: number;
+  failed: number;
+  dropped: number;
+  queued: number;
+  lastSentAt: number | null;
+  lastError: string | null;
+  lastErrorAt: number | null;
+}
+
+/** Kênh thông báo (bí mật đã che). */
+export interface NotifyChannelView {
+  id: string;
+  name: string;
+  type: NotifyChannelType;
+  enabled: boolean;
+  /** Rỗng = nhận mọi kèo. */
+  tierIds: string[];
+  target: string;
+  status: NotifyChannelStatus;
 }

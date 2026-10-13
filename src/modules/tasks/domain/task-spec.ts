@@ -13,4 +13,6 @@ export interface TaskSpec<TParams = Record<string, unknown>> {
   readonly kind: string; // vd 'sptpub.feed', 'polymarket.market-stream'
   readonly params: TParams;
   readonly runtime: TaskRuntimeTarget;
+  /** true = lưu bền: lần khởi động app sau tự chạy lại (nếu lần trước chưa bị dừng). */
+  readonly persist?: boolean;
 }

@@ -130,6 +130,25 @@ export class TaskSupervisor {
     return saved ? { status: 'SUCEED', data: saved } : { status: 'NOT_FOUND' };
   }
 
+  /**
+   * Nạp lại hồ sơ một task ở trạng thái STOPPED mà không chạy (task lưu bền đã bị admin dừng,
+   * hoặc đang chờ node). Đã có hồ sơ thì bỏ qua.
+   */
+  async restore(spec: TaskSpec, note: string | null = null): Promise<void> {
+    if (await this._registry.get(spec.taskId)) return;
+    await this._registry.save({
+      spec,
+      state: 'STOPPED',
+      consecutiveFailures: 0,
+      totalRestarts: 0,
+      lastHeartbeatAt: null,
+      lastDataAt: null,
+      lastSeq: null,
+      lastError: note,
+      updatedAt: Date.now(),
+    });
+  }
+
   /** @param reason ai/vì sao dừng — chỉ để quan sát (log). */
   async stop(
     taskId: string,
@@ -141,6 +160,8 @@ export class TaskSupervisor {
 
     live.desired = 'stopped';
     if (!live.conn) {
+      // đang chờ khởi động lại (RESTARTING): hủy hẹn giờ, không để task tự sống lại sau khi đã dừng
+      await this._dispose(taskId);
       await this._transition(taskId, 'STOPPED', {}, reason);
     } else {
       await this._transition(taskId, 'STOPPING', {}, reason);
@@ -211,7 +232,7 @@ export class TaskSupervisor {
   private async _spawn(taskId: string): Promise<void> {
     const live = this._live.get(taskId);
     const record = await this._registry.get(taskId);
-    if (!live || !record) return;
+    if (!live || !record || live.desired === 'stopped') return;
     const launcher = this._launchers.find((l) =>
       l.supports(record.spec.runtime),
     );
@@ -220,6 +241,11 @@ export class TaskSupervisor {
     await this._transition(taskId, 'INITIALIZING');
     try {
       const conn = await launcher.launch(record.spec);
+      // admin có thể đã dừng trong lúc đang mở kết nối (await ở trên) → đóng luôn, không khởi động
+      if ((live.desired as Live['desired']) === 'stopped') {
+        await conn.terminate();
+        return;
+      }
       live.conn = conn;
       conn.onMessage((msg) => void this._onMessage(taskId, msg));
       conn.onExit((reason) => void this._onCrash(taskId, `EXIT: ${reason}`));

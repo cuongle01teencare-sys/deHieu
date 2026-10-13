@@ -8,7 +8,8 @@ import { cn } from '@/lib/utils';
 import { useApi } from '@/hooks/use-api';
 import { useNow } from '@/hooks/use-now';
 import { useGuard, useMutate } from '../shell/shell-context';
-import { Switch } from '../ui/controls';
+import { Segmented, Switch } from '../ui/controls';
+import { NotifyChannels, SignalTiers } from './notify-channels';
 import { PageHeader } from '../ui/layout';
 import { Confirm } from '../ui/panel';
 import { Empty, ErrorState, SkeletonRows } from '../ui/states';
@@ -18,7 +19,10 @@ import { LiveStamp } from '../ui/values';
 
 const BACKLOG = 50;
 
+type Tab = 'channels' | 'tiers' | 'ws';
+
 export function ConsumersPage() {
+  const [tab, setTab] = useState<Tab>('channels');
   const { data, error, reload, updatedAt } = useApi<ConsumerHubStats>('consumers/hub', 5_000);
   const reason = useGuard('consumers:control');
   const mutate = useMutate();
@@ -34,7 +38,7 @@ export function ConsumersPage() {
     <div>
       <PageHeader
         title="Consumer"
-        description="Bot giao dịch và kênh Discord nhận kèo. Tạm dừng = ngừng gửi kèo mới cho consumer đó."
+        description="Nơi nhận kèo: kênh thông báo (Discord, Telegram, Slack) phân theo hạng kèo, và bot giao dịch kết nối qua WebSocket."
         meta={
           <>
             <LiveStamp at={updatedAt} />
@@ -48,46 +52,65 @@ export function ConsumersPage() {
           </>
         }
       />
-      {error && !data ? <ErrorState message={error} onRetry={reload} /> : null}
-      {!data && !error ? <SkeletonRows rows={5} cols={[24, 10, 10, 12, 16]} /> : null}
-      {data && !consumers.length ? <Empty icon={Bot}>Chưa có consumer nào kết nối tới cổng kèo.</Empty> : null}
+      <div className="mb-6">
+        <Segmented
+          value={tab}
+          onChange={setTab}
+          options={[
+            { value: 'channels', label: 'Kênh thông báo' },
+            { value: 'tiers', label: 'Hạng kèo' },
+            { value: 'ws', label: 'Bot WebSocket', count: consumers.length },
+          ]}
+        />
+      </div>
 
-      {sorted.length ? (
-        <ul>
-          <li className="hidden h-9 items-end gap-6 border-b border-line pb-2 text-caption text-muted-fg md:flex">
-            <span className="flex-1">Consumer</span>
-            <span className="w-24">Vai trò</span>
-            <span className="w-28 text-right">Chờ ack</span>
-            <span className="w-36 text-right">Lần cuối</span>
-            <span className="w-32 text-right">Gửi kèo</span>
-          </li>
-          {sorted.map((c) => (
-            <li key={c.consumerId} className="flex min-h-14 flex-wrap items-center gap-x-6 gap-y-1 border-b border-line py-3 last:border-0">
-              <span className="flex min-w-0 flex-1 items-center gap-3">
-                <StatusDot tone={c.connected ? 'ok' : 'critical'} label={c.connected ? 'Trực tuyến' : 'Mất kết nối'} />
-                <span className={cn('num truncate text-body', c.connected ? 'text-fg' : 'text-muted-fg')}>{c.consumerId}</span>
-                {c.paused ? <Pill tone="warn">Tạm dừng</Pill> : null}
-                {!c.connected ? <span className="text-caption text-critical">mất kết nối</span> : null}
-              </span>
-              <span className="w-24 text-caption text-muted-fg md:block">{c.role}</span>
-              <span className={cn('num w-28 text-right text-body', c.pending >= BACKLOG ? 'text-warn' : c.pending ? 'text-fg' : 'text-faint')}>
-                {c.pending}
-                {c.pending >= BACKLOG ? <span className="ml-1 text-caption">tồn</span> : null}
-              </span>
-              <Hint content={fmtStamp(c.lastSeenAt)}>
-                <span className="hidden w-36 cursor-default text-right text-caption text-muted-fg md:block">{fmtSince(c.lastSeenAt, now)}</span>
-              </Hint>
-              <span className="ml-auto flex w-32 items-center justify-end gap-3 md:ml-0">
-                <span className="text-caption text-muted-fg">{c.paused ? 'Đang dừng' : 'Đang gửi'}</span>
-                <Hint content={reason}>
-                  <span>
-                    <Switch checked={!c.paused} disabled={!!reason} onCheckedChange={() => setPending(c)} label={c.paused ? 'Tiếp tục gửi kèo' : 'Tạm dừng gửi kèo'} />
+      {tab === 'channels' ? <NotifyChannels /> : null}
+      {tab === 'tiers' ? <SignalTiers /> : null}
+      {tab === 'ws' ? (
+        <>
+          <p className="mb-4 text-caption text-muted-fg">Bot kết nối tới cổng kèo qua WebSocket, nhận mọi kèo (không phân hạng). Tạm dừng = ngừng gửi kèo mới cho consumer đó.</p>
+          {error && !data ? <ErrorState message={error} onRetry={reload} /> : null}
+          {!data && !error ? <SkeletonRows rows={5} cols={[24, 10, 10, 12, 16]} /> : null}
+          {data && !consumers.length ? <Empty icon={Bot}>Chưa có consumer nào kết nối tới cổng kèo.</Empty> : null}
+
+          {sorted.length ? (
+            <ul>
+              <li className="hidden h-9 items-end gap-6 border-b border-line pb-2 text-caption text-muted-fg md:flex">
+                <span className="flex-1">Consumer</span>
+                <span className="w-24">Vai trò</span>
+                <span className="w-28 text-right">Chờ ack</span>
+                <span className="w-36 text-right">Lần cuối</span>
+                <span className="w-32 text-right">Gửi kèo</span>
+              </li>
+              {sorted.map((c) => (
+                <li key={c.consumerId} className="flex min-h-14 flex-wrap items-center gap-x-6 gap-y-1 border-b border-line py-3 last:border-0">
+                  <span className="flex min-w-0 flex-1 items-center gap-3">
+                    <StatusDot tone={c.connected ? 'ok' : 'critical'} label={c.connected ? 'Trực tuyến' : 'Mất kết nối'} />
+                    <span className={cn('num truncate text-body', c.connected ? 'text-fg' : 'text-muted-fg')}>{c.consumerId}</span>
+                    {c.paused ? <Pill tone="warn">Tạm dừng</Pill> : null}
+                    {!c.connected ? <span className="text-caption text-critical">mất kết nối</span> : null}
                   </span>
-                </Hint>
-              </span>
-            </li>
-          ))}
-        </ul>
+                  <span className="w-24 text-caption text-muted-fg md:block">{c.role}</span>
+                  <span className={cn('num w-28 text-right text-body', c.pending >= BACKLOG ? 'text-warn' : c.pending ? 'text-fg' : 'text-faint')}>
+                    {c.pending}
+                    {c.pending >= BACKLOG ? <span className="ml-1 text-caption">tồn</span> : null}
+                  </span>
+                  <Hint content={fmtStamp(c.lastSeenAt)}>
+                    <span className="hidden w-36 cursor-default text-right text-caption text-muted-fg md:block">{fmtSince(c.lastSeenAt, now)}</span>
+                  </Hint>
+                  <span className="ml-auto flex w-32 items-center justify-end gap-3 md:ml-0">
+                    <span className="text-caption text-muted-fg">{c.paused ? 'Đang dừng' : 'Đang gửi'}</span>
+                    <Hint content={reason}>
+                      <span>
+                        <Switch checked={!c.paused} disabled={!!reason} onCheckedChange={() => setPending(c)} label={c.paused ? 'Tiếp tục gửi kèo' : 'Tạm dừng gửi kèo'} />
+                      </span>
+                    </Hint>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </>
       ) : null}
 
       <Confirm

@@ -9,6 +9,8 @@ import type { PolymarketMarketDTO } from './polymarket.dto.js';
 export const POLYMARKET_SPORTS: Readonly<Record<string, string>> = {
   cs2: 'cs2',
   lol: 'lol',
+  dota2: 'dota2',
+  val: 'valorant',
 };
 
 export interface PolymarketMarketMapping {
@@ -25,7 +27,7 @@ export interface PolymarketMarketMapping {
   toMarket(m: PolymarketMarketDTO, yesFirst: boolean): MarketType | null;
 }
 
-/** Số map của child_moneyline: "Map 1 Winner" (cs2) / "Game 1 Winner" (lol), dự phòng slug "...-game1". */
+/** Số map của child_moneyline: "Map 1 Winner" (cs2, valorant) / "Game 1 Winner" (lol, dota2), dự phòng slug "...-game1". */
 const mapNumberOf = (m: PolymarketMarketDTO): number | null => {
   const t = /^(?:map|game) (\d+) winner$/i.exec(m.groupItemTitle?.trim() ?? '');
   const s = /-game(\d+)$/.exec(m.slug ?? '');

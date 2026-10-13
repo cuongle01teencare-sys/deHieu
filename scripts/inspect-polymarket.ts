@@ -9,7 +9,7 @@ const TYPES = new Set([
   'esports_match_result',
   'totals',
 ]);
-const SPORTS = new Set(['cs2', 'lol']);
+const SPORTS = new Set(['cs2', 'lol', 'dota2', 'val']);
 
 const client = createPublicClient({ environment: production });
 

@@ -21,6 +21,9 @@ import type {
   RoomListItem,
   SignalHistoryItem,
   TaskKindInfo,
+  SignalTier,
+  NotifyChannelStatus,
+  NotifyChannelView,
   TaskRecord,
   TeamAlias,
 } from './types';
@@ -634,6 +637,7 @@ function toBackendKind(k: TaskKindInfo) {
   return {
     kind: k.kind,
     tenant: k.tenant,
+    multiInstance: k.concept === 'descriptor',
     paramsSchema: {
       type: 'object',
       properties: Object.fromEntries((k.params ?? []).map((p) => [p.name, { ...ty(p.type), ...(p.default !== undefined ? { default: p.default } : {}), ...(p.hint ? { description: p.hint } : {}) }])),
@@ -650,6 +654,31 @@ const nodes = (): NodeView[] => [
 ];
 
 const paused = new Set<string>(['trader-4']);
+
+// ---------------------------------------------------------------- kênh thông báo + hạng kèo (mẫu)
+let tiers: SignalTier[] = [
+  { id: 'tier-vip', name: 'VIP', minMargin: 0.05, maxMargin: null },
+  { id: 'tier-svip', name: 'Super VIP', minMargin: 0.1, maxMargin: null },
+];
+const emptyStatus = (): NotifyChannelStatus => ({ sent: 0, failed: 0, dropped: 0, queued: 0, lastSentAt: null, lastError: null, lastErrorAt: null });
+let channels: NotifyChannelView[] = [
+  { id: 'ch-1', name: 'Discord VIP', type: 'discord', enabled: true, tierIds: ['tier-vip'], target: 'https://discord.com/…x9a2', status: { ...emptyStatus(), sent: 42, lastSentAt: Date.now() - 95_000 } },
+  { id: 'ch-2', name: 'Telegram Super VIP', type: 'telegram', enabled: true, tierIds: ['tier-svip'], target: 'chat -1001234567890 · bot …Qw3e', status: { ...emptyStatus(), sent: 7, lastSentAt: Date.now() - 600_000 } },
+  { id: 'ch-3', name: 'Slack nội bộ', type: 'slack', enabled: false, tierIds: [], target: 'https://hooks.slack.com/…7f1c', status: emptyStatus() },
+];
+type ChannelBody = { name?: string; enabled?: boolean; tierIds?: string[]; config?: { type?: NotifyChannelView['type']; webhookUrl?: string; botToken?: string; chatId?: string } };
+const channelFrom = (id: string, b: ChannelBody, old?: NotifyChannelView): NotifyChannelView | string => {
+  const c = b.config ?? {};
+  const type = c.type ?? old?.type ?? 'discord';
+  if (!b.name?.trim()) return 'CHANNEL_NAME_REQUIRED';
+  const keep = old?.type === type;
+  if (type === 'telegram') {
+    if (!c.chatId?.trim()) return 'CHAT_ID_REQUIRED';
+    if (!c.botToken && !keep) return 'BOT_TOKEN_REQUIRED';
+  } else if (!c.webhookUrl && !keep) return 'WEBHOOK_URL_REQUIRED';
+  const target = type === 'telegram' ? `chat ${c.chatId} · bot …${(c.botToken ?? 'xxxx').slice(-4)}` : c.webhookUrl ? `${new URL(c.webhookUrl).origin}/…${c.webhookUrl.slice(-4)}` : (old?.target ?? '');
+  return { id, name: b.name.trim(), type, enabled: b.enabled ?? true, tierIds: (b.tierIds ?? []).filter((t) => tiers.some((x) => x.id === t)), target, status: old?.status ?? emptyStatus() };
+};
 const consumers = (): ConsumerView[] =>
   [
     { consumerId: 'trader-1', role: 'trader', connected: true, pending: 0 },
@@ -1058,6 +1087,8 @@ export async function mockRequest(
     if (m) return matchDetail(m) ? ok(matchDetail(m)) : notFound;
     if (path === 'team-aliases') return ok(aliases);
     if (path === 'consumers') return ok(consumers());
+    if (path === 'notify/tiers') return ok([...tiers].sort((a, b) => a.minMargin - b.minMargin));
+    if (path === 'notify/channels') return ok(channels);
     if (path === 'tasks') return ok(tasks());
     if (path === 'tasks/kinds') return ok(KINDS.map(toBackendKind));
     const t = seg('tasks/');
@@ -1090,15 +1121,48 @@ export async function mockRequest(
       record('POST', `/consumers/:id/${cp[2]}`, { id }, null);
       return ok(consumers().find((c) => c.consumerId === id) ?? null);
     }
+    if (path === 'notify/tiers') {
+      const b = body as Omit<SignalTier, 'id'>;
+      if (tiers.some((t) => t.name.toLowerCase() === b.name?.trim().toLowerCase())) return ok({ message: `TIER_NAME_TAKEN: đã có hạng "${b.name}"` }, 400);
+      const tier: SignalTier = { id: `tier-${Date.now()}`, name: b.name.trim(), minMargin: b.minMargin, maxMargin: b.maxMargin ?? null };
+      tiers = [...tiers, tier];
+      record('POST', '/notify/tiers', {}, b, 201);
+      return ok(tier, 201);
+    }
+    if (path === 'notify/channels') {
+      const ch = channelFrom(`ch-${Date.now()}`, body as ChannelBody);
+      if (typeof ch === 'string') return ok({ message: ch }, 400);
+      channels = [...channels, ch];
+      record('POST', '/notify/channels', {}, { ...(body as object), config: '…' }, 201);
+      return ok(ch, 201);
+    }
+    const nt = /^notify\/channels\/(.+)\/test$/.exec(path);
+    if (nt) {
+      const id = decodeURIComponent(nt[1]!);
+      const ch = channels.find((c) => c.id === id);
+      if (!ch) return notFound;
+      ch.status = { ...ch.status, sent: ch.status.sent + 1, lastSentAt: Date.now() };
+      record('POST', '/notify/channels/:id/test', { id }, null);
+      return ok(true);
+    }
+    const rs = /^tasks\/(.+)\/start$/.exec(path);
+    if (rs) {
+      const id = decodeURIComponent(rs[1]!);
+      if (!tasks().some((x) => x.spec.taskId === id)) return notFound;
+      stopped.delete(id);
+      record('POST', '/tasks/:taskId/start', { taskId: id }, null);
+      return ok(tasks().find((x) => x.spec.taskId === id) ?? null);
+    }
     if (path === 'tasks') {
-      const b = body as { taskId?: string; kind?: string; runtime?: TaskRecord['spec']['runtime']; params?: Record<string, unknown> };
+      const b = body as { taskId?: string; kind?: string; runtime?: TaskRecord['spec']['runtime']; params?: Record<string, unknown>; persist?: boolean };
       if (!b?.taskId || !b.kind) return ok({ message: 'Thiếu taskId hoặc kind' }, 400);
       if (!KINDS.some((k) => k.kind === b.kind)) return ok({ message: 'UNKNOWN_KIND' }, 400);
       if (tasks().some((x) => x.spec.taskId === b.taskId)) return ok({ message: `taskId "${b.taskId}" đã tồn tại` }, 400);
-      if (tasks().some((x) => x.spec.kind === b.kind && !['STOPPED', 'FAILED'].includes(x.state)))
+      if (KINDS.find((k) => k.kind === b.kind)?.concept !== 'descriptor' && tasks().some((x) => x.spec.kind === b.kind && !['STOPPED', 'FAILED'].includes(x.state)))
         return ok({ message: `KIND_ALREADY_RUNNING — ${b.kind} đang chạy` }, 400);
       const rec = task(b.taskId, b.kind, 'CREATED', b.runtime ?? { type: 'worker' }, null, { updatedAt: now(), lastSeq: null });
       rec.spec.params = b.params ?? {};
+      rec.spec.persist = b.persist ?? false;
       createdTasks.set(b.taskId, rec);
       record('POST', '/tasks', {}, b, 201);
       return ok(rec, 201);
@@ -1117,6 +1181,28 @@ export async function mockRequest(
     }
   }
 
+  if (method === 'PUT') {
+    const tt = seg('notify/tiers/');
+    if (tt) {
+      const b = body as Omit<SignalTier, 'id'>;
+      if (!tiers.some((t) => t.id === tt)) return notFound;
+      if (tiers.some((t) => t.id !== tt && t.name.toLowerCase() === b.name?.trim().toLowerCase())) return ok({ message: `TIER_NAME_TAKEN: đã có hạng "${b.name}"` }, 400);
+      tiers = tiers.map((t) => (t.id === tt ? { id: tt, name: b.name.trim(), minMargin: b.minMargin, maxMargin: b.maxMargin ?? null } : t));
+      record('PUT', '/notify/tiers/:id', { id: tt }, b);
+      return ok(tiers.find((t) => t.id === tt));
+    }
+    const cc = seg('notify/channels/');
+    if (cc) {
+      const old = channels.find((c) => c.id === cc);
+      if (!old) return notFound;
+      const ch = channelFrom(cc, body as ChannelBody, old);
+      if (typeof ch === 'string') return ok({ message: ch }, 400);
+      channels = channels.map((c) => (c.id === cc ? ch : c));
+      record('PUT', '/notify/channels/:id', { id: cc }, { ...(body as object), config: '…' });
+      return ok(ch);
+    }
+  }
+
   if (method === 'PATCH' && path === 'arbitrage/settings') {
     settings = { ...settings, ...(body as Partial<ArbitrageSettings>) };
     record('PATCH', '/arbitrage/settings', {}, body);
@@ -1124,6 +1210,19 @@ export async function mockRequest(
   }
 
   if (method === 'DELETE') {
+    const dt = seg('notify/tiers/');
+    if (dt) {
+      tiers = tiers.filter((t) => t.id !== dt);
+      channels = channels.map((c) => ({ ...c, tierIds: c.tierIds.filter((x) => x !== dt) }));
+      record('DELETE', '/notify/tiers/:id', { id: dt }, null);
+      return ok(true);
+    }
+    const dc = seg('notify/channels/');
+    if (dc) {
+      channels = channels.filter((c) => c.id !== dc);
+      record('DELETE', '/notify/channels/:id', { id: dc }, null);
+      return ok(true);
+    }
     const a = seg('team-aliases/');
     if (a) {
       aliases = aliases.filter((x) => x.id !== a);

@@ -2,6 +2,7 @@ import {
   Inject,
   Logger,
   Module,
+  type OnApplicationBootstrap,
   type OnApplicationShutdown,
   type OnModuleInit,
 } from '@nestjs/common';
@@ -21,6 +22,14 @@ import {
   type TaskAlertNotifier,
 } from './application/task-alert.notifier.js';
 import { StartTaskHandler } from './application/commands/start-task.command.js';
+import { RestartTaskHandler } from './application/commands/restart-task.command.js';
+import {
+  TASK_SPEC_STORE,
+  type TaskSpecStore,
+} from './application/task-spec.store.js';
+import { RestorePersistedTasks } from './application/restore-persisted-tasks.js';
+import { DrizzleTaskSpecStore } from './infrastructure/persistence/drizzle/drizzle-task-spec.store.js';
+import { TransactionContext } from '../../shared/infrastructure/database/transaction-context.js';
 import { StopTaskHandler } from './application/commands/stop-task.command.js';
 import { DeleteTaskHandler } from './application/commands/delete-task.command.js';
 import { SendTaskCommandHandler } from './application/commands/send-task-command.command.js';
@@ -38,7 +47,10 @@ import { WsRemoteTaskLauncher } from './infrastructure/remote/ws-remote.task-lau
 import { InMemoryTaskRegistry } from './infrastructure/persistence/in-memory-task.registry.js';
 import { NoopTaskAlertNotifier } from './infrastructure/notifier/noop-task-alert.notifier.js';
 import { TasksController } from './presentation/tasks.controller.js';
-import { NODE_DIRECTORY } from './application/node-directory.js';
+import {
+  NODE_DIRECTORY,
+  type NodeDirectory,
+} from './application/node-directory.js';
 import {
   OPS_EVENT_BUS,
   type OpsEventBus,
@@ -72,7 +84,13 @@ import {
         remote,
       ],
     },
-    { provide: TASK_REGISTRY, useValue: new InMemoryTaskRegistry() },
+    // factory: mỗi lần khởi tạo module một registry mới (không dùng chung giữa các app trong cùng process)
+    { provide: TASK_REGISTRY, useFactory: () => new InMemoryTaskRegistry() },
+    {
+      provide: TASK_SPEC_STORE,
+      inject: [TransactionContext],
+      useFactory: (tx: TransactionContext) => new DrizzleTaskSpecStore(tx),
+    },
     { provide: TASK_ALERT_NOTIFIER, useValue: new NoopTaskAlertNotifier() },
     {
       provide: TaskSupervisor,
@@ -89,9 +107,30 @@ import {
     },
     {
       provide: StartTaskHandler,
-      inject: [TaskSupervisor, TASK_KIND_REGISTRY],
-      useFactory: (s: TaskSupervisor, k: TaskKindRegistry) =>
-        new StartTaskHandler(s, k),
+      inject: [TaskSupervisor, TASK_KIND_REGISTRY, TASK_SPEC_STORE],
+      useFactory: (s: TaskSupervisor, k: TaskKindRegistry, st: TaskSpecStore) =>
+        new StartTaskHandler(s, k, st),
+    },
+    {
+      provide: RestartTaskHandler,
+      inject: [TaskSupervisor, StartTaskHandler],
+      useFactory: (s: TaskSupervisor, start: StartTaskHandler) =>
+        new RestartTaskHandler(s, start),
+    },
+    {
+      provide: RestorePersistedTasks,
+      inject: [
+        TASK_SPEC_STORE,
+        TaskSupervisor,
+        StartTaskHandler,
+        NODE_DIRECTORY,
+      ],
+      useFactory: (
+        st: TaskSpecStore,
+        s: TaskSupervisor,
+        start: StartTaskHandler,
+        nodes: NodeDirectory,
+      ) => new RestorePersistedTasks(st, s, start, nodes, new Logger('Tasks')),
     },
     {
       provide: ListTaskKindsHandler,
@@ -100,13 +139,15 @@ import {
     },
     {
       provide: StopTaskHandler,
-      inject: [TaskSupervisor],
-      useFactory: (s: TaskSupervisor) => new StopTaskHandler(s),
+      inject: [TaskSupervisor, TASK_SPEC_STORE],
+      useFactory: (s: TaskSupervisor, st: TaskSpecStore) =>
+        new StopTaskHandler(s, st),
     },
     {
       provide: DeleteTaskHandler,
-      inject: [TaskSupervisor],
-      useFactory: (s: TaskSupervisor) => new DeleteTaskHandler(s),
+      inject: [TaskSupervisor, TASK_SPEC_STORE],
+      useFactory: (s: TaskSupervisor, st: TaskSpecStore) =>
+        new DeleteTaskHandler(s, st),
     },
     {
       provide: SendTaskCommandHandler,
@@ -127,7 +168,9 @@ import {
   // Context khác (odds) chỉ thấy application: nghe dữ liệu + gửi lệnh cho task.
   exports: [TaskSupervisor, NODE_DIRECTORY],
 })
-export class TasksModule implements OnModuleInit, OnApplicationShutdown {
+export class TasksModule
+  implements OnModuleInit, OnApplicationBootstrap, OnApplicationShutdown
+{
   private readonly _logger = new Logger('Tasks');
 
   constructor(
@@ -135,7 +178,24 @@ export class TasksModule implements OnModuleInit, OnApplicationShutdown {
     private readonly _remote: WsRemoteTaskLauncher,
     @Inject(TaskSupervisor) private readonly _supervisor: TaskSupervisor,
     @Inject(OPS_EVENT_BUS) private readonly _ops: OpsEventBus,
+    @Inject(RestorePersistedTasks)
+    private readonly _restore: RestorePersistedTasks,
   ) {}
+
+  /**
+   * Chạy SAU mọi onModuleInit: module odds đã đăng ký nghe dữ liệu task,
+   * nên task lưu bền chạy lại lúc này không bị mất dữ liệu vòng đầu.
+   */
+  async onApplicationBootstrap() {
+    try {
+      await this._restore.run();
+    } catch (e: unknown) {
+      const c = e instanceof Error ? e.cause : undefined;
+      this._logger.error(
+        `không nạp được task lưu bền: ${String(e)}${c instanceof Error ? ` — ${c.message}` : ''}`,
+      );
+    }
+  }
 
   /**
    * Log vòng đời publisher (RUNNING/STOPPED = log, RESTARTING = warn, FAILED = error)

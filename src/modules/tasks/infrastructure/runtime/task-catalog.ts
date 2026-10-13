@@ -17,6 +17,11 @@ export interface TaskCatalogEntry {
   readonly create: TaskFactory;
   /** Kiểm tra + điền mặc định cho params lúc start. */
   readonly params: z.ZodType<Record<string, unknown>>;
+  /**
+   * true = cho phép nhiều instance cùng kind chạy song song (vd mỗi môn một descriptor polymarket).
+   * Mặc định false: kind giữ trạng thái chung trong translator (stream/feed) chỉ chạy MỘT instance.
+   */
+  readonly multiInstance?: boolean;
 }
 
 /**
@@ -24,7 +29,7 @@ export interface TaskCatalogEntry {
  * (kèm translator khai báo cùng kind trong module odds).
  * Quy ước tên kind: '<tenant>.descriptor' | '<tenant>.live' | '<tenant>.prematch'
  * (tenant nào không tách live/prematch ở nguồn thì dùng '<tenant>.stream', app tự tách).
- * Mỗi kind chỉ chạy MỘT instance.
+ * Mỗi kind chỉ chạy MỘT instance, trừ kind khai báo `multiInstance: true`.
  * Tần suất, url... KHÔNG nằm ở đây mà nằm trong params lúc tạo instance.
  */
 export const TASK_CATALOG: Readonly<Record<string, TaskCatalogEntry>> = {
@@ -33,6 +38,7 @@ export const TASK_CATALOG: Readonly<Record<string, TaskCatalogEntry>> = {
     tenant: 'sptpub',
     create: () => new SptPubDescriptorTask(),
     params: SptPubDescriptorParamsSchema,
+    multiInstance: true,
   },
   'sptpub.live': {
     tenant: 'sptpub',
@@ -49,6 +55,8 @@ export const TASK_CATALOG: Readonly<Record<string, TaskCatalogEntry>> = {
     tenant: 'polymarket',
     create: () => new PolymarketEventsTask(),
     params: PolymarketEventsParamsSchema,
+    // mỗi task một tập tag (vd [65] LoL, [100780] CS2); translator theo dõi market theo taskId
+    multiInstance: true,
   },
   'polymarket.stream': {
     tenant: 'polymarket',

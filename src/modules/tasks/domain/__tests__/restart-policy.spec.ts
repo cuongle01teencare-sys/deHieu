@@ -32,3 +32,13 @@ describe('canTransition', () => {
     expect(canTransition('STOPPED', 'RUNNING')).toBe(false);
   });
 });
+
+describe('canTransition: dừng lúc đang khởi tạo', () => {
+  it('dừng được task ở CREATED / INITIALIZING / STARTING', () => {
+    expect(canTransition('CREATED', 'STOPPED')).toBe(true);
+    expect(canTransition('INITIALIZING', 'STOPPING')).toBe(true);
+    expect(canTransition('INITIALIZING', 'STOPPED')).toBe(true);
+    expect(canTransition('STARTING', 'STOPPING')).toBe(true);
+    expect(canTransition('STOPPED', 'INITIALIZING')).toBe(false);
+  });
+});

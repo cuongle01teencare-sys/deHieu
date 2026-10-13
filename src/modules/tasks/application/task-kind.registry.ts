@@ -2,6 +2,8 @@
 export interface TaskKindInfo {
   readonly kind: string;
   readonly tenant: string;
+  /** Cho phép nhiều instance cùng kind chạy song song. */
+  readonly multiInstance: boolean;
   /** JSON Schema của params (để xem trong /tasks/kinds). */
   readonly paramsSchema?: unknown;
 }

@@ -79,7 +79,17 @@ import { GetArbitrageStatsHandler } from './application/queries/get-arbitrage-st
 import { DrizzleTeamAliasRepository } from './infrastructure/persistence/drizzle/drizzle-team-alias.repository.js';
 import { RedisOddsRoomStore } from './infrastructure/persistence/redis/redis-odds-room.store.js';
 import { InMemorySignalStateStore } from './infrastructure/persistence/in-memory/in-memory-signal-state.store.js';
-import { InMemoryArbitrageSettingsStore } from './infrastructure/settings/in-memory-arbitrage-settings.store.js';
+import { DrizzleArbitrageSettingsStore } from './infrastructure/settings/drizzle-arbitrage-settings.store.js';
+import { DrizzleNotifyConfigRepository } from './infrastructure/persistence/drizzle/drizzle-notify-config.repository.js';
+import { HttpNotifySender } from './infrastructure/notify/http-notify.sender.js';
+import {
+  NOTIFY_CONFIG_REPOSITORY,
+  NOTIFY_SENDER,
+  type NotifyConfigRepository,
+  type NotifySender,
+} from './application/notify/notify.ports.js';
+import { SignalNotifier } from './application/notify/signal-notifier.js';
+import { NotifyAdmin } from './application/notify/notify-admin.js';
 import { SptPubOddsTranslator } from './infrastructure/acl/sptpub/sptpub-odds.translator.js';
 import { PolymarketOddsTranslator } from './infrastructure/acl/polymarket/polymarket-odds.translator.js';
 import { ConsumerHub } from './infrastructure/consumer/consumer-hub.js';
@@ -97,6 +107,7 @@ import { PurgeSignalHistoryHandler } from './application/commands/purge-signal-h
 import { TeamAliasesController } from './presentation/team-aliases.controller.js';
 import { ConsumersController } from './presentation/consumers.controller.js';
 import { ArbitrageController } from './presentation/arbitrage.controller.js';
+import { NotifyController } from './presentation/notify.controller.js';
 
 const SWEEP_INTERVAL_MS = 5_000;
 const EXPIRE_INTERVAL_MS = 60_000;
@@ -107,6 +118,7 @@ const EXPIRE_INTERVAL_MS = 60_000;
     ArbitrageController,
     TeamAliasesController,
     ConsumersController,
+    NotifyController,
   ],
   providers: [
     // ---------- adapters
@@ -123,8 +135,34 @@ const EXPIRE_INTERVAL_MS = 60_000;
     },
     { provide: SIGNAL_STATE_STORE, useValue: new InMemorySignalStateStore() },
     {
+      // lưu Postgres (bảng app_settings), nạp lại lúc khởi động — xem onModuleInit
+      provide: DrizzleArbitrageSettingsStore,
+      inject: [TransactionContext],
+      useFactory: (tx: TransactionContext) =>
+        new DrizzleArbitrageSettingsStore(tx),
+    },
+    {
       provide: ARBITRAGE_SETTINGS_STORE,
-      useValue: new InMemoryArbitrageSettingsStore(),
+      useExisting: DrizzleArbitrageSettingsStore,
+    },
+    {
+      provide: NOTIFY_CONFIG_REPOSITORY,
+      inject: [TransactionContext],
+      useFactory: (tx: TransactionContext) =>
+        new DrizzleNotifyConfigRepository(tx),
+    },
+    { provide: NOTIFY_SENDER, useValue: new HttpNotifySender() },
+    {
+      provide: SignalNotifier,
+      inject: [NOTIFY_CONFIG_REPOSITORY, NOTIFY_SENDER],
+      useFactory: (r: NotifyConfigRepository, s: NotifySender) =>
+        new SignalNotifier(r, s),
+    },
+    {
+      provide: NotifyAdmin,
+      inject: [NOTIFY_CONFIG_REPOSITORY, SignalNotifier],
+      useFactory: (r: NotifyConfigRepository, n: SignalNotifier) =>
+        new NotifyAdmin(r, n),
     },
     {
       provide: ConsumerHub,
@@ -164,14 +202,26 @@ const EXPIRE_INTERVAL_MS = 60_000;
       },
     },
     {
-      // gửi consumer trước, rồi xếp việc ghi lịch sử (chạy nền, không chặn)
+      // gửi consumer trước, rồi kênh thông báo + ghi lịch sử (chạy nền, không chặn)
       provide: EVENT_PUBLISHER,
-      inject: [ConsumerHub, SignalHistoryRecorder, OPS_EVENT_BUS],
+      inject: [
+        ConsumerHub,
+        SignalNotifier,
+        SignalHistoryRecorder,
+        OPS_EVENT_BUS,
+      ],
       useFactory: (
         hub: ConsumerHub,
+        notifier: SignalNotifier,
         history: SignalHistoryRecorder,
         ops: OpsEventBus,
-      ) => new CompositeEventPublisher([hub, history, new OpsSignalRelay(ops)]),
+      ) =>
+        new CompositeEventPublisher([
+          hub,
+          notifier,
+          history,
+          new OpsSignalRelay(ops),
+        ]),
     },
     {
       provide: ListSignalHistoryHandler,
@@ -472,10 +522,34 @@ export class OddsModule implements OnModuleInit, OnApplicationShutdown {
     @Inject(ExpireFinishedMatchesHandler)
     private readonly _expireHandler: ExpireFinishedMatchesHandler,
     @Inject(ConfigService) private readonly _cfg: ConfigService<Env, true>,
+    @Inject(DrizzleArbitrageSettingsStore)
+    private readonly _settings: DrizzleArbitrageSettingsStore,
+    @Inject(SignalNotifier) private readonly _notifier: SignalNotifier,
   ) {}
 
   async onModuleInit() {
     await this._teams.reload();
+
+    // cấu hình đã lưu (arbitrage, hạng kèo, kênh thông báo) → nạp trước khi nhận dữ liệu
+    try {
+      const s = await this._settings.load();
+      this._logger.log(
+        `cấu hình arbitrage: ngưỡng ${(s.minMargin * 100).toFixed(2)}%, kênh ${s.enabledPhases.join('+') || 'không'}`,
+      );
+    } catch (e: unknown) {
+      const c = e instanceof Error ? e.cause : undefined;
+      this._logger.error(
+        `không đọc được cấu hình đã lưu, dùng mặc định: ${String(e)}${c instanceof Error ? ` — ${c.message}` : ''}`,
+      );
+    }
+    try {
+      await this._notifier.reload();
+    } catch (e: unknown) {
+      const c = e instanceof Error ? e.cause : undefined;
+      this._logger.error(
+        `không đọc được kênh thông báo: ${String(e)}${c instanceof Error ? ` — ${c.message}` : ''}`,
+      );
+    }
 
     // kèo còn 'active' từ lần chạy trước không còn ai theo dõi
     try {
@@ -545,6 +619,11 @@ export class OddsModule implements OnModuleInit, OnApplicationShutdown {
     if (this._sweep) clearInterval(this._sweep);
     if (this._expire) clearInterval(this._expire);
     await this._hub.close();
+    // cho tin đang gửi dở (Discord/Telegram/Slack) tối đa 5s
+    await Promise.race([
+      this._notifier.drain(),
+      new Promise((r) => setTimeout(r, 5_000)),
+    ]);
     await this._history.flush();
   }
 }

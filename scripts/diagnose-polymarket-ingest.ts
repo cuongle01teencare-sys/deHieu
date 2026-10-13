@@ -55,7 +55,7 @@ try {
             });
         }
         if (
-          ['cs2', 'lol'].includes(raw.sports?.sport?.sport ?? '') &&
+          ['cs2', 'lol', 'dota2', 'val'].includes(raw.sports?.sport?.sport ?? '') &&
           !market.state.closed &&
           market.state.acceptingOrders !== false
         ) {

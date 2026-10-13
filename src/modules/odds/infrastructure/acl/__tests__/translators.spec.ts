@@ -898,6 +898,49 @@ describe('map winner', () => {
     expect(sKeys).toContain(pc?.key.toString());
     expect(pc?.key.market).toBe('map-2-winner');
   });
+  it('Dota 2 và Valorant: hai tenant ghép cùng room (polymarket dota2/val ↔ sptpub 111/194)', async () => {
+    const cases = [
+      { poly: 'dota2', spt: '111', sport: 'dota2', title: 'Game 1 Winner' },
+      { poly: 'val', spt: '194', sport: 'valorant', title: 'Map 1 Winner' },
+    ];
+    for (const c of cases) {
+      const s = new SptPubOddsTranslator(teams);
+      const p = new PolymarketOddsTranslator(teams);
+      const sKeys = (
+        await s.translate(
+          msg({
+            channel: 'delta',
+            payload: {
+              version: 1,
+              events: {
+                W: {
+                  desc: {
+                    scheduled: 1790326800,
+                    type: 'match',
+                    sport: c.spt,
+                    competitors: [
+                      { id: 'a', name: 'Sinners Esports' },
+                      { id: 'b', name: 'Alliance' },
+                    ],
+                  },
+                  markets: {
+                    '330': {
+                      'mapnr=1': { '4': { k: '1.27' }, '5': { k: '3.45' } },
+                    },
+                  },
+                },
+              },
+            },
+          }),
+        )
+      ).map((x) => x.key.toString());
+      const [pc] = await p.translate(
+        poly(c.poly, [child(c.title, `${c.poly}-x-game1`)]),
+      );
+      expect(sKeys).toEqual([`room:${c.sport}:alliance~sinners:map-1-winner`]);
+      expect(pc?.key.toString()).toBe(sKeys[0]);
+    }
+  });
 });
 
 describe('polymarket: đối chiếu theo vòng quét', () => {

@@ -13,13 +13,16 @@ export class CatalogTaskKindRegistry implements TaskKindRegistry {
 
   find(kind: string): TaskKindInfo | null {
     const e = this._catalog[kind];
-    return e ? { kind, tenant: e.tenant } : null;
+    return e
+      ? { kind, tenant: e.tenant, multiInstance: e.multiInstance ?? false }
+      : null;
   }
 
   list(): TaskKindInfo[] {
     return Object.entries(this._catalog).map(([kind, e]) => ({
       kind,
       tenant: e.tenant,
+      multiInstance: e.multiInstance ?? false,
       paramsSchema: z.toJSONSchema(e.params, { io: 'input' }),
     }));
   }
