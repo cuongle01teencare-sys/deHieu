@@ -111,14 +111,68 @@ Backend có `HTTP_BIND_HOST=127.0.0.1` và `WS_BIND_HOST=127.0.0.1`, để chỉ
 ## 5. Database, cache, migration và build
 
 Cài Docker Engine + Compose plugin từ apt repository chính thức theo
-[Docker cho Ubuntu](https://docs.docker.com/engine/install/ubuntu/).
-Không dùng convenience script dành cho thử nghiệm. Quay về tài khoản SSH có sudo:
+[Docker cho Ubuntu](https://docs.docker.com/engine/install/ubuntu/) (có hỗ trợ Ubuntu 26.04 LTS).
+Không cần Docker Desktop trên VPS.
+
+### 5.1. Quay về tài khoản quản trị
+
+User `arbops` chỉ chạy ứng dụng, không có quyền sudo theo cấu hình này.
+Nếu prompt đang là `arbops@...`, chạy `exit` **một lần** để quay về root/tài khoản SSH có sudo:
 
 ```bash
 exit
+```
+
+Nếu prompt đã là `root@...`, **bỏ qua `exit`** để không đóng phiên SSH.
+Các lệnh cài đặt dưới chạy bằng root hoặc tài khoản quản trị có sudo.
+Nếu máy từng cài `docker.io`, `podman-docker`, `containerd` hoặc `runc` từ nguồn khác,
+kiểm tra/gỡ gói xung đột theo tài liệu Docker trước; không gỡ mù trên máy đang chạy container khác.
+
+### 5.2. Thêm repository và cài Docker
+
+```bash
+sudo apt update
+sudo apt install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+sudo tee /etc/apt/sources.list.d/docker.sources > /dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+```
+
+Dán nguyên block `sudo tee ... <<EOF` tới dòng `EOF`; shell tự lấy codename của Ubuntu.
+Không thay codename bằng bản Ubuntu khác nếu apt báo không tìm thấy repository.
+
+### 5.3. Khởi động và kiểm tra
+
+```bash
+sudo systemctl enable --now docker
+sudo systemctl status docker --no-pager
 sudo docker version
 sudo docker compose version
-sudo systemctl enable --now docker
+sudo docker run --rm hello-world
+```
+
+Docker service phải `active (running)`; `docker version` có cả Client và Server,
+`hello-world` in thông báo thành công. Nếu có lỗi, xử lý trước khi đi tiếp.
+Dùng **`docker compose`**, không phải `docker-compose`. Giữ `sudo` khi quản lý container;
+không cần cấp nhóm Docker (quyền gần tương đương root) cho user ứng dụng `arbops`.
+
+### 5.4. Chạy database và cache
+
+Vẫn dùng tài khoản quản trị, `.env` phải đã được tạo ở bước 4:
+
+```bash
 cd /opt/arb-ops
 sudo docker compose up -d
 sudo docker compose ps
@@ -126,6 +180,10 @@ sudo docker compose logs --tail=50 postgres dragonfly
 ```
 
 Đợi PostgreSQL `healthy`, Dragonfly không restart lặp lại, rồi migrate/build:
+
+### 5.5. Migration và build backend
+
+Chuyển về user ứng dụng:
 
 ```bash
 sudo -iu arbops
