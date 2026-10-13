@@ -13,7 +13,7 @@ export class TeamNameResolver {
   /** Gọi lúc khởi động và sau mỗi lần thêm/xóa bí danh. */
   async reload(): Promise<void> {
     const r = await this._repo.findAll();
-    if (r.status !== 'SUCEED') return;
+    if (r.status !== 'SUCEED') throw new Error('Cannot reload team aliases');
     this._aliases = new Map(
       r.data.map((a) => [a.props.alias, a.props.canonical]),
     );

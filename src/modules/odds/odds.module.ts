@@ -43,6 +43,8 @@ import {
   type ConsumerControl,
 } from './application/consumer-control.js';
 import { TeamNameResolver } from './application/team-name.resolver.js';
+import { TranslatorRouter } from './application/translator-router.js';
+import { ReindexTeamAliasesHandler } from './application/commands/reindex-team-aliases.command.js';
 import { ArbitrageEvaluator } from './application/arbitrage-evaluator.js';
 import { IngestTaskDataHandler } from './application/commands/ingest-task-data.command.js';
 import { IngestStats } from './application/ingest-stats.js';
@@ -280,14 +282,33 @@ const EXPIRE_INTERVAL_MS = 60_000;
     },
     {
       provide: IngestTaskDataHandler,
-      inject: [RAW_ODDS_TRANSLATORS, LaneDispatcher, IngestStats],
-      useFactory: (t: RawOddsTranslator[], l: LaneDispatcher, s: IngestStats) =>
+      inject: [TranslatorRouter, LaneDispatcher, IngestStats],
+      useFactory: (t: TranslatorRouter, l: LaneDispatcher, s: IngestStats) =>
         new IngestTaskDataHandler(t, l, s),
     },
     {
+      provide: TranslatorRouter,
+      inject: [RAW_ODDS_TRANSLATORS],
+      useFactory: (t: RawOddsTranslator[]) => new TranslatorRouter(t),
+    },
+    {
+      provide: ReindexTeamAliasesHandler,
+      inject: [TranslatorRouter, LaneDispatcher, ConfigService],
+      useFactory: (
+        t: TranslatorRouter,
+        l: LaneDispatcher,
+        cfg: ConfigService<Env, true>,
+      ) =>
+        new ReindexTeamAliasesHandler(
+          t,
+          l,
+          cfg.get('MATCH_MAX_DURATION_HOURS', { infer: true }) * 3_600_000,
+        ),
+    },
+    {
       provide: ReleaseTaskOddsHandler,
-      inject: [RAW_ODDS_TRANSLATORS, LaneDispatcher],
-      useFactory: (t: RawOddsTranslator[], l: LaneDispatcher) =>
+      inject: [TranslatorRouter, LaneDispatcher],
+      useFactory: (t: TranslatorRouter, l: LaneDispatcher) =>
         new ReleaseTaskOddsHandler(t, l),
     },
     {
@@ -315,15 +336,29 @@ const EXPIRE_INTERVAL_MS = 60_000;
     },
     {
       provide: CreateTeamAliasHandler,
-      inject: [TEAM_ALIAS_REPOSITORY, TeamNameResolver],
-      useFactory: (r: TeamAliasRepository, n: TeamNameResolver) =>
-        new CreateTeamAliasHandler(r, n),
+      inject: [
+        TEAM_ALIAS_REPOSITORY,
+        TeamNameResolver,
+        ReindexTeamAliasesHandler,
+      ],
+      useFactory: (
+        r: TeamAliasRepository,
+        n: TeamNameResolver,
+        reindex: ReindexTeamAliasesHandler,
+      ) => new CreateTeamAliasHandler(r, n, reindex),
     },
     {
       provide: DeleteTeamAliasHandler,
-      inject: [TEAM_ALIAS_REPOSITORY, TeamNameResolver],
-      useFactory: (r: TeamAliasRepository, n: TeamNameResolver) =>
-        new DeleteTeamAliasHandler(r, n),
+      inject: [
+        TEAM_ALIAS_REPOSITORY,
+        TeamNameResolver,
+        ReindexTeamAliasesHandler,
+      ],
+      useFactory: (
+        r: TeamAliasRepository,
+        n: TeamNameResolver,
+        reindex: ReindexTeamAliasesHandler,
+      ) => new DeleteTeamAliasHandler(r, n, reindex),
     },
     {
       provide: ListTeamAliasesHandler,

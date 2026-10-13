@@ -116,6 +116,12 @@ Lịch sử được ghi nền, không làm chậm việc gửi kèo.
 | POST   | `/team-aliases`     | `team-aliases:write` | `{ "alias": "NIP", "canonical": "Ninjas in Pyjamas" }` (tự chuẩn hóa) |
 | DELETE | `/team-aliases/:id` | `team-aliases:write` | Xóa                                                                   |
 
+Sau khi thêm/cập nhật/xóa bí danh, backend nạp lại bảng tên và chuyển các dòng đang chạy
+sang room tương ứng, gỡ dòng ở khóa cũ rồi đánh giá lại kèo. Không cần restart publisher.
+Giữ nguyên thời điểm cập nhật giá và URL gốc; nếu tên mới đảo thứ tự đội, odds/token và dấu handicap
+được đảo cùng nhau. Cùng tên không đảm bảo phát kèo: vẫn cần cùng môn/market, odds mở,
+giờ bắt đầu trong giới hạn, margin đạt ngưỡng và kênh được bật. Cả hai tên đội đều phải khớp.
+
 ## Consumer (bot giao dịch, Discord)
 
 | Method | Path                    | Quyền               | Mô tả                                                                   |

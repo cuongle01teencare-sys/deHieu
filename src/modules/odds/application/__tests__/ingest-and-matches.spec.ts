@@ -1,5 +1,6 @@
 import { IngestStats } from '../ingest-stats.js';
 import { IngestTaskDataHandler } from '../commands/ingest-task-data.command.js';
+import { TranslatorRouter } from '../translator-router.js';
 import type { LaneDispatcher } from '../lane-dispatcher.js';
 import type { TaskDataMessage } from '../../../tasks/application/task-protocol.js';
 import { TeamNameResolver } from '../team-name.resolver.js';
@@ -43,7 +44,9 @@ describe('IngestStats + IngestTaskDataHandler', () => {
       },
     } as unknown as LaneDispatcher;
     const h = new IngestTaskDataHandler(
-      [new SptPubOddsTranslator(teams, stats.reporter('sptpub'))],
+      new TranslatorRouter([
+        new SptPubOddsTranslator(teams, stats.reporter('sptpub')),
+      ]),
       lanes,
       stats,
     );

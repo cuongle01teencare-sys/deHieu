@@ -230,7 +230,7 @@ function AliasRow({ c, a, onDone }: { c: MatchCandidate; a: MatchCandidate['alia
   const mutate = useMutate();
   const from = c.a.teams.includes(a.alias) ? c.a : c.b;
   const to = from === c.a ? c.b : c.a;
-  const renamed = from.match.replace(new RegExp(`(?<=[:~])${a.alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=~|$)`), a.canonical);
+  const renamed = `${from.match.split(':')[0]}:${from.teams.map((team) => team === a.alias ? a.canonical : team).sort().join('~')}`;
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-line py-4 last:border-0">
       <span className="flex min-w-0 flex-1 items-center gap-3 text-[15px]">
@@ -246,7 +246,7 @@ function AliasRow({ c, a, onDone }: { c: MatchCandidate; a: MatchCandidate['alia
         open={open}
         onOpenChange={setOpen}
         title="Tạo bí danh đội?"
-        description="Từ giờ mọi tenant gửi tên này sẽ được chuẩn hóa về tên chuẩn trước khi ghép room."
+        description="Áp dụng tên chuẩn cho dữ liệu mới và ghép lại các dòng đang chạy."
         confirmLabel="Tạo bí danh"
         loading={busy}
         onConfirm={async () => {
@@ -267,7 +267,7 @@ function AliasRow({ c, a, onDone }: { c: MatchCandidate; a: MatchCandidate['alia
           </div>
           <div className="border-t border-line pt-3 text-caption text-muted-fg">
             Ảnh hưởng: <span className="num text-fg">{from.match}</span> ({from.tenants.join(', ')}) sẽ thành <span className="num text-fg">{renamed}</span> và ghép với{' '}
-            <span className="num text-fg">{to.match}</span> ({to.tenants.join(', ')}). Room mới có tổ hợp ngay ở vòng đánh giá kế tiếp.
+            <span className="num text-fg">{to.match}</span> ({to.tenants.join(', ')}), nếu đội còn lại cũng khớp. Tổ hợp còn phụ thuộc market, giờ bắt đầu và trạng thái odds; kèo chỉ được phát khi đạt ngưỡng và kênh được bật.
           </div>
         </div>
       </Confirm>

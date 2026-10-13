@@ -34,6 +34,8 @@ export interface RawOddsTranslator {
    * vì dữ liệu nó từng gửi không còn được cập nhật nữa.
    */
   release(taskId: string, kind: string): Promise<OddsLineChange[]>;
+  /** Rebuild cached room keys after aliases change, preserving price timestamps. */
+  reindexTeams?(): OddsLineChange[];
 }
 
 export const RAW_ODDS_TRANSLATORS = Symbol('RAW_ODDS_TRANSLATORS');

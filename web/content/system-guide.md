@@ -108,6 +108,11 @@ Trong phiên bản này, ID room gồm môn, cặp đội và market; ID không 
 
 Nếu tên đội khác nhau sau chuẩn hóa, hai nguồn có thể nằm ở hai room khác nhau. Trang [Ghép trượt](/ghep-truot) gợi ý cặp nghi ngờ; [Bí danh đội](/bi-danh) giúp khai báo tên chuẩn. Gợi ý không tự động hợp nhất room.
 
+Khi bạn lưu bí danh, backend áp dụng ngay cho các dòng đang chạy và ghép lại room; không cần dừng publisher.
+Nếu cả hai đội đều lệch tên, cần sửa cả hai. Xóa hoặc đổi bí danh cũng ghép lại theo bảng tên mới.
+Giá vẫn giữ thời điểm nhận cũ, không biến thành báo giá mới chỉ vì đổi tên. Ghép được room rồi
+vẫn phải qua các điều kiện phát kèo ở trên.
+
 ## Khi nào hệ thống phát kèo
 
 Backend chọn side 0 từ tenant A và side 1 từ tenant B. A và B phải khác nhau; cả hai dòng phải `open`; giờ bắt đầu phải khớp trong `maxStartDriftMs`.

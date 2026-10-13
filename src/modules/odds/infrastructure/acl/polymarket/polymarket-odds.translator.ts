@@ -16,6 +16,7 @@ import {
   PolymarketEventsPayloadSchema,
   PolymarketMarketSchema,
   PolymarketStreamEventSchema,
+  type PolymarketMarketDTO,
 } from './polymarket.dto.js';
 import {
   POLYMARKET_MARKETS,
@@ -23,7 +24,11 @@ import {
 } from './polymarket-odds.mapping.js';
 
 interface MarketRoute {
-  key: MatchKey;
+  key: MatchKey | null;
+  sport: string;
+  rawTeams: readonly [string, string];
+  sourceMarket: PolymarketMarketDTO;
+  updatedAt: number;
   startsAt: number;
   conditionId: string;
   slug: string;
@@ -159,8 +164,10 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
         }
 
         let names: [string, string];
+        let rawTeams: [string, string];
         let yesFirst: boolean;
         if (mapping.outcomesBy === 'team') {
+          rawTeams = [yes.label, no.label];
           names = [
             this._teams.resolve(yes.label),
             this._teams.resolve(no.label),
@@ -177,7 +184,15 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
             this._skip(msg.kind, 'no_moneyline_teams');
             continue;
           }
-          names = eventTeams;
+          rawTeams = eventTeams;
+          names = [
+            this._teams.resolve(rawTeams[0]),
+            this._teams.resolve(rawTeams[1]),
+          ];
+          if (!names[0] || !names[1] || names[0] === names[1]) {
+            this._skip(msg.kind, 'same_team_names');
+            continue;
+          }
           yesFirst = true; // yes/no đã là side 0/side 1 (vd over/under), giữ nguyên
         }
         const market = mapping.toMarket(m, yesFirst);
@@ -197,7 +212,7 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
           dropped.push(...this._dropMarket(m.conditionId));
           changes.push({
             type: 'remove',
-            key,
+            key: known?.key ?? key,
             tenant: this.tenant,
             phase: known?.phase ?? 'prematch',
           });
@@ -224,11 +239,19 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
           ? `https://polymarket.com/event/${encodeURIComponent(ev.data.slug)}`
           : '';
         if (route) {
+          route.rawTeams = rawTeams;
+          route.sourceMarket = m;
+          route.startsAt = startsAt;
+          changes.push(...this._reindexRoute(route, false));
           route.phase = phase; // trận chuyển prematch → live
           if (eventUrl) route.eventUrl = eventUrl;
         } else {
           const created: MarketRoute = {
             key,
+            sport,
+            rawTeams,
+            sourceMarket: m,
+            updatedAt: msg.sentAt,
             startsAt,
             conditionId: m.conditionId,
             slug: m.slug ?? ev.data.slug ?? '',
@@ -301,13 +324,14 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
     const dropped: string[] = [];
     if (!hold)
       for (const r of due) {
-        changes.push({
-          type: 'remove',
-          key: r.key,
-          tenant: this.tenant,
-          phase: r.phase,
-          reason: 'missing_from_listing',
-        });
+        if (r.key)
+          changes.push({
+            type: 'remove',
+            key: r.key,
+            tenant: this.tenant,
+            phase: r.phase,
+            reason: 'missing_from_listing',
+          });
         dropped.push(...this._dropMarket(r.conditionId));
       }
     if (dropped.length) await this._sync('unsubscribe', dropped);
@@ -362,12 +386,13 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
         const cid = this._tokens.get(t)?.conditionId;
         const route = cid ? this._markets.get(cid) : undefined;
         if (route) {
-          changes.push({
-            type: 'remove',
-            key: route.key,
-            tenant: this.tenant,
-            phase: route.phase,
-          });
+          if (route.key)
+            changes.push({
+              type: 'remove',
+              key: route.key,
+              tenant: this.tenant,
+              phase: route.phase,
+            });
           this._dropMarket(route.conditionId);
         }
       }
@@ -388,12 +413,13 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
       // mất nguồn giá: gỡ dòng, giữ bảng định tuyến; giá về lại khi có task stream mới
       for (const route of this._markets.values()) {
         route.asks = [null, null];
-        changes.push({
-          type: 'remove',
-          key: route.key,
-          tenant: this.tenant,
-          phase: route.phase,
-        });
+        if (route.key)
+          changes.push({
+            type: 'remove',
+            key: route.key,
+            tenant: this.tenant,
+            phase: route.phase,
+          });
       }
     } else if (kind === 'polymarket.descriptor') {
       this._cycleSeen.delete(taskId);
@@ -402,16 +428,82 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
       const dropped: string[] = [];
       for (const route of [...this._markets.values()])
         if (route.taskId === taskId) {
-          changes.push({
-            type: 'remove',
-            key: route.key,
-            tenant: this.tenant,
-            phase: route.phase,
-          });
+          if (route.key)
+            changes.push({
+              type: 'remove',
+              key: route.key,
+              tenant: this.tenant,
+              phase: route.phase,
+            });
           dropped.push(...this._dropMarket(route.conditionId));
         }
       if (dropped.length) await this._sync('unsubscribe', dropped);
     }
+    return changes;
+  }
+
+  reindexTeams(): OddsLineChange[] {
+    const changes = [...this._markets.values()].flatMap((route) =>
+      this._reindexRoute(route),
+    );
+    return [
+      ...changes.filter((c) => c.type === 'remove'),
+      ...changes.filter((c) => c.type === 'set'),
+    ];
+  }
+
+  private _reindexRoute(route: MarketRoute, emit = true): OddsLineChange[] {
+    const mapping =
+      POLYMARKET_MARKETS[route.sourceMarket.sports.sportsMarketType ?? ''];
+    const names = route.rawTeams.map((name) => this._teams.resolve(name));
+    const valid = !!names[0] && !!names[1] && names[0] !== names[1];
+    const yesFirst =
+      mapping.outcomesBy === 'side' ||
+      (valid && MatchKey.isFirst(names[0], names[1]));
+    const market = mapping.toMarket(route.sourceMarket, yesFirst);
+    const key =
+      valid && market
+        ? MatchKey.of({
+            sport: route.sport,
+            teamX: names[0],
+            teamY: names[1],
+            market,
+          })
+        : null;
+    if (key?.toString() === route.key?.toString()) return [];
+    const changes: OddsLineChange[] = route.key
+      ? [
+          {
+            type: 'remove',
+            key: route.key,
+            tenant: this.tenant,
+            phase: route.phase,
+          },
+        ]
+      : [];
+    route.key = key;
+    if (!key) return changes;
+
+    // Prices belong to tokens, not alphabetic team positions; aliases can reverse them.
+    const asks = new Map(
+      route.tokens.map((token, i) => [token, route.asks[i]! as number | null]),
+    );
+    const { yes, no } = route.sourceMarket.outcomes;
+    route.tokens = yesFirst
+      ? [yes.tokenId!, no.tokenId!]
+      : [no.tokenId!, yes.tokenId!];
+    route.asks = [
+      asks.get(route.tokens[0]) ?? null,
+      asks.get(route.tokens[1]) ?? null,
+    ];
+    route.tokens.forEach((token, side) =>
+      this._tokens.set(token, {
+        conditionId: route.conditionId,
+        side: side as Side,
+      }),
+    );
+    const change = emit ? this._toChange(route, route.updatedAt) : null;
+    if (change) changes.push(change);
     return changes;
   }
 
@@ -431,7 +523,9 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
     touched.add(t.conditionId);
   }
 
-  private _toChange(r: MarketRoute, at: number): OddsLineChange {
+  private _toChange(r: MarketRoute, at: number): OddsLineChange | null {
+    if (!r.key) return null;
+    r.updatedAt = at;
     const a = validAsk(r.asks[0]);
     const b = validAsk(r.asks[1]);
     const open = a !== null && b !== null;
@@ -456,14 +550,14 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
     };
   }
 
-  /** Cặp đội của event, lấy từ outcome của market moneyline (đã chuẩn hóa); không có → null. */
+  /** Original names from moneyline; retain them so aliases can also be deleted. */
   private _eventTeams(markets: readonly unknown[]): [string, string] | null {
     for (const raw of markets) {
       const p = PolymarketMarketSchema.safeParse(raw);
       if (!p.success || p.data.sports.sportsMarketType !== 'moneyline')
         continue;
-      const a = this._teams.resolve(p.data.outcomes.yes.label);
-      const b = this._teams.resolve(p.data.outcomes.no.label);
+      const a = p.data.outcomes.yes.label;
+      const b = p.data.outcomes.no.label;
       return a && b && a !== b ? [a, b] : null;
     }
     return null;

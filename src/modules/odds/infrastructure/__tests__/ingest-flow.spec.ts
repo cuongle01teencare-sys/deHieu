@@ -5,6 +5,7 @@ import { ReleaseTaskOddsHandler } from '../../application/commands/release-task-
 import { OddsLineApplier } from '../../application/odds-line-applier.js';
 import { LaneDispatcher } from '../../application/lane-dispatcher.js';
 import { TeamNameResolver } from '../../application/team-name.resolver.js';
+import { TranslatorRouter } from '../../application/translator-router.js';
 import type { TeamAliasRepository } from '../../domain/team-alias.repository.js';
 import type { TeamAlias } from '../../domain/team-alias.js';
 import { MatchKey } from '../../domain/match-key.js';
@@ -103,8 +104,9 @@ describe('luồng ingest → room → kèo (adapter in-memory)', () => {
       new PolymarketOddsTranslator(teams),
     ];
     const lanes = new LaneDispatcher(new OddsLineApplier(rooms, evaluator));
-    const ingest = new IngestTaskDataHandler(translators, lanes);
-    const release = new ReleaseTaskOddsHandler(translators, lanes);
+    const router = new TranslatorRouter(translators);
+    const ingest = new IngestTaskDataHandler(router, lanes);
+    const release = new ReleaseTaskOddsHandler(router, lanes);
     return { ingest, release, rooms, events };
   };
 

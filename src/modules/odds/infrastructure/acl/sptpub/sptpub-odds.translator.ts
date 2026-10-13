@@ -22,7 +22,7 @@ const FEED_PHASE: Readonly<Record<string, Phase>> = {
 
 interface Route {
   sport: string;
-  teams: readonly [string, string]; // competitor1, competitor2 (đã chuẩn hóa)
+  teams: readonly [string, string]; // original competitor1, competitor2 names
   startsAt: number;
   /** Feed (task) sở hữu trận: live và prematch cùng gửi một trận khi trận chuyển sang live. */
   taskId: string;
@@ -32,8 +32,11 @@ interface Route {
 
 /** Một (market, specifier) đã ghi vào room — nhớ để cập nhật delta và để gỡ đúng room. */
 interface Book {
-  key: MatchKey;
+  key: MatchKey | null;
   phase: Phase;
+  marketId: string;
+  spec: string;
+  updatedAt: number;
   /** outcomeId → outcome mới nhất (delta có thể chỉ gửi 1 outcome). */
   outcomes: Map<string, SptPubOutcomeDTO>;
 }
@@ -98,7 +101,7 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
         else
           this._routes.set(eventId, {
             sport,
-            teams: [this._teams.resolve(c1.name), this._teams.resolve(c2.name)],
+            teams: [c1.name, c2.name],
             startsAt: ev.desc.scheduled * 1000,
             taskId: msg.taskId,
             phase,
@@ -107,13 +110,14 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
       }
       const route = this._routes.get(eventId);
       if (!route || !ev.markets || route.taskId !== msg.taskId) continue;
-      if (!route.teams[0] || route.teams[0] === route.teams[1]) {
+      const names = route.teams.map((name) => this._teams.resolve(name));
+      if (!names[0] || !names[1] || names[0] === names[1]) {
         this._skip(msg.kind, 'same_team_names');
         continue;
       }
 
       // competitor1 có phải teams[0] của room không: quyết định thứ tự odds (market theo đội) và dấu mức chấp
-      const c1First = MatchKey.isFirst(route.teams[0], route.teams[1]);
+      const c1First = MatchKey.isFirst(names[0], names[1]);
       const books = this._books.get(eventId) ?? new Map<string, Book>();
       this._books.set(eventId, books);
 
@@ -129,7 +133,7 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
           for (const [id, book] of books)
             if (id.startsWith(`${marketId}|`)) {
               books.delete(id);
-              changes.push(this._remove(book));
+              changes.push(...this._remove(book));
             }
           continue;
         }
@@ -146,67 +150,26 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
             const book = books.get(id);
             if (book) {
               books.delete(id);
-              changes.push(this._remove(book));
+              changes.push(...this._remove(book));
             }
             continue;
           }
 
-          const key = MatchKey.of({
-            sport: route.sport,
-            teamX: route.teams[0],
-            teamY: route.teams[1],
-            market,
-          });
           const book = books.get(id) ?? {
-            key,
+            key: null,
             phase: route.phase,
+            marketId,
+            spec,
+            updatedAt: msg.sentAt,
             outcomes: new Map<string, SptPubOutcomeDTO>(),
           };
           book.phase = route.phase;
+          book.updatedAt = msg.sentAt;
           books.set(id, book);
           for (const [oid, o] of Object.entries(outs))
             if (o) book.outcomes.set(oid, o);
 
-          const o1 = book.outcomes.get(map.outcomes[0]);
-          const o2 = book.outcomes.get(map.outcomes[1]);
-          if (!o1 || !o2) continue;
-
-          // outcome theo đội → đưa về thứ tự đội của MatchKey (alphabet), bất kể home/away;
-          // outcome theo phía (over/under) → giữ nguyên
-          const keep = map.outcomesBy === 'side' || c1First;
-          const [first, second] = keep ? [o1, o2] : [o2, o1];
-          const [oidFirst, oidSecond] = keep
-            ? map.outcomes
-            : [map.outcomes[1], map.outcomes[0]];
-          const suspended =
-            !!first.b ||
-            !!second.b ||
-            !(Number(first.k) > 1) || // cũng bắt NaN / chuỗi rỗng
-            !(Number(second.k) > 1);
-
-          const sourceUrl = sourceLinks.eventUrl(eventId, route.sourceDesc);
-          changes.push({
-            type: 'set',
-            key,
-            line: OddsLine.create({
-              tenant: this.tenant,
-              odds: suspended
-                ? [1.01, 1.01]
-                : [Number(first.k), Number(second.k)],
-              status: suspended ? 'suspended' : 'open',
-              phase: route.phase,
-              updatedAt: msg.sentAt,
-              startsAt: route.startsAt,
-              ref: {
-                e: eventId,
-                m: marketId,
-                s: spec,
-                o0: oidFirst,
-                o1: oidSecond,
-                ...(sourceUrl ? { url: sourceUrl } : {}),
-              },
-            }),
-          });
+          changes.push(...this._updateBook(eventId, route, book));
         }
       }
     }
@@ -232,15 +195,96 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
     return Promise.resolve(changes);
   }
 
+  reindexTeams(): OddsLineChange[] {
+    const changes: OddsLineChange[] = [];
+    for (const [eventId, books] of this._books) {
+      const route = this._routes.get(eventId);
+      if (!route) continue;
+      for (const book of books.values())
+        changes.push(...this._updateBook(eventId, route, book, true));
+    }
+    // Remove all old identities before setting new ones, including colliding keys.
+    return [
+      ...changes.filter((c) => c.type === 'remove'),
+      ...changes.filter((c) => c.type === 'set'),
+    ];
+  }
+
+  private _updateBook(
+    eventId: string,
+    route: Route,
+    book: Book,
+    reindexOnly = false,
+  ): OddsLineChange[] {
+    const names = route.teams.map((name) => this._teams.resolve(name));
+    const map = SPTPUB_MARKETS[book.marketId];
+    const valid = !!names[0] && !!names[1] && names[0] !== names[1];
+    const c1First = valid && MatchKey.isFirst(names[0], names[1]);
+    const market = map.toMarket(book.spec, c1First);
+    const key =
+      valid && market
+        ? MatchKey.of({
+            sport: route.sport,
+            teamX: names[0],
+            teamY: names[1],
+            market,
+          })
+        : null;
+    const moved = book.key?.toString() !== key?.toString();
+    if (reindexOnly && !moved) return [];
+    const changes = moved ? this._remove(book) : [];
+    book.key = key;
+    if (!key) return changes;
+    const o1 = book.outcomes.get(map.outcomes[0]);
+    const o2 = book.outcomes.get(map.outcomes[1]);
+    if (!o1 || !o2) return changes;
+    const keep = map.outcomesBy === 'side' || c1First;
+    const [first, second] = keep ? [o1, o2] : [o2, o1];
+    const [oidFirst, oidSecond] = keep
+      ? map.outcomes
+      : [map.outcomes[1], map.outcomes[0]];
+    const suspended =
+      !!first.b ||
+      !!second.b ||
+      !(Number(first.k) > 1) ||
+      !(Number(second.k) > 1);
+    const sourceUrl = this._sourceLinks
+      .get(route.taskId)
+      ?.eventUrl(eventId, route.sourceDesc);
+    changes.push({
+      type: 'set',
+      key,
+      line: OddsLine.create({
+        tenant: this.tenant,
+        odds: suspended ? [1.01, 1.01] : [Number(first.k), Number(second.k)],
+        status: suspended ? 'suspended' : 'open',
+        phase: book.phase,
+        updatedAt: book.updatedAt,
+        startsAt: route.startsAt,
+        ref: {
+          e: eventId,
+          m: book.marketId,
+          s: book.spec,
+          o0: oidFirst,
+          o1: oidSecond,
+          ...(sourceUrl ? { url: sourceUrl } : {}),
+        },
+      }),
+    });
+    return changes;
+  }
+
   /** Gỡ trận: mọi room mà trận này đã thực sự ghi vào. */
   private _removeEvent(eventId: string): OddsLineChange[] {
     this._routes.delete(eventId);
     const books = this._books.get(eventId);
     this._books.delete(eventId);
-    return books ? [...books.values()].map((b) => this._remove(b)) : [];
+    return books ? [...books.values()].flatMap((b) => this._remove(b)) : [];
   }
 
-  private _remove(b: Book): OddsLineChange {
-    return { type: 'remove', key: b.key, tenant: this.tenant, phase: b.phase };
+  private _remove(b: Book): OddsLineChange[] {
+    return b.key
+      ? [{ type: 'remove', key: b.key, tenant: this.tenant, phase: b.phase }]
+      : [];
   }
 }
