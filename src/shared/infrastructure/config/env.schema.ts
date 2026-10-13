@@ -6,9 +6,15 @@ export const envSchema = z.object({
   // Store (Redis hoặc Dragonfly)
   REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
 
+  // Địa chỉ nghe của cả 3 WebSocket server. Đứng sau reverse proxy cùng máy → '127.0.0.1'
+  // (cổng 3001/3002/3003 không lộ ra internet, chỉ proxy TLS mới vào được).
+  WS_BIND_HOST: z.string().default('0.0.0.0'),
+
   // WebSocket: microservice publisher -> app
   TASK_WS_PORT: z.coerce.number().int().default(3001),
   TASK_WS_TOKEN: z.string().min(16),
+  // Frame tối đa từ node (MB): snapshot / trang danh sách trận có thể lớn
+  TASK_WS_MAX_PAYLOAD_MB: z.coerce.number().positive().default(64),
 
   // WebSocket: app -> consumer (Discord bot, auto-trade)
   CONSUMER_WS_PORT: z.coerce.number().int().default(3002),
@@ -28,6 +34,18 @@ export const envSchema = z.object({
   ),
   // Số ngày giữ lịch sử chuyển trạng thái odds
   ODDS_TRANSITION_RETENTION_DAYS: z.coerce.number().int().min(1).default(7),
+  // Số ngày giữ: lịch sử kèo đã kết thúc / sự cố đã đóng / audit
+  SIGNAL_HISTORY_RETENTION_DAYS: z.coerce.number().int().min(1).default(90),
+  INCIDENT_RETENTION_DAYS: z.coerce.number().int().min(1).default(180),
+  AUDIT_RETENTION_DAYS: z.coerce.number().int().min(1).default(365),
+
+  // Xóa sạch room trong Redis lúc khởi động (bảng định tuyến trong RAM đã mất → dòng cũ thành mồ côi)
+  RESET_ROOMS_ON_START: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  // Quá startsAt + ngần này giờ thì coi trận đã kết thúc → gỡ dòng kèo (match_expired)
+  MATCH_MAX_DURATION_HOURS: z.coerce.number().positive().default(8),
 });
 
 export type Env = z.infer<typeof envSchema>;

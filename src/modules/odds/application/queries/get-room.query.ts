@@ -16,7 +16,7 @@ export interface RoomComboView {
   readonly phase: Phase;
   readonly margin: number;
   readonly aboveMinMargin: boolean;
-  readonly legs: readonly { tenant: string; team: string; odds: number }[];
+  readonly legs: readonly { tenant: string; pick: string; odds: number }[];
 }
 
 export interface RoomDetailView {
@@ -74,7 +74,7 @@ export class GetRoomHandler implements QueryHandler<
           aboveMinMargin: c.margin >= settings.minMargin,
           legs: c.legs.map((l) => ({
             tenant: l.tenant,
-            team: l.team,
+            pick: l.pick,
             odds: l.odds,
           })),
         })),

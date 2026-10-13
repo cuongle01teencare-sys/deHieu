@@ -1,4 +1,14 @@
-import { and, desc, eq, isNotNull, isNull, type SQL } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import type { TransactionContext } from '../../../../../shared/infrastructure/database/transaction-context.js';
 import type {
   IncidentQuery,
@@ -42,15 +52,28 @@ export class DrizzleIncidentRepository implements IncidentRepository {
     return rows.length;
   }
 
-  async list(q: IncidentQuery): Promise<Incident[]> {
+  async count(q: IncidentQuery): Promise<number> {
+    const [row] = await this._tx.executor
+      .select({ n: sql<number>`count(*)::int` })
+      .from(t)
+      .where(this._where(q));
+    return row?.n ?? 0;
+  }
+
+  private _where(q: IncidentQuery): SQL | undefined {
     const where: SQL[] = [];
     if (q.open === true) where.push(isNull(t.resolvedAt));
     if (q.open === false) where.push(isNotNull(t.resolvedAt));
     if (q.kind) where.push(eq(t.kind, q.kind));
+    return where.length ? and(...where) : undefined;
+  }
+
+  async list(q: IncidentQuery): Promise<Incident[]> {
+    const where = this._where(q);
     const rows = await this._tx.executor
       .select()
       .from(t)
-      .where(where.length ? and(...where) : undefined)
+      .where(where)
       .orderBy(desc(t.openedAt))
       .limit(q.limit)
       .offset(q.offset);
@@ -69,5 +92,20 @@ export class DrizzleIncidentRepository implements IncidentRepository {
       acknowledgedAt: ms(r.acknowledgedAt),
       acknowledgedBy: r.acknowledgedBy,
     }));
+  }
+
+  /** Chỉ sự cố đã đóng; theo lô bằng subquery (Postgres không có DELETE ... LIMIT). */
+  async purgeOlderThan(before: Date, limit: number): Promise<number> {
+    const db = this._tx.executor;
+    const ids = db
+      .select({ id: t.id })
+      .from(t)
+      .where(and(isNotNull(t.resolvedAt), lt(t.resolvedAt, before)))
+      .limit(limit);
+    const rows = await db
+      .delete(t)
+      .where(inArray(t.id, ids))
+      .returning({ id: t.id });
+    return rows.length;
   }
 }

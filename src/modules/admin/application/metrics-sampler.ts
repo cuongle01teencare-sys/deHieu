@@ -12,6 +12,8 @@ export interface AdminMetrics {
   readonly lanes: Awaited<ReturnType<AdminSources['lanes']>>;
   readonly consumers: { total: number; connected: number; pending: number };
   readonly tasks: Readonly<Record<string, number>>; // state → số task
+  /** Bộ đếm cộng dồn theo tenant × kind; client tự tính tốc độ giữa hai frame. */
+  readonly ingest: Awaited<ReturnType<AdminSources['ingest']>>;
 }
 
 /**
@@ -34,9 +36,10 @@ export class MetricsSampler {
     const now = this._now();
     if (!this._cache || now - this._cache.at >= this._roomsRefreshMs)
       this._cache = { at: now, data: await this._src.arbitrage() };
-    const [lanes, tasks] = await Promise.all([
+    const [lanes, tasks, ingest] = await Promise.all([
       this._src.lanes(),
       this._src.tasks(),
+      this._src.ingest(),
     ]);
     const consumers = this._src.consumers();
     const byState: Record<string, number> = {};
@@ -54,6 +57,7 @@ export class MetricsSampler {
         pending: consumers.reduce((n, c) => n + c.pending, 0),
       },
       tasks: byState,
+      ingest,
     };
   }
 }

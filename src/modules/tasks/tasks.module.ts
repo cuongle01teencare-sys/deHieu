@@ -54,6 +54,10 @@ import {
         const launcher = new WsRemoteTaskLauncher(
           cfg.get('TASK_WS_PORT'),
           cfg.get('TASK_WS_TOKEN'),
+          {
+            host: cfg.get('WS_BIND_HOST'),
+            maxPayloadBytes: cfg.get('TASK_WS_MAX_PAYLOAD_MB') * 1024 * 1024,
+          },
         );
         launcher.listen();
         return launcher;

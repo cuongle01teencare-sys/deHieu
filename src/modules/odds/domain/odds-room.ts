@@ -1,5 +1,6 @@
 import type { MatchKey } from './match-key.js';
 import { combinePhases } from './phase.js';
+import { pickOf } from './pick.js';
 import type { CancelReason, RemovalReason } from './removal-reason.js';
 import type { OddsLine } from './odds-line.js';
 import {
@@ -41,14 +42,14 @@ export class OddsRoom {
             {
               tenant: a.props.tenant,
               side: 0,
-              team: this.key.teams[0],
+              pick: pickOf(this.key, 0),
               odds: oddsA,
               ref: a.props.ref,
             },
             {
               tenant: b.props.tenant,
               side: 1,
-              team: this.key.teams[1],
+              pick: pickOf(this.key, 1),
               odds: oddsB,
               ref: b.props.ref,
             },

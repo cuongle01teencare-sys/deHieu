@@ -57,6 +57,31 @@ export class RedisOddsRoomStore implements OddsRoomStore {
     return rooms;
   }
 
+  /** SCAN room:* rồi đếm (HLEN) + UNLINK theo lô — không chặn server như KEYS/DEL lớn. */
+  async clear(): Promise<{ rooms: number; lines: number }> {
+    let rooms = 0;
+    let lines = 0;
+    let cursor = '0';
+    do {
+      const [next, batch] = await this._redis.scan(
+        cursor,
+        'MATCH',
+        'room:*',
+        'COUNT',
+        1000,
+      );
+      cursor = next;
+      if (!batch.length) continue;
+      const pipe = this._redis.pipeline();
+      batch.forEach((k) => pipe.hlen(k));
+      const res = (await pipe.exec()) ?? [];
+      lines += res.reduce((n, [err, v]) => n + (err ? 0 : Number(v)), 0);
+      await this._redis.unlink(...batch);
+      rooms += batch.length;
+    } while (cursor !== '0');
+    return { rooms, lines };
+  }
+
   private _toRoom(key: MatchKey, raw: Record<string, string>): OddsRoom {
     const lines = new Map<string, OddsLine>();
     for (const [tenant, value] of Object.entries(raw)) {

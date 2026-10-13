@@ -70,9 +70,9 @@ interface Live {
  * không quan tâm task chạy ở worker thread hay microservice (do TaskLauncher lo).
  */
 export class TaskSupervisor {
-  private readonly _live = new Map<string, Live>();
-  private readonly _listeners: TaskDataListener[] = [];
-  private readonly _goneListeners: TaskGoneListener[] = [];
+  private readonly _live = new Map<string, Live>(); // Tasks that are living
+  private readonly _listeners: TaskDataListener[] = []; // List of listeners, which is a list of functions that will be invoked when new data comes in
+  private readonly _goneListeners: TaskGoneListener[] = []; // List of listeners which will be invoked when a task is gone
   private readonly _lifecycleListeners: TaskLifecycleListener[] = [];
 
   constructor(
@@ -368,6 +368,14 @@ export class TaskSupervisor {
     live.timers.add(t);
   }
 
+  /**
+   * Function to invoke when we want to perform a task's state transition from any of the type of TaskState to any of that kind
+   * @param taskId
+   * @param to
+   * @param patch
+   * @param reason
+   * @returns
+   */
   private async _transition(
     taskId: string,
     to: TaskState,

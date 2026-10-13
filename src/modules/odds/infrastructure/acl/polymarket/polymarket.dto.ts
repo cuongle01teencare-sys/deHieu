@@ -4,7 +4,10 @@ import { z } from 'zod';
  * Dạng dữ liệu đã được @polymarket/client chuẩn hóa (camelCase, nhóm theo state/prices/sports...).
  * SDK đổi định dạng → chỉ sửa file này + translator.
  */
-const decimal = z.union([z.string(), z.number()]).transform(Number);
+const decimal = z
+  .union([z.string(), z.number()])
+  .transform(Number)
+  .pipe(z.number());
 
 const OutcomeSchema = z.looseObject({
   label: z.string(),
@@ -14,6 +17,8 @@ const OutcomeSchema = z.looseObject({
 export const PolymarketMarketSchema = z.looseObject({
   conditionId: z.string().nullable(),
   slug: z.string().nullish(),
+  /** vd "Map 1 Winner", "Game 1 Winner", "O/U 2.5 Games". */
+  groupItemTitle: z.string().nullish(),
   state: z.looseObject({
     closed: z.boolean().nullish(),
     acceptingOrders: z.boolean().nullish(),
@@ -25,6 +30,8 @@ export const PolymarketMarketSchema = z.looseObject({
   }),
   sports: z.looseObject({
     sportsMarketType: z.string().nullish(),
+    /** Mức chấp của outcome yes (vd map_handicap: yes=INFURITY, line=-1.5). */
+    line: decimal.nullish(),
     gameStartTime: z.string().nullish(),
   }),
 });
@@ -68,6 +75,26 @@ export const PolymarketStreamEventSchema = z.discriminatedUnion('type', [
   z.looseObject({
     type: z.literal('market_resolved'),
     payload: z.looseObject({ assetIds: z.array(z.string()).nullish() }),
+  }),
+  z.looseObject({
+    type: z.literal('last_trade_price'),
+    payload: z.looseObject({
+      assetId: z.string(),
+      price: decimal,
+      side: z.enum(['BUY', 'SELL']),
+    }),
+  }),
+  z.looseObject({
+    type: z.literal('tick_size_change'),
+    payload: z.looseObject({
+      assetId: z.string(),
+      oldTickSize: decimal.nullish(),
+      newTickSize: decimal,
+    }),
+  }),
+  z.looseObject({
+    type: z.literal('new_market'),
+    payload: z.looseObject({ id: z.string(), market: z.string() }),
   }),
 ]);
 

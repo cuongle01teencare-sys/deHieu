@@ -19,7 +19,10 @@ export interface PolymarketEventsParams {
 
 /**
  * Lấy danh sách trận + market (outcomes, tokenId, giá...) bằng @polymarket/client.
- * Mỗi trang → emit(Event[] dạng chuẩn của SDK, 'events'). Không lọc, không ánh xạ.
+ * Mỗi vòng quét:
+ *   emit({ cycle }, 'cycle-start') → mỗi trang emit(Event[], 'events') → emit({ cycle, pages }, 'cycle-complete')
+ * 'cycle-complete' chỉ phát khi quét HẾT danh sách không lỗi, để ACL biết market nào đã biến mất.
+ * Không lọc, không ánh xạ.
  */
 export class PolymarketEventsTask implements Task<PolymarketEventsParams> {
   async run(ctx: TaskContext<PolymarketEventsParams>): Promise<void> {
@@ -28,8 +31,12 @@ export class PolymarketEventsTask implements Task<PolymarketEventsParams> {
       environment: polymarketEnvironment(p.endpoints),
     });
 
+    let cycle = 0;
     while (!ctx.signal.aborted) {
+      cycle++;
+      let pageCount = 0;
       try {
+        ctx.emit({ cycle }, 'cycle-start');
         const pages = client.listEvents({
           tagIds: [...p.tagIds],
           closed: false,
@@ -39,7 +46,9 @@ export class PolymarketEventsTask implements Task<PolymarketEventsParams> {
         for await (const page of pages) {
           if (ctx.signal.aborted) return;
           ctx.emit(page.items, 'events');
+          pageCount++;
         }
+        ctx.emit({ cycle, pages: pageCount }, 'cycle-complete');
       } catch (e: unknown) {
         if (ctx.signal.aborted) return; // lỗi tạm thời: vòng sau thử lại
         ctx.warn(e);

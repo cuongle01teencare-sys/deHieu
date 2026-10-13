@@ -145,4 +145,83 @@ describe('Repository của admin (PGlite + migration thật)', () => {
     expect(await repo.deleteOlderThan(new Date(2_500))).toBe(2);
     expect(await repo.list({ limit: 10, offset: 0 })).toHaveLength(1);
   });
+
+  it('giữ lại: chỉ xóa sự cố ĐÃ ĐÓNG quá hạn, theo lô', async () => {
+    const repo = new DrizzleIncidentRepository(tx);
+    const id = (n: number) => `00000000-0000-4000-8000-00000000010${n}`;
+    await repo.save(incident({ id: id(1), resolvedAt: 1_000 }));
+    await repo.save(incident({ id: id(2), resolvedAt: 2_000 }));
+    await repo.save(incident({ id: id(3), resolvedAt: 9_000 })); // còn hạn
+    await repo.save(incident({ id: id(4), resolvedAt: null })); // đang mở
+    const before = new Date(5_000);
+    expect(await repo.purgeOlderThan(before, 1)).toBe(1);
+    expect(await repo.purgeOlderThan(before, 10)).toBe(1);
+    expect(await repo.purgeOlderThan(before, 10)).toBe(0);
+    const left = await repo.list({ limit: 10, offset: 0 });
+    expect(left.map((x) => x.id).sort()).toEqual([id(3), id(4)]);
+  });
+
+  it('giữ lại: xóa audit quá hạn theo lô', async () => {
+    const repo = new DrizzleAuditRepository(tx);
+    for (const [n, at] of [
+      [1, 1_000],
+      [2, 2_000],
+      [3, 9_000],
+    ] as const)
+      await repo.insert({
+        id: `00000000-0000-4000-8000-0000000002${n}0`,
+        at,
+        principalId: 'alice',
+        roles: ['admin'],
+        method: 'POST',
+        route: '/tasks',
+        path: '/tasks',
+        params: {},
+        body: null,
+        ok: true,
+        status: 201,
+        error: null,
+        durationMs: 1,
+      });
+    expect(await repo.purgeOlderThan(new Date(5_000), 10)).toBe(2);
+    expect(await repo.list({ limit: 10, offset: 0 })).toHaveLength(1);
+  });
+
+  it('đếm: cùng bộ lọc với list, bỏ qua limit/offset', async () => {
+    const repo = new DrizzleAuditRepository(tx);
+    for (const [n, at, who] of [
+      [1, 1_000, 'alice'],
+      [2, 2_000, 'alice'],
+      [3, 3_000, 'bob'],
+    ] as const)
+      await repo.insert({
+        id: `00000000-0000-4000-8000-0000000003${n}0`,
+        at,
+        principalId: who,
+        roles: ['admin'],
+        method: 'POST',
+        route: '/tasks',
+        path: '/tasks',
+        params: {},
+        body: null,
+        ok: true,
+        status: 201,
+        error: null,
+        durationMs: 1,
+      });
+    const q = { principalId: 'alice', limit: 1, offset: 0 };
+    expect(await repo.list(q)).toHaveLength(1);
+    expect(await repo.count(q)).toBe(2);
+    expect(
+      await repo.count({ from: new Date(2_500), limit: 1, offset: 0 }),
+    ).toBe(1);
+
+    const incidents = new DrizzleIncidentRepository(tx);
+    await incidents.save(incident());
+    expect(await incidents.count({ open: true, limit: 1, offset: 0 })).toBe(1);
+    expect(await incidents.count({ open: false, limit: 1, offset: 0 })).toBe(0);
+
+    const transitions = new DrizzleOddsTransitionRepository(tx);
+    expect(await transitions.count({ limit: 1, offset: 0 })).toBe(0);
+  });
 });

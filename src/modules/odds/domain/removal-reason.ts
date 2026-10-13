@@ -6,6 +6,8 @@
  *  - start_time_mismatch : giờ bắt đầu giữa hai bên lệch quá ngưỡng
  *  - publisher_stopped   : publisher cung cấp một chân đã chết hẳn / bị dừng
  *  - phase_disabled      : kênh (live/prematch) của kèo đang bị tắt
+ *  - match_expired       : đã quá giờ bắt đầu + thời lượng tối đa của trận → trận coi như đã xong
+ *  - missing_from_listing: market không còn trong danh sách của tenant (vắng nhiều vòng quét liên tiếp)
  */
 export const CANCEL_REASONS = [
   'below_threshold',
@@ -14,6 +16,8 @@ export const CANCEL_REASONS = [
   'start_time_mismatch',
   'publisher_stopped',
   'phase_disabled',
+  'match_expired',
+  'missing_from_listing',
 ] as const;
 
 export type CancelReason = (typeof CANCEL_REASONS)[number];
@@ -21,5 +25,5 @@ export type CancelReason = (typeof CANCEL_REASONS)[number];
 /** Lý do gỡ odds khỏi room, do ACL/use case cung cấp khi biết rõ hơn "leg_removed". */
 export type RemovalReason = Extract<
   CancelReason,
-  'leg_removed' | 'publisher_stopped'
+  'leg_removed' | 'publisher_stopped' | 'match_expired' | 'missing_from_listing'
 >;

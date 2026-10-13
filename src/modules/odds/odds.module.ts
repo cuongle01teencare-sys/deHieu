@@ -45,7 +45,11 @@ import {
 import { TeamNameResolver } from './application/team-name.resolver.js';
 import { ArbitrageEvaluator } from './application/arbitrage-evaluator.js';
 import { IngestTaskDataHandler } from './application/commands/ingest-task-data.command.js';
+import { IngestStats } from './application/ingest-stats.js';
+import { GetIngestStatsHandler } from './application/queries/get-ingest-stats.query.js';
 import { ReleaseTaskOddsHandler } from './application/commands/release-task-odds.command.js';
+import { ResetOddsRoomsHandler } from './application/commands/reset-odds-rooms.command.js';
+import { ExpireFinishedMatchesHandler } from './application/commands/expire-finished-matches.command.js';
 import { OddsLineApplier } from './application/odds-line-applier.js';
 import { LaneDispatcher } from './application/lane-dispatcher.js';
 import { ListLanesHandler } from './application/queries/list-lanes.query.js';
@@ -66,6 +70,8 @@ import {
   type OpsEventBus,
 } from '../../shared/application/ops-event-bus.js';
 import { ListRoomsHandler } from './application/queries/list-rooms.query.js';
+import { ListMatchesHandler } from './application/queries/list-matches.query.js';
+import { GetMatchHandler } from './application/queries/get-match.query.js';
 import { GetArbitrageStatsHandler } from './application/queries/get-arbitrage-stats.query.js';
 // infrastructure (adapter thay được: đổi 1 dòng useFactory)
 import { DrizzleTeamAliasRepository } from './infrastructure/persistence/drizzle/drizzle-team-alias.repository.js';
@@ -84,12 +90,14 @@ import { SignalHistoryRecorder } from './application/signal-history.recorder.js'
 import { ListSignalHistoryHandler } from './application/queries/list-signal-history.query.js';
 import { GetSignalHistoryHandler } from './application/queries/get-signal-history.query.js';
 import { AbandonActiveSignalsHandler } from './application/commands/abandon-active-signals.command.js';
+import { PurgeSignalHistoryHandler } from './application/commands/purge-signal-history.command.js';
 // presentation
 import { TeamAliasesController } from './presentation/team-aliases.controller.js';
 import { ConsumersController } from './presentation/consumers.controller.js';
 import { ArbitrageController } from './presentation/arbitrage.controller.js';
 
 const SWEEP_INTERVAL_MS = 5_000;
+const EXPIRE_INTERVAL_MS = 60_000;
 
 @Module({
   imports: [TasksModule],
@@ -122,6 +130,7 @@ const SWEEP_INTERVAL_MS = 5_000;
       useFactory: (cfg: ConfigService<Env, true>, ops: OpsEventBus) => {
         const hub = new ConsumerHub({
           port: cfg.get('CONSUMER_WS_PORT'),
+          host: cfg.get('WS_BIND_HOST'),
           token: cfg.get('CONSUMER_WS_TOKEN'),
           onPresence: (change, c) =>
             ops.publish({
@@ -180,6 +189,12 @@ const SWEEP_INTERVAL_MS = 5_000;
       useFactory: (r: SignalHistoryRepository) =>
         new AbandonActiveSignalsHandler(r),
     },
+    {
+      provide: PurgeSignalHistoryHandler,
+      inject: [SIGNAL_HISTORY_REPOSITORY],
+      useFactory: (r: SignalHistoryRepository) =>
+        new PurgeSignalHistoryHandler(r),
+    },
     { provide: CONSUMER_CONTROL, useExisting: ConsumerHub },
 
     // ---------- application services
@@ -188,22 +203,43 @@ const SWEEP_INTERVAL_MS = 5_000;
       inject: [TEAM_ALIAS_REPOSITORY],
       useFactory: (repo: TeamAliasRepository) => new TeamNameResolver(repo),
     },
+    { provide: IngestStats, useValue: new IngestStats() },
+    {
+      provide: GetIngestStatsHandler,
+      inject: [IngestStats],
+      useFactory: (s: IngestStats) => new GetIngestStatsHandler(s),
+    },
     {
       provide: RAW_ODDS_TRANSLATORS,
-      inject: [TeamNameResolver, TaskSupervisor],
+      inject: [TeamNameResolver, TaskSupervisor, IngestStats, OPS_EVENT_BUS],
       useFactory: (
         teams: TeamNameResolver,
         supervisor: TaskSupervisor,
+        stats: IngestStats,
+        ops: OpsEventBus,
       ): RawOddsTranslator[] => [
-        new SptPubOddsTranslator(teams),
-        new PolymarketOddsTranslator(teams, async (op, assetIds) => {
-          // gửi tới mọi task stream đang chạy; lệnh idempotent nên gửi lại toàn bộ cũng an toàn
-          const streams = (await supervisor.list()).filter(
-            (t) => t.spec.kind === 'polymarket.stream' && t.state === 'RUNNING',
-          );
-          for (const t of streams)
-            await supervisor.command(t.spec.taskId, op, { assetIds });
-        }),
+        new SptPubOddsTranslator(teams, stats.reporter('sptpub')),
+        new PolymarketOddsTranslator(
+          teams,
+          async (op, assetIds) => {
+            // gửi tới mọi task stream đang chạy; lệnh idempotent nên gửi lại toàn bộ cũng an toàn
+            const streams = (await supervisor.list()).filter(
+              (t) =>
+                t.spec.kind === 'polymarket.stream' && t.state === 'RUNNING',
+            );
+            for (const t of streams)
+              await supervisor.command(t.spec.taskId, op, { assetIds });
+          },
+          stats.reporter('polymarket'),
+          // mỗi vòng đối chiếu danh sách → admin (sự cố khi gỡ hàng loạt bất thường)
+          (r) =>
+            ops.publish({
+              type: 'odds.reconciled',
+              topic: 'odds',
+              at: Date.now(),
+              data: { tenant: 'polymarket', ...r },
+            }),
+        ),
       ],
     },
     {
@@ -244,15 +280,27 @@ const SWEEP_INTERVAL_MS = 5_000;
     },
     {
       provide: IngestTaskDataHandler,
-      inject: [RAW_ODDS_TRANSLATORS, LaneDispatcher],
-      useFactory: (t: RawOddsTranslator[], l: LaneDispatcher) =>
-        new IngestTaskDataHandler(t, l),
+      inject: [RAW_ODDS_TRANSLATORS, LaneDispatcher, IngestStats],
+      useFactory: (t: RawOddsTranslator[], l: LaneDispatcher, s: IngestStats) =>
+        new IngestTaskDataHandler(t, l, s),
     },
     {
       provide: ReleaseTaskOddsHandler,
       inject: [RAW_ODDS_TRANSLATORS, LaneDispatcher],
       useFactory: (t: RawOddsTranslator[], l: LaneDispatcher) =>
         new ReleaseTaskOddsHandler(t, l),
+    },
+    {
+      provide: ResetOddsRoomsHandler,
+      inject: [ODDS_ROOM_STORE, OPS_EVENT_BUS],
+      useFactory: (r: OddsRoomStore, ops: OpsEventBus) =>
+        new ResetOddsRoomsHandler(r, ops),
+    },
+    {
+      provide: ExpireFinishedMatchesHandler,
+      inject: [ODDS_ROOM_STORE, LaneDispatcher],
+      useFactory: (r: OddsRoomStore, l: LaneDispatcher) =>
+        new ExpireFinishedMatchesHandler(r, l),
     },
     {
       provide: ListLanesHandler,
@@ -315,6 +363,18 @@ const SWEEP_INTERVAL_MS = 5_000;
         new ListRoomsHandler(r, s),
     },
     {
+      provide: ListMatchesHandler,
+      inject: [ODDS_ROOM_STORE, ARBITRAGE_SETTINGS_STORE],
+      useFactory: (r: OddsRoomStore, s: ArbitrageSettingsStore) =>
+        new ListMatchesHandler(r, s),
+    },
+    {
+      provide: GetMatchHandler,
+      inject: [ODDS_ROOM_STORE, ARBITRAGE_SETTINGS_STORE],
+      useFactory: (r: OddsRoomStore, s: ArbitrageSettingsStore) =>
+        new GetMatchHandler(r, s),
+    },
+    {
       provide: GetArbitrageStatsHandler,
       inject: [ListRoomsHandler, ArbitrageEvaluator, SIGNAL_STATE_STORE],
       useFactory: (
@@ -346,6 +406,9 @@ const SWEEP_INTERVAL_MS = 5_000;
     ListLanesHandler,
     GetArbitrageSettingsHandler,
     GetRoomHandler,
+    GetIngestStatsHandler,
+    GetMatchHandler,
+    PurgeSignalHistoryHandler,
     CONSUMER_CONTROL,
     SignalHistoryRecorder,
   ],
@@ -353,6 +416,7 @@ const SWEEP_INTERVAL_MS = 5_000;
 export class OddsModule implements OnModuleInit, OnApplicationShutdown {
   private readonly _logger = new Logger(OddsModule.name);
   private _sweep: ReturnType<typeof setInterval> | null = null;
+  private _expire: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     @Inject(TaskSupervisor) private readonly _supervisor: TaskSupervisor,
@@ -368,6 +432,11 @@ export class OddsModule implements OnModuleInit, OnApplicationShutdown {
     private readonly _history: SignalHistoryRecorder,
     @Inject(AbandonActiveSignalsHandler)
     private readonly _abandon: AbandonActiveSignalsHandler,
+    @Inject(ResetOddsRoomsHandler)
+    private readonly _reset: ResetOddsRoomsHandler,
+    @Inject(ExpireFinishedMatchesHandler)
+    private readonly _expireHandler: ExpireFinishedMatchesHandler,
+    @Inject(ConfigService) private readonly _cfg: ConfigService<Env, true>,
   ) {}
 
   async onModuleInit() {
@@ -382,6 +451,19 @@ export class OddsModule implements OnModuleInit, OnApplicationShutdown {
       const c = e instanceof Error ? e.cause : undefined;
       const cause = c instanceof Error ? ` — ${c.message}` : '';
       this._logger.error(`không đóng được kèo cũ: ${String(e)}${cause}`);
+    }
+
+    // dòng kèo từ lần chạy trước không còn bảng định tuyến (RAM) → mồ côi: xóa trước khi nhận dữ liệu
+    if (this._cfg.get('RESET_ROOMS_ON_START', { infer: true })) {
+      try {
+        const r = await this._reset.execute({ reason: 'reset_on_start' });
+        if (r.rooms)
+          this._logger.warn(
+            `đã xóa ${r.rooms} room (${r.lines} dòng kèo) từ lần chạy trước`,
+          );
+      } catch (e: unknown) {
+        this._logger.error(`không xóa được room cũ: ${String(e)}`);
+      }
     }
 
     // adapter đầu vào: mọi publisher (worker/microservice) → use case ingest
@@ -410,10 +492,23 @@ export class OddsModule implements OnModuleInit, OnApplicationShutdown {
         .execute()
         .catch((e: unknown) => this._logger.error(String(e)));
     }, SWEEP_INTERVAL_MS);
+
+    // lưới an toàn: gỡ dòng kèo của trận chắc chắn đã kết thúc
+    const maxMatchDurationMs =
+      this._cfg.get('MATCH_MAX_DURATION_HOURS', { infer: true }) * 3_600_000;
+    this._expire = setInterval(() => {
+      this._expireHandler
+        .execute({ maxMatchDurationMs })
+        .then((n) => {
+          if (n) this._logger.log(`gỡ ${n} dòng kèo của trận đã kết thúc`);
+        })
+        .catch((e: unknown) => this._logger.error(String(e)));
+    }, EXPIRE_INTERVAL_MS);
   }
 
   async onApplicationShutdown() {
     if (this._sweep) clearInterval(this._sweep);
+    if (this._expire) clearInterval(this._expire);
     await this._hub.close();
     await this._history.flush();
   }

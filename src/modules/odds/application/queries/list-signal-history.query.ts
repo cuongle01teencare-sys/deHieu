@@ -1,3 +1,4 @@
+import type { Page } from '../../../../shared/application/page.js';
 import type { QueryHandler } from '../../../../shared/application/cqrs.js';
 import type { SignalHistoryEntry } from '../../domain/signal-history.js';
 import type {
@@ -9,11 +10,15 @@ export type ListSignalHistoryQuery = SignalHistoryQuery;
 
 export class ListSignalHistoryHandler implements QueryHandler<
   ListSignalHistoryQuery,
-  SignalHistoryEntry[]
+  Page<SignalHistoryEntry>
 > {
   constructor(private readonly _repo: SignalHistoryRepository) {}
 
-  execute(q: ListSignalHistoryQuery) {
-    return this._repo.list(q);
+  async execute(q: ListSignalHistoryQuery): Promise<Page<SignalHistoryEntry>> {
+    const [items, total] = await Promise.all([
+      this._repo.list(q),
+      this._repo.count(q),
+    ]);
+    return { total, items };
   }
 }

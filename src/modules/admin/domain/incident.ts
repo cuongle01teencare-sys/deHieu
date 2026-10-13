@@ -7,7 +7,7 @@ export type IncidentSeverity = 'warning' | 'critical';
 export interface Incident {
   readonly id: string;
   readonly key: string;
-  /** Loại: task.failed | task.flapping | source.stale | node.down | infra.down | consumer.down | consumer.backlog | lane.backlog */
+  /** Loại: task.failed | task.flapping | source.stale | node.down | infra.down | consumer.down | consumer.backlog | lane.backlog | odds.mass_removal */
   readonly kind: string;
   readonly severity: IncidentSeverity;
   readonly title: string;

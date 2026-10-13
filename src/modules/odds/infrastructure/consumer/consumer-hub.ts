@@ -1,4 +1,10 @@
 import { WebSocketServer, WebSocket, type RawData } from 'ws';
+import { safeEqual } from '../../../../shared/infrastructure/security/safe-equal.js';
+import {
+  DEFAULT_HELLO_TIMEOUT_MS,
+  SMALL_FRAME_BYTES,
+  type WsServerLimits,
+} from '../../../../shared/infrastructure/security/ws-limits.js';
 import type { EventPublisher } from '../../../../shared/application/event-publisher.js';
 import type { DomainEvent } from '../../../../shared/domain/domain-event.js';
 import type { ArbitrageSignal } from '../../domain/arbitrage-signal.js';
@@ -39,7 +45,7 @@ interface ConsumerSession {
   pending: Map<string, Pending>;
 }
 
-export interface ConsumerHubOptions {
+export interface ConsumerHubOptions extends WsServerLimits {
   readonly port: number;
   readonly token: string;
   readonly retryIntervalMs?: number;
@@ -65,7 +71,11 @@ export class ConsumerHub implements EventPublisher, ConsumerControl {
   constructor(private readonly _opts: ConsumerHubOptions) {}
 
   listen(): void {
-    this._server = new WebSocketServer({ port: this._opts.port });
+    this._server = new WebSocketServer({
+      port: this._opts.port,
+      host: this._opts.host,
+      maxPayload: this._opts.maxPayloadBytes ?? SMALL_FRAME_BYTES,
+    });
     this._server.on('connection', (ws) => this._onConnection(ws));
     this._timer = setInterval(
       () => this._tick(),
@@ -152,6 +162,11 @@ export class ConsumerHub implements EventPublisher, ConsumerControl {
 
   private _onConnection(ws: WebSocket) {
     let session: ConsumerSession | null = null;
+    const helloTimer = setTimeout(() => {
+      if (!session) ws.terminate();
+    }, this._opts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS);
+    ws.on('close', () => clearTimeout(helloTimer));
+    ws.on('error', () => ws.terminate());
 
     ws.on('message', (raw) => {
       let frame: ConsumerToAppFrame;
@@ -163,12 +178,14 @@ export class ConsumerHub implements EventPublisher, ConsumerControl {
 
       if (frame.type === 'hello') {
         if (
-          frame.token !== this._opts.token ||
-          frame.v !== CONSUMER_PROTOCOL_VERSION
+          !safeEqual(frame.token, this._opts.token) ||
+          frame.v !== CONSUMER_PROTOCOL_VERSION ||
+          typeof frame.consumerId !== 'string'
         ) {
           ws.send(JSON.stringify({ type: 'rejected', reason: 'BAD_HELLO' }));
           return ws.close();
         }
+        clearTimeout(helloTimer);
         session = this._sessions.get(frame.consumerId) ?? {
           consumerId: frame.consumerId,
           role: frame.role,

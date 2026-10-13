@@ -3,13 +3,14 @@ import type { Phase } from './phase.js';
 
 export interface ArbitrageLeg {
   readonly tenant: string;
-  readonly side: Side; // vị trí đội trong MatchKey.teams; bot dùng ref + side để chọn outcome
-  readonly team: string; // tên đã chuẩn hóa
+  readonly side: Side; // phía trong room (xem MarketType); bot dùng ref + side để chọn outcome
+  /** Cửa được chọn, để hiển thị: "alliance", "alliance +1.5", "over 2.5"... (xem pickOf). */
+  readonly pick: string;
   readonly odds: number;
   readonly ref: Readonly<Record<string, string>>;
 }
 
-/** Một tổ hợp: cược đội teams[0] ở legs[0].tenant và teams[1] ở legs[1].tenant. */
+/** Một tổ hợp: cược side 0 ở legs[0].tenant và side 1 ở legs[1].tenant. */
 export interface ArbitrageOpportunity {
   readonly key: MatchKey;
   readonly comboId: string; // vd 'sptpub>0|polymarket>1'

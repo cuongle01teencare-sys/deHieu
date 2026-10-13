@@ -24,11 +24,11 @@ const signal = (id: string, margin: number): ArbitrageSignal => ({
     {
       tenant: 'polymarket',
       side: 0,
-      team: 'alliance',
+      pick: 'alliance',
       odds: 2.08,
       ref: { t0: 'tA' },
     },
-    { tenant: 'sptpub', side: 1, team: 'sinners', odds: 2.26, ref: { e: '1' } },
+    { tenant: 'sptpub', side: 1, pick: 'sinners', odds: 2.26, ref: { e: '1' } },
   ],
   issuedAt: 1_000,
   expiresAt: 31_000,
@@ -108,5 +108,30 @@ describe('Lịch sử kèo (recorder + DrizzleSignalHistoryRepository)', () => {
       status: 'abandoned',
       statusReason: 'app_restart',
     });
+  });
+
+  it('giữ lại: chỉ xóa kèo đã kết thúc phát trước mốc, không đụng kèo active', async () => {
+    await recorder.publish([new ArbitrageSignalIssued(signal('old-1', 0.03))]);
+    await recorder.publish([new ArbitrageSignalIssued(signal('old-2', 0.03))]);
+    await recorder.publish([new ArbitrageSignalIssued(signal('live', 0.03))]);
+    await recorder.flush();
+    await repo.close('old-1', 'cancelled', 'below_threshold', new Date(2_000));
+    await repo.close('old-2', 'superseded', null, new Date(2_000), 'live');
+    const before = new Date(5_000); // cả ba phát lúc 1_000
+    expect(await repo.purgeOlderThan(before, 1)).toBe(1);
+    expect(await repo.purgeOlderThan(before, 10)).toBe(1);
+    expect(await repo.purgeOlderThan(before, 10)).toBe(0);
+    expect(await repo.get('live')).toMatchObject({ status: 'active' });
+  });
+
+  it('đếm theo bộ lọc (cho phân trang)', async () => {
+    await recorder.publish([new ArbitrageSignalIssued(signal('c1', 0.03))]);
+    await recorder.publish([new ArbitrageSignalIssued(signal('c2', 0.03))]);
+    await recorder.flush();
+    await repo.close('c1', 'cancelled', 'below_threshold', new Date(2_000));
+    expect(await repo.count({ limit: 1, offset: 0 })).toBe(2);
+    expect(await repo.count({ status: 'cancelled', limit: 1, offset: 0 })).toBe(
+      1,
+    );
   });
 });

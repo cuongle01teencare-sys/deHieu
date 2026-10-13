@@ -28,11 +28,37 @@ export class MatchKey {
     return new MatchKey(p.sport, teams, p.market);
   }
 
+  /**
+   * `team` có đứng ở teams[0] khi ghép với `other` không — cùng quy tắc sắp với of().
+   * Translator cần biết trước khi tạo key, vì market (vd mức chấp) quy theo teams[0].
+   */
+  static isFirst(team: string, other: string): boolean {
+    return [team, other].sort()[0] === team;
+  }
+
   /** room:cs2:alliance~sinners:game-winner */
   static parse(raw: string): MatchKey | null {
     const m = /^room:([^:]+):([^~:]+)~([^:]+):([^:]+)$/.exec(raw);
     if (!m) return null;
     return new MatchKey(m[1], [m[2], m[3]], m[4] as MarketType);
+  }
+
+  /** Id của trận (bỏ market): 'cs2:alliance~sinners'. Mọi room cùng trận có chung id này. */
+  matchId(): string {
+    return `${this.sport}:${this.teams[0]}~${this.teams[1]}`;
+  }
+
+  /** Cùng trận, market khác. */
+  withMarket(market: MarketType): MatchKey {
+    return new MatchKey(this.sport, this.teams, market);
+  }
+
+  /** 'cs2:alliance~sinners' → { sport, teams }; sai dạng → null. */
+  static parseMatchId(
+    raw: string,
+  ): { sport: string; teams: readonly [string, string] } | null {
+    const m = /^([^:~]+):([^~:]+)~([^:~]+)$/.exec(raw);
+    return m && m[2] < m[3] ? { sport: m[1], teams: [m[2], m[3]] } : null;
   }
 
   sideOf(team: string): Side | null {

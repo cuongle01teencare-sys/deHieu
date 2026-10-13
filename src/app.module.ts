@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { APP_FILTER } from '@nestjs/core';
 import { ConfigModule } from '@nestjs/config';
 import { createObserveModule } from '@nestjs/observe';
 import { AppController } from './app.controller.js';
@@ -11,8 +12,35 @@ import { TasksModule } from './modules/tasks/tasks.module.js';
 import { OddsModule } from './modules/odds/odds.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
 import { OpsEventsModule } from './shared/infrastructure/ops/ops-events.module.js';
+import { ZodErrorFilter } from './shared/presentation/zod-error.filter.js';
 
-export const { ObserveModule, ObserveInstrument } = createObserveModule();
+/**
+ * Lớp chạy nền theo sự kiện (message từ publisher, làn xử lý, stream WS): callback của chúng kế thừa
+ * ngữ cảnh trace của request đã khởi động task (vd POST /tasks). Request kết thúc → trace đóng → Observe
+ * báo "No snapshot found for traceId ... TaskSupervisor#_onMessage" với MỖI message. Bỏ đo các lớp này
+ * (đằng nào cũng là hàng nghìn span/giây, không hữu ích mà tốn hạn mức).
+ */
+const BACKGROUND_CLASSES = new Set([
+  'TaskSupervisor',
+  'WsRemoteTaskLauncher',
+  'IngestTaskDataHandler',
+  'ReleaseTaskOddsHandler',
+  'LaneDispatcher',
+  'OddsLineApplier',
+  'ArbitrageEvaluator',
+  'ConsumerHub',
+  'AdminWsHub',
+  'OddsTransitionRecorder',
+  'SignalHistoryRecorder',
+]);
+
+export const { ObserveModule, ObserveInstrument } = createObserveModule({
+  skipInstrumentation: (instance) =>
+    BACKGROUND_CLASSES.has(
+      (instance as { constructor?: { name?: string } } | null)?.constructor
+        ?.name ?? '',
+    ),
+});
 
 // ConfigModule chưa nạp .env ở thời điểm file này được đánh giá → tự nạp sớm (không ghi đè biến đã có).
 try {
@@ -52,6 +80,10 @@ export const observeEnabled = Boolean(
     AdminModule, // sự cố + cảnh báo, stream dashboard, audit
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    // lỗi validate (zod) → 400 thay vì 500
+    { provide: APP_FILTER, useClass: ZodErrorFilter },
+  ],
 })
 export class AppModule {}

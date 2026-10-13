@@ -4,6 +4,10 @@ import type {
   RawOddsTranslator,
 } from '../../../application/raw-odds.translator.js';
 import type { TeamNameResolver } from '../../../application/team-name.resolver.js';
+import {
+  NO_SKIP_REPORTER,
+  type SkipReporter,
+} from '../../../application/ingest-stats.js';
 import { MatchKey, type Side } from '../../../domain/match-key.js';
 import { OddsLine } from '../../../domain/odds-line.js';
 import type { Phase } from '../../../domain/phase.js';
@@ -37,6 +41,36 @@ export type SyncAssets = (
   assetIds: string[],
 ) => Promise<void>;
 
+/** Kết quả một vòng đối chiếu danh sách market của task descriptor. */
+export interface CycleReport {
+  readonly taskId: string;
+  readonly known: number;
+  readonly seen: number;
+  readonly pending: number;
+  readonly removed: number;
+  readonly held: number;
+  readonly ratio: number;
+  readonly massive: boolean;
+}
+
+export interface ReconcileOptions {
+  /** Vắng mặt ngần này vòng LIÊN TIẾP mới gỡ (chống lệch phân trang khi danh sách đang đổi). */
+  readonly missingCycles: number;
+  /** Tỉ lệ market đủ điều kiện gỡ / market đang sở hữu vượt ngưỡng này = bất thường. */
+  readonly massiveRatio: number;
+  /** Chỉ coi là bất thường khi task sở hữu ít nhất ngần này market. */
+  readonly massiveMinKnown: number;
+  /** Bất thường thì giữ lại (không gỡ) tối đa ngần này vòng, sau đó vẫn gỡ. */
+  readonly maxHeldCycles: number;
+}
+
+export const DEFAULT_RECONCILE_OPTIONS: ReconcileOptions = {
+  missingCycles: 2,
+  massiveRatio: 0.3,
+  massiveMinKnown: 10,
+  maxHeldCycles: 5,
+};
+
 /**
  * ACL Polymarket. Mỗi đội là một token có ask riêng → odds = 1 / best_ask của token đội đó.
  * Giữ bảng định tuyến token → market (lấy từ task 'polymarket.descriptor'); live/prematch tách theo trạng thái trận.
@@ -53,10 +87,29 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
   constructor(
     private readonly _teams: TeamNameResolver,
     private readonly _sync: SyncAssets = () => Promise.resolve(),
+    /** Báo dữ liệu bị bỏ qua (theo lý do) cho bộ đếm ingest. */
+    private readonly _skip: SkipReporter = NO_SKIP_REPORTER,
+    /** Báo kết quả mỗi vòng đối chiếu (admin: sự cố khi gỡ hàng loạt). */
+    private readonly _onCycle: (r: CycleReport) => void = () => undefined,
+    private readonly _reconcile: ReconcileOptions = DEFAULT_RECONCILE_OPTIONS,
   ) {}
 
+  /** taskId → conditionId đã thấy trong vòng quét đang chạy. */
+  private readonly _cycleSeen = new Map<string, Set<string>>();
+  /** conditionId → số vòng liên tiếp vắng mặt. */
+  private readonly _misses = new Map<string, number>();
+  /** taskId → số vòng liên tiếp đã giữ lại vì gỡ hàng loạt bất thường. */
+  private readonly _held = new Map<string, number>();
+
   translate(msg: TaskDataMessage): Promise<OddsLineChange[]> {
-    if (msg.kind === 'polymarket.descriptor') return this._onEvents(msg);
+    if (msg.kind === 'polymarket.descriptor') {
+      if (msg.channel === 'cycle-start') {
+        this._cycleSeen.set(msg.taskId, new Set());
+        return Promise.resolve([]);
+      }
+      if (msg.channel === 'cycle-complete') return this._onCycleComplete(msg);
+      return this._onEvents(msg);
+    }
     if (msg.kind === 'polymarket.stream')
       return Promise.resolve(this._onStream(msg));
     return Promise.resolve([]);
@@ -64,37 +117,73 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
 
   private async _onEvents(msg: TaskDataMessage): Promise<OddsLineChange[]> {
     const page = PolymarketEventsPayloadSchema.safeParse(msg.payload);
-    if (!page.success) return [];
+    if (!page.success) {
+      this._skip(msg.kind, 'parse_failed');
+      return [];
+    }
     const changes: OddsLineChange[] = [];
     const dropped: string[] = [];
 
     for (const raw of page.data) {
       const ev = PolymarketEventSchema.safeParse(raw);
-      if (!ev.success) continue;
+      if (!ev.success) {
+        this._skip(msg.kind, 'parse_failed');
+        continue;
+      }
       const sport = POLYMARKET_SPORTS[ev.data.sports.sport?.sport ?? ''];
-      if (!sport) continue;
+      if (!sport) {
+        this._skip(msg.kind, 'unsupported_sport');
+        continue;
+      }
+      // market có outcome không phải tên đội (vd totals: Over/Under) lấy cặp đội từ moneyline của event
+      const eventTeams = this._eventTeams(ev.data.markets);
 
       for (const rawMarket of ev.data.markets) {
         const parsed = PolymarketMarketSchema.safeParse(rawMarket);
-        if (!parsed.success) continue;
+        if (!parsed.success) {
+          this._skip(msg.kind, 'parse_failed');
+          continue;
+        }
         const m = parsed.data;
-        const market = POLYMARKET_MARKETS[m.sports.sportsMarketType ?? ''];
+        const mapping = POLYMARKET_MARKETS[m.sports.sportsMarketType ?? ''];
         const startIso = m.sports.gameStartTime ?? ev.data.schedule.startTime;
         const { yes, no } = m.outcomes;
-        if (
-          !market ||
-          !m.conditionId ||
-          !startIso ||
-          !yes.tokenId ||
-          !no.tokenId
-        )
+        if (!mapping) {
+          this._skip(msg.kind, 'unsupported_market');
           continue;
+        }
+        if (!m.conditionId || !startIso || !yes.tokenId || !no.tokenId) {
+          this._skip(msg.kind, 'missing_fields');
+          continue;
+        }
 
-        const names = [
-          this._teams.resolve(yes.label),
-          this._teams.resolve(no.label),
-        ];
-        if (!names[0] || !names[1] || names[0] === names[1]) continue;
+        let names: [string, string];
+        let yesFirst: boolean;
+        if (mapping.outcomesBy === 'team') {
+          names = [
+            this._teams.resolve(yes.label),
+            this._teams.resolve(no.label),
+          ];
+          if (!names[0] || !names[1] || names[0] === names[1]) {
+            this._skip(msg.kind, 'same_team_names');
+            continue;
+          }
+          // đội của outcome yes có phải teams[0] không: quyết định thứ tự token và dấu mức chấp
+          yesFirst = MatchKey.isFirst(names[0], names[1]);
+        } else {
+          if (!eventTeams) {
+            // không biết trận của đội nào → không ghép được
+            this._skip(msg.kind, 'no_moneyline_teams');
+            continue;
+          }
+          names = eventTeams;
+          yesFirst = true; // yes/no đã là side 0/side 1 (vd over/under), giữ nguyên
+        }
+        const market = mapping.toMarket(m, yesFirst);
+        if (!market) {
+          this._skip(msg.kind, 'unsupported_line'); // mức/mốc/số map không hỗ trợ
+          continue;
+        }
         const key = MatchKey.of({
           sport,
           teamX: names[0],
@@ -114,7 +203,7 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
           continue;
         }
 
-        const flip = key.sideOf(names[0]) !== 0;
+        const flip = !yesFirst;
         const tokens: [string, string] = flip
           ? [no.tokenId, yes.tokenId]
           : [yes.tokenId, no.tokenId];
@@ -128,6 +217,7 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
         // trạng thái live lấy từ danh sách trận; thiếu thì suy theo giờ bắt đầu
         const phase: Phase =
           (ev.data.state?.live ?? startsAt <= msg.sentAt) ? 'live' : 'prematch';
+        this._cycleSeen.get(msg.taskId)?.add(m.conditionId);
         let route = this._markets.get(m.conditionId);
         if (route) {
           route.phase = phase; // trận chuyển prematch → live
@@ -163,25 +253,103 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
     return changes;
   }
 
+  /**
+   * Hết một vòng quét: market do task này khai báo mà vắng mặt `missingCycles` vòng liên tiếp → gỡ
+   * (missing_from_listing). Nếu số market phải gỡ bất thường (API lỗi trả thiếu?) thì giữ lại tối đa
+   * `maxHeldCycles` vòng và báo ra ngoài; vòng không có cycle-start hoặc 0 trang → không đối chiếu.
+   */
+  private async _onCycleComplete(
+    msg: TaskDataMessage,
+  ): Promise<OddsLineChange[]> {
+    const seen = this._cycleSeen.get(msg.taskId);
+    this._cycleSeen.delete(msg.taskId);
+    const pages = (msg.payload as { pages?: unknown } | null)?.pages;
+    if (!seen || typeof pages !== 'number' || pages === 0) return [];
+
+    const opts = this._reconcile;
+    const owned = [...this._markets.values()].filter(
+      (r) => r.taskId === msg.taskId,
+    );
+    const due: MarketRoute[] = [];
+    let pending = 0;
+    for (const r of owned) {
+      if (seen.has(r.conditionId)) {
+        this._misses.delete(r.conditionId);
+        continue;
+      }
+      const n = (this._misses.get(r.conditionId) ?? 0) + 1;
+      this._misses.set(r.conditionId, n);
+      if (n >= opts.missingCycles) due.push(r);
+      else pending++;
+    }
+
+    const ratio = owned.length ? due.length / owned.length : 0;
+    const massive =
+      owned.length >= opts.massiveMinKnown && ratio > opts.massiveRatio;
+    const heldCycles = this._held.get(msg.taskId) ?? 0;
+    const hold = massive && heldCycles < opts.maxHeldCycles;
+    if (hold) this._held.set(msg.taskId, heldCycles + 1);
+    else this._held.delete(msg.taskId);
+
+    const changes: OddsLineChange[] = [];
+    const dropped: string[] = [];
+    if (!hold)
+      for (const r of due) {
+        changes.push({
+          type: 'remove',
+          key: r.key,
+          tenant: this.tenant,
+          phase: r.phase,
+          reason: 'missing_from_listing',
+        });
+        dropped.push(...this._dropMarket(r.conditionId));
+      }
+    if (dropped.length) await this._sync('unsubscribe', dropped);
+
+    this._onCycle({
+      taskId: msg.taskId,
+      known: owned.length,
+      seen: owned.length - due.length - pending,
+      pending,
+      removed: hold ? 0 : due.length,
+      held: hold ? due.length : 0,
+      ratio,
+      massive,
+    });
+    return changes;
+  }
+
   private _onStream(msg: TaskDataMessage): OddsLineChange[] {
     const ev = PolymarketStreamEventSchema.safeParse(msg.payload);
-    if (!ev.success) return [];
+    if (!ev.success) {
+      this._skip(msg.kind, 'parse_failed');
+      return [];
+    }
     const e = ev.data;
+    if (
+      e.type === 'last_trade_price' ||
+      e.type === 'tick_size_change' ||
+      e.type === 'new_market'
+    ) {
+      this._skip(msg.kind, 'unsupported_event');
+      return [];
+    }
     const touched = new Set<string>();
     const changes: OddsLineChange[] = [];
 
     if (e.type === 'price_change')
       e.payload.priceChanges.forEach((p) =>
-        this._setAsk(p.assetId, p.bestAsk, touched),
+        this._setAsk(p.assetId, p.bestAsk, touched, msg.kind),
       );
     else if (e.type === 'best_bid_ask')
-      this._setAsk(e.payload.assetId, e.payload.bestAsk, touched);
+      this._setAsk(e.payload.assetId, e.payload.bestAsk, touched, msg.kind);
     else if (e.type === 'book') {
       const best = Math.min(...e.payload.asks.map((a) => a.price));
       this._setAsk(
         e.payload.assetId,
         Number.isFinite(best) ? best : null,
         touched,
+        msg.kind,
       );
     } else if (e.type === 'market_resolved') {
       for (const t of e.payload.assetIds ?? []) {
@@ -222,6 +390,8 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
         });
       }
     } else if (kind === 'polymarket.descriptor') {
+      this._cycleSeen.delete(taskId);
+      this._held.delete(taskId);
       // mất nguồn danh sách trận: gỡ mọi market do task này khai báo
       const dropped: string[] = [];
       for (const route of [...this._markets.values()])
@@ -243,10 +413,14 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
     assetId: string,
     ask: number | null | undefined,
     touched: Set<string>,
+    kind: string,
   ) {
     const t = this._tokens.get(assetId);
     const route = t && this._markets.get(t.conditionId);
-    if (!t || !route) return;
+    if (!t || !route) {
+      this._skip(kind, 'unknown_asset');
+      return;
+    }
     route.asks[t.side] = validAsk(ask);
     touched.add(t.conditionId);
   }
@@ -275,11 +449,25 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
     };
   }
 
+  /** Cặp đội của event, lấy từ outcome của market moneyline (đã chuẩn hóa); không có → null. */
+  private _eventTeams(markets: readonly unknown[]): [string, string] | null {
+    for (const raw of markets) {
+      const p = PolymarketMarketSchema.safeParse(raw);
+      if (!p.success || p.data.sports.sportsMarketType !== 'moneyline')
+        continue;
+      const a = this._teams.resolve(p.data.outcomes.yes.label);
+      const b = this._teams.resolve(p.data.outcomes.no.label);
+      return a && b && a !== b ? [a, b] : null;
+    }
+    return null;
+  }
+
   /** Trả về các token bị bỏ. */
   private _dropMarket(conditionId: string): string[] {
     const r = this._markets.get(conditionId);
     r?.tokens.forEach((t) => this._tokens.delete(t));
     this._markets.delete(conditionId);
+    this._misses.delete(conditionId);
     return r ? [...r.tokens] : [];
   }
 }

@@ -57,6 +57,8 @@ const setup = () => {
       save: () => Promise.resolve(),
       closeAllOpen: () => Promise.resolve(0),
       list: () => Promise.resolve([]),
+      purgeOlderThan: () => Promise.resolve(0),
+      count: () => Promise.resolve(0),
     },
     { notify: () => Promise.resolve() },
     createBus(),

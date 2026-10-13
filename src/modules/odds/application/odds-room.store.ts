@@ -9,6 +9,8 @@ export interface OddsRoomStore {
   get(key: MatchKey): Promise<OddsRoom>;
   /** Mọi room hiện có — dùng cho quan sát/kiểm chứng (số room cỡ trăm–nghìn). */
   list(): Promise<OddsRoom[]>;
+  /** Xóa MỌI room; trả về số room và số dòng kèo đã xóa. */
+  clear(): Promise<{ rooms: number; lines: number }>;
 }
 
 export const ODDS_ROOM_STORE = Symbol('ODDS_ROOM_STORE');

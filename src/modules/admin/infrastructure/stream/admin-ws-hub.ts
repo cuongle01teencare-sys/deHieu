@@ -6,7 +6,9 @@ import { ADMIN_PERMISSIONS } from '../../application/admin.permissions.js';
 import {
   ADMIN_TOPICS,
   DEFAULT_TOPICS,
+  MAX_MATCH_TOPICS,
   MAX_ROOM_TOPICS,
+  MATCH_TOPIC_PREFIX,
   ROOM_TOPIC_PREFIX,
   type AdminClientFrame,
   type AdminServerFrame,
@@ -16,6 +18,10 @@ import type { GetAdminSnapshotHandler } from '../../application/queries/get-admi
 
 export interface AdminWsHubOptions {
   readonly port: number;
+  /** Địa chỉ nghe ('127.0.0.1' khi đứng sau reverse proxy). */
+  readonly host?: string;
+  /** Kích thước tối đa frame từ client (byte). */
+  readonly maxPayloadBytes?: number;
   readonly metricsIntervalMs?: number;
   readonly helloTimeoutMs?: number;
   readonly pingIntervalMs?: number;
@@ -26,6 +32,16 @@ export interface AdminWsHubOptions {
 type Principal = NonNullable<
   Awaited<ReturnType<Authenticator['authenticate']>>
 >;
+
+/** Phần mở rộng tùy chọn (giữ chữ ký cũ cho test/caller hiện có). */
+export interface AdminHubExtras {
+  /** Ảnh chụp một trận (GET /arbitrage/matches/{id}) — bật topic `match:{id}`. */
+  readonly match?: (match: string) => Promise<unknown>;
+  /** Room id → match id, để chuyển `odds.changed` của room tới người theo dõi trận. */
+  readonly matchOfRoom?: (room: string) => string | null;
+  /** Đổi vé một lần (POST /admin/ws-ticket) lấy principal — cho trình duyệt. */
+  readonly redeemTicket?: (ticket: string) => Principal | null;
+}
 
 interface Client {
   ws: WebSocket;
@@ -62,16 +78,33 @@ export class AdminWsHub {
     private readonly _metrics: MetricsSampler,
     private readonly _room: (room: string) => Promise<unknown>,
     private readonly _onError: (message: string) => void = () => undefined,
+    private readonly _extras: AdminHubExtras = {},
   ) {}
 
   listen(): void {
-    this._server = new WebSocketServer({ port: this._opts.port });
+    this._server = new WebSocketServer({
+      port: this._opts.port,
+      host: this._opts.host,
+      maxPayload: this._opts.maxPayloadBytes ?? 64 * 1024,
+    });
     this._server.on('connection', (ws) => this._onConnection(ws));
     this._server.on('error', (e) => this._onError(`admin ws: ${e.message}`));
     this._unsubscribe = this._ops.subscribe((event) => {
       const frame: AdminServerFrame = { type: 'event', event };
+      // sự kiện của một room cũng tới người đang theo dõi trận chứa room đó
+      const match =
+        event.topic.startsWith(ROOM_TOPIC_PREFIX) && this._extras.matchOfRoom
+          ? this._extras.matchOfRoom(
+              event.topic.slice(ROOM_TOPIC_PREFIX.length),
+            )
+          : null;
+      const matchTopic = match ? `${MATCH_TOPIC_PREFIX}${match}` : null;
       for (const c of this._clients)
-        if (c.principal && c.topics.has(event.topic))
+        if (
+          c.principal &&
+          (c.topics.has(event.topic) ||
+            (matchTopic !== null && c.topics.has(matchTopic)))
+        )
           this._send(c, frame, true);
     });
     this._timers.push(
@@ -148,11 +181,13 @@ export class AdminWsHub {
     if (frame.type === 'hello') {
       if (c.principal) return;
       const principal =
-        typeof frame.token === 'string'
-          ? await this._auth.authenticate({
-              authorization: `Bearer ${frame.token}`,
-            })
-          : null;
+        typeof frame.ticket === 'string' && this._extras.redeemTicket
+          ? this._extras.redeemTicket(frame.ticket)
+          : typeof frame.token === 'string'
+            ? await this._auth.authenticate({
+                authorization: `Bearer ${frame.token}`,
+              })
+            : null;
       if (!principal) {
         this._send(c, { type: 'rejected', reason: 'UNAUTHORIZED' });
         return c.ws.close();
@@ -234,6 +269,17 @@ export class AdminWsHub {
         if (rooms.length >= MAX_ROOM_TOPICS)
           rejected.push(`${t} (tối đa ${MAX_ROOM_TOPICS} room)`);
         else c.topics.add(t);
+      } else if (
+        t.startsWith(MATCH_TOPIC_PREFIX) &&
+        t.length > MATCH_TOPIC_PREFIX.length &&
+        this._extras.match
+      ) {
+        const matches = [...c.topics].filter((x) =>
+          x.startsWith(MATCH_TOPIC_PREFIX),
+        );
+        if (matches.length >= MAX_MATCH_TOPICS)
+          rejected.push(`${t} (tối đa ${MAX_MATCH_TOPICS} trận)`);
+        else c.topics.add(t);
       } else rejected.push(t);
     }
     return rejected;
@@ -244,6 +290,13 @@ export class AdminWsHub {
       if (t.startsWith(ROOM_TOPIC_PREFIX)) {
         const room = t.slice(ROOM_TOPIC_PREFIX.length);
         this._send(c, { type: 'room', room, data: await this._room(room) });
+      } else if (t.startsWith(MATCH_TOPIC_PREFIX) && this._extras.match) {
+        const match = t.slice(MATCH_TOPIC_PREFIX.length);
+        this._send(c, {
+          type: 'match',
+          match,
+          data: await this._extras.match(match),
+        });
       }
   }
 

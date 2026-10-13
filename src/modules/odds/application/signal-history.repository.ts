@@ -28,7 +28,14 @@ export interface SignalHistoryRepository {
   /** Đóng mọi kèo còn 'active' (dùng khi app khởi động lại). Trả về số kèo bị đóng. */
   abandonActive(reason: string, at: Date): Promise<number>;
   list(query: SignalHistoryQuery): Promise<SignalHistoryEntry[]>;
+  /** Số bản ghi khớp bộ lọc (bỏ qua limit/offset) — cho phân trang. */
+  count(query: SignalHistoryQuery): Promise<number>;
   get(signalId: string): Promise<SignalHistoryEntry | null>;
+  /**
+   * Xóa tối đa `limit` kèo ĐÃ KẾT THÚC (không phải active) phát hơn `before` (chính sách giữ lại). Trả về số đã xóa;
+   * gọi lặp tới khi < limit để không khóa bảng lâu.
+   */
+  purgeOlderThan(before: Date, limit: number): Promise<number>;
 }
 
 export const SIGNAL_HISTORY_REPOSITORY = Symbol('SIGNAL_HISTORY_REPOSITORY');

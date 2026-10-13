@@ -4,6 +4,7 @@ import type { ConsumerView } from '../../odds/application/consumer-control.js';
 import type { ArbitrageStats } from '../../odds/application/queries/get-arbitrage-stats.query.js';
 import type { LaneStats } from '../../odds/application/lane-dispatcher.js';
 import type { ArbitrageSettings } from '../../odds/application/arbitrage-settings.js';
+import type { IngestSnapshot } from '../../odds/application/ingest-stats.js';
 
 export type TaskView = Awaited<ReturnType<TaskSupervisor['list']>>[number];
 
@@ -18,6 +19,8 @@ export interface AdminSources {
   arbitrage(): Promise<ArbitrageStats>;
   lanes(): Promise<LaneStats[]>;
   settings(): Promise<ArbitrageSettings>;
+  /** Bộ đếm theo chặng của luồng ingest. */
+  ingest(): Promise<IngestSnapshot>;
 }
 
 export const ADMIN_SOURCES = Symbol('ADMIN_SOURCES');

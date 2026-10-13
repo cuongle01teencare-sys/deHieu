@@ -10,5 +10,7 @@ export default defineConfig({
     globals: true,
     root: './',
     include: ['**/*.spec.ts'],
+    // web/ (Next.js) có công cụ test riêng
+    exclude: ['**/node_modules/**', 'dist/**', 'web/**'],
   },
 });

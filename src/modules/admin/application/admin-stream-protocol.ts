@@ -6,8 +6,9 @@ import type { AdminSnapshot } from './queries/get-admin-snapshot.query.js';
  * Giao thức WebSocket của dashboard admin (JSON mỗi frame).
  *
  * client → app:
- *   hello       { token, topics? }       — bắt buộc trong 10s đầu; topics mặc định = DEFAULT_TOPICS
- *   subscribe   { topics }               — thêm topic (vd 'room:room:cs2:a~b:game-winner')
+ *   hello       { token | ticket, topics? } — bắt buộc trong 10s đầu; topics mặc định = DEFAULT_TOPICS.
+ *                                         ticket: vé một lần từ POST /admin/ws-ticket (cho trình duyệt)
+ *   subscribe   { topics }               — thêm topic (vd 'room:room:cs2:a~b:game-winner', 'match:cs2:a~b')
  *   unsubscribe { topics }
  *   ping
  * app → client:
@@ -17,6 +18,8 @@ import type { AdminSnapshot } from './queries/get-admin-snapshot.query.js';
  *   event       { event }                — sự kiện theo topic đã subscribe
  *   metrics     { data }                 — số liệu gộp mỗi ~2s (topic 'metrics')
  *   room        { room, data }           — ảnh chụp room ngay khi subscribe 'room:{id}'
+ *   match       { match, data }          — ảnh chụp trận ngay khi subscribe 'match:{id}'; sau đó nhận
+ *                                          mọi `odds.changed` của các room thuộc trận đó
  *   error       { message }
  *   pong
  */
@@ -41,9 +44,11 @@ export const DEFAULT_TOPICS: readonly string[] = [
 
 export const ROOM_TOPIC_PREFIX = 'room:';
 export const MAX_ROOM_TOPICS = 20;
+export const MATCH_TOPIC_PREFIX = 'match:';
+export const MAX_MATCH_TOPICS = 10;
 
 export type AdminClientFrame =
-  | { type: 'hello'; token: string; topics?: string[] }
+  | { type: 'hello'; token?: string; ticket?: string; topics?: string[] }
   | { type: 'subscribe'; topics: string[] }
   | { type: 'unsubscribe'; topics: string[] }
   | { type: 'resync' }
@@ -60,5 +65,6 @@ export type AdminServerFrame =
   | { type: 'event'; event: OpsEvent }
   | { type: 'metrics'; data: AdminMetrics }
   | { type: 'room'; room: string; data: unknown }
+  | { type: 'match'; match: string; data: unknown }
   | { type: 'error'; message: string }
   | { type: 'pong' };

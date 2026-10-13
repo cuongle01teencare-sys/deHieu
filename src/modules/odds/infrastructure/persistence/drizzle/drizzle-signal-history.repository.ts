@@ -1,4 +1,15 @@
-import { and, desc, eq, gte, lte, sql, type SQL } from 'drizzle-orm';
+import {
+  and,
+  desc,
+  eq,
+  gte,
+  inArray,
+  lt,
+  lte,
+  ne,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import type { TransactionContext } from '../../../../../shared/infrastructure/database/transaction-context.js';
 import type {
   SignalHistoryQuery,
@@ -78,17 +89,30 @@ export class DrizzleSignalHistoryRepository implements SignalHistoryRepository {
     return rows.length;
   }
 
-  async list(q: SignalHistoryQuery): Promise<SignalHistoryEntry[]> {
+  async count(q: SignalHistoryQuery): Promise<number> {
+    const [row] = await this._tx.executor
+      .select({ n: sql<number>`count(*)::int` })
+      .from(t)
+      .where(this._where(q));
+    return row?.n ?? 0;
+  }
+
+  private _where(q: SignalHistoryQuery): SQL | undefined {
     const where: SQL[] = [];
     if (q.status) where.push(eq(t.status, q.status));
     if (q.phase) where.push(eq(t.phase, q.phase));
     if (q.room) where.push(eq(t.room, q.room));
     if (q.from) where.push(gte(t.issuedAt, q.from));
     if (q.to) where.push(lte(t.issuedAt, q.to));
+    return where.length ? and(...where) : undefined;
+  }
+
+  async list(q: SignalHistoryQuery): Promise<SignalHistoryEntry[]> {
+    const where = this._where(q);
     const rows = await this._tx.executor
       .select()
       .from(t)
-      .where(where.length ? and(...where) : undefined)
+      .where(where)
       .orderBy(desc(t.issuedAt))
       .limit(q.limit)
       .offset(q.offset);
@@ -101,5 +125,20 @@ export class DrizzleSignalHistoryRepository implements SignalHistoryRepository {
       .from(t)
       .where(eq(t.signalId, signalId));
     return row ? toEntry(row) : null;
+  }
+
+  /** Chỉ kèo đã kết thúc (khác 'active'); theo lô bằng subquery. */
+  async purgeOlderThan(before: Date, limit: number): Promise<number> {
+    const db = this._tx.executor;
+    const ids = db
+      .select({ id: t.signalId })
+      .from(t)
+      .where(and(ne(t.status, 'active'), lt(t.issuedAt, before)))
+      .limit(limit);
+    const rows = await db
+      .delete(t)
+      .where(inArray(t.signalId, ids))
+      .returning({ id: t.signalId });
+    return rows.length;
   }
 }

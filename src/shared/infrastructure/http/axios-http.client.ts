@@ -9,10 +9,14 @@ import type {
 export class AxiosHttpAdapter implements HttpClient {
   private instance: AxiosInstance;
 
-  constructor() {
+  /**
+   * @param baseURL gốc URL cho các request tương đối (truyền khi khởi tạo, không đọc env ngầm).
+   *   Các task hiện gọi bằng URL đầy đủ trong tham số nên thường bỏ trống.
+   */
+  constructor(baseURL?: string) {
     // Khởi tạo HttpWrapper với Edge Operations & Side Effects
     this.instance = createHttpWrapper(
-      { baseURL: process.env.API_BASE_URL },
+      { baseURL },
       {
         beforeRequest: async (config) => {
           // Edge operation: Thêm Auth token / Context Metadata

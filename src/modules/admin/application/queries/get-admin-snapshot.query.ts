@@ -3,6 +3,7 @@ import type { Incident } from '../../domain/incident.js';
 import type { AdminSources } from '../admin-sources.js';
 import type { HealthMonitor, HealthResult } from '../health.js';
 import type { IncidentTracker } from '../incident-tracker.js';
+import type { RetentionJob, RetentionReport } from '../retention-job.js';
 
 export type GetAdminSnapshotQuery = Record<string, never>;
 
@@ -16,6 +17,11 @@ export interface AdminSnapshot {
   readonly arbitrage: Awaited<ReturnType<AdminSources['arbitrage']>>;
   readonly lanes: Awaited<ReturnType<AdminSources['lanes']>>;
   readonly settings: Awaited<ReturnType<AdminSources['settings']>>;
+  /** Chính sách giữ lại + kết quả lần dọn gần nhất (null = chưa chạy). */
+  readonly retention: {
+    readonly policy: readonly { name: string; retentionDays: number }[];
+    readonly last: RetentionReport | null;
+  } | null;
 }
 
 /** Toàn cảnh một lần (mở dashboard / kết nối stream). */
@@ -28,6 +34,7 @@ export class GetAdminSnapshotHandler implements QueryHandler<
     private readonly _incidents: IncidentTracker,
     private readonly _health: HealthMonitor,
     private readonly _now: () => number = Date.now,
+    private readonly _retention?: Pick<RetentionJob, 'last' | 'policy'>,
   ) {}
 
   async execute(): Promise<AdminSnapshot> {
@@ -47,6 +54,9 @@ export class GetAdminSnapshotHandler implements QueryHandler<
       arbitrage,
       lanes,
       settings,
+      retention: this._retention
+        ? { policy: this._retention.policy(), last: this._retention.last() }
+        : null,
     };
   }
 }

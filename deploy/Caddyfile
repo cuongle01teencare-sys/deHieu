@@ -1,0 +1,48 @@
+# Reverse proxy TLS cho backend (Caddy tự xin + gia hạn chứng chỉ Let's Encrypt).
+# Dùng: thay api.example.com, đặt file ở /etc/caddy/Caddyfile, `sudo systemctl reload caddy`.
+#
+# Trong .env của backend:  WS_BIND_HOST=127.0.0.1   (cổng 3000–3003 chỉ nghe localhost)
+# Chỉ mở firewall cổng 80 + 443.
+#
+#   https://api.example.com/            → REST          127.0.0.1:3000
+#   wss://api.example.com/admin-ws      → admin stream  127.0.0.1:3003  (web / dashboard)
+#   wss://api.example.com/consumer-ws   → consumer      127.0.0.1:3002  (bot giao dịch, Discord)
+#   wss://api.example.com/task-ws       → publisher     127.0.0.1:3001  (node task-runner)
+
+api.example.com {
+	encode zstd gzip
+
+	# Caddy tự xử lý nâng cấp WebSocket và không cắt kết nối WS đang mở.
+	handle /admin-ws* {
+		reverse_proxy 127.0.0.1:3003
+	}
+
+	handle /consumer-ws* {
+		reverse_proxy 127.0.0.1:3002
+	}
+
+	handle /task-ws* {
+		# (Tùy chọn) chỉ cho IP của các node task-runner:
+		# @notNodes not remote_ip 203.0.113.10 203.0.113.11
+		# respond @notNodes 403
+		reverse_proxy 127.0.0.1:3001
+	}
+
+	handle {
+		request_body {
+			max_size 1MB
+		}
+		reverse_proxy 127.0.0.1:3000
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/api.log
+	}
+}

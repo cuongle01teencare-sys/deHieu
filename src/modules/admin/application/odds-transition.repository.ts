@@ -13,6 +13,8 @@ export interface OddsTransitionQuery {
 export interface OddsTransitionRepository {
   insertMany(entries: readonly OddsTransition[]): Promise<void>;
   list(q: OddsTransitionQuery): Promise<OddsTransition[]>;
+  /** Số bản ghi khớp bộ lọc (bỏ qua limit/offset) — cho phân trang. */
+  count(q: OddsTransitionQuery): Promise<number>;
   /** Dọn bản ghi cũ hơn mốc (giới hạn thời gian giữ). Trả về số dòng đã xóa. */
   deleteOlderThan(before: Date): Promise<number>;
 }

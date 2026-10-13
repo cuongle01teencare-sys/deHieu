@@ -3,6 +3,7 @@ import { TeamNameResolver } from '../../../application/team-name.resolver.js';
 import type { TeamAliasRepository } from '../../../domain/team-alias.repository.js';
 import { SptPubOddsTranslator } from '../sptpub/sptpub-odds.translator.js';
 import { PolymarketOddsTranslator } from '../polymarket/polymarket-odds.translator.js';
+import { IngestStats } from '../../../application/ingest-stats.js';
 
 const repo: TeamAliasRepository = {
   findAll: () => Promise.resolve({ status: 'SUCEED', data: [] }),
@@ -237,6 +238,123 @@ describe('PolymarketOddsTranslator', () => {
     expect(c?.type === 'set' && c.line.props.odds[0]).toBe(4);
   });
 
+  const informationalEvents = [
+    {
+      type: 'last_trade_price',
+      payload: { assetId: 'tA', price: '0.05', side: 'BUY', size: '20' },
+    },
+    {
+      type: 'tick_size_change',
+      payload: { assetId: 'tA', oldTickSize: '0.01', newTickSize: '0.001' },
+    },
+    {
+      type: 'new_market',
+      payload: { id: '2', market: '0xnew', assetIds: ['new-a', 'new-b'] },
+    },
+  ];
+
+  it.each(informationalEvents)(
+    '$type hợp lệ được bỏ qua, không báo lỗi parse và không đổi odds',
+    async (event) => {
+      const stats = new IngestStats();
+      const t = new PolymarketOddsTranslator(
+        teams,
+        undefined,
+        stats.reporter('polymarket'),
+      );
+      await t.translate(
+        msg({ kind: 'polymarket.descriptor', payload: events }),
+      );
+      expect(
+        await t.translate(
+          msg({
+            kind: 'polymarket.stream',
+            payload: { topic: 'market', ...event },
+          }),
+        ),
+      ).toEqual([]);
+      expect(stats.snapshot().items[0]?.skipped).toEqual({
+        unsupported_event: 1,
+      });
+
+      const [change] = await t.translate(
+        msg({
+          kind: 'polymarket.stream',
+          payload: {
+            topic: 'market',
+            type: 'best_bid_ask',
+            payload: { assetId: 'tS', bestAsk: '0.25' },
+          },
+        }),
+      );
+      if (change?.type !== 'set') throw new Error('expected set');
+      expect(change.line.props.odds[0]).toBeCloseTo(1 / 0.6);
+      expect(change.line.props.odds[1]).toBe(4);
+    },
+  );
+
+  it.each([
+    ...informationalEvents.map((e) => ({ type: e.type, payload: {} })),
+    { type: 'book', payload: { assetId: 'tA', asks: 'invalid' } },
+    { type: 'price_change', payload: { priceChanges: [{ bestAsk: '0.2' }] } },
+    { type: 'best_bid_ask', payload: { bestAsk: '0.2' } },
+    {
+      type: 'last_trade_price',
+      payload: { assetId: 'tA', price: 'invalid', side: 'BUY' },
+    },
+    {
+      type: 'tick_size_change',
+      payload: { assetId: 'tA', newTickSize: 'invalid' },
+    },
+    {
+      type: 'price_change',
+      payload: { priceChanges: [{ assetId: 'tA', bestAsk: 'invalid' }] },
+    },
+    { type: 'future_event', payload: {} },
+  ])('$type sai schema vẫn được đếm parse_failed', async (event) => {
+    const skip = vi.fn();
+    const t = new PolymarketOddsTranslator(teams, undefined, skip);
+    expect(
+      await t.translate(
+        msg({
+          kind: 'polymarket.stream',
+          payload: { topic: 'market', ...event },
+        }),
+      ),
+    ).toEqual([]);
+    expect(skip).toHaveBeenCalledExactlyOnceWith(
+      'polymarket.stream',
+      'parse_failed',
+    );
+  });
+
+  it('book lấy ask thấp nhất; sổ lệnh rỗng khóa dòng; market_resolved gỡ dòng', async () => {
+    const t = new PolymarketOddsTranslator(teams);
+    await t.translate(msg({ kind: 'polymarket.descriptor', payload: events }));
+    const stream = (type: string, payload: unknown) =>
+      t.translate(
+        msg({
+          kind: 'polymarket.stream',
+          payload: { topic: 'market', type, payload },
+        }),
+      );
+    const [priced] = await stream('book', {
+      assetId: 'tA',
+      asks: [{ price: '0.4' }, { price: '0.2' }],
+    });
+    expect(priced?.type === 'set' && priced.line.props.odds[0]).toBe(5);
+    const [empty] = await stream('book', { assetId: 'tA', asks: [] });
+    expect(empty?.type === 'set' && empty.line.props.status).toBe('suspended');
+    const resolved = await stream('market_resolved', {
+      assetIds: ['tA', 'tS'],
+    });
+    expect(resolved).toHaveLength(1);
+    expect(resolved[0]).toMatchObject({ type: 'remove', tenant: 'polymarket' });
+    expect(
+      await stream('best_bid_ask', { assetId: 'tA', bestAsk: '0.3' }),
+    ).toEqual([]);
+  });
+
   it('task stream chết → gỡ dòng; task events chết → gỡ market và unsubscribe token', async () => {
     const sync = vi.fn().mockResolvedValue(undefined);
     const t = new PolymarketOddsTranslator(teams, sync);
@@ -258,5 +376,550 @@ describe('PolymarketOddsTranslator', () => {
       ),
     ).toEqual(['remove']);
     expect(sync).toHaveBeenLastCalledWith('unsubscribe', ['tA', 'tS']);
+  });
+});
+
+describe('map handicap', () => {
+  /** sptpub: competitor1 = Sinners, competitor2 = Alliance (→ teams[0] = alliance, c1 KHÔNG đứng trước). */
+  const sptEvent = (markets: Record<string, unknown>) => ({
+    H: {
+      desc: {
+        scheduled: 1790326800,
+        type: 'match',
+        sport: '109',
+        competitors: [
+          { id: 'a', name: 'Sinners Esports' },
+          { id: 'b', name: 'Alliance' },
+        ],
+      },
+      markets,
+    },
+  });
+  const spt = (taskId = 'sptpub-live') => ({
+    taskId,
+    channel: 'delta' as const,
+  });
+
+  /** polymarket: yes = Sinners chấp `line`. */
+  const polyEvents = (line: number) => [
+    {
+      id: '1',
+      slug: 'cs2-x',
+      schedule: { startTime: '2026-09-25T09:00:00Z' },
+      sports: { sport: { sport: 'cs2' } },
+      markets: [
+        {
+          conditionId: '0xh',
+          slug: 'cs2-x-map-handicap',
+          state: { closed: false, acceptingOrders: true },
+          outcomes: {
+            yes: { label: 'Sinners', tokenId: 'tS' },
+            no: { label: 'Alliance', tokenId: 'tA' },
+          },
+          prices: { bestBid: '0.40', bestAsk: '0.50' },
+          sports: { sportsMarketType: 'map_handicap', line },
+        },
+      ],
+    },
+  ];
+
+  it('sptpub: quy hcp của competitor1 về teams[0], đảo odds; mức không hỗ trợ bị bỏ', async () => {
+    const t = new SptPubOddsTranslator(teams);
+    const changes = await t.translate(
+      msg({
+        ...spt(),
+        payload: {
+          version: 1,
+          events: sptEvent({
+            '327': {
+              'hcp=-1.5': { '1714': { k: '2.1' }, '1715': { k: '1.7' } },
+              'hcp=2.5': { '1714': { k: '1.05' }, '1715': { k: '8.0' } },
+              'hcp=-3.5': { '1714': { k: '6.1' }, '1715': { k: '1.12' } },
+            },
+          }),
+        },
+      }),
+    );
+    const sets = changes.flatMap((c) => (c.type === 'set' ? [c] : []));
+    expect(sets.map((c) => c.key.toString())).toEqual([
+      // sinners -1.5 = alliance +1.5
+      'room:cs2:alliance~sinners:map-handicap-p1.5',
+      // sinners +2.5 = alliance -2.5
+      'room:cs2:alliance~sinners:map-handicap-m2.5',
+    ]);
+    expect(sets[0].line.props.odds).toEqual([1.7, 2.1]); // [alliance, sinners]
+    expect(sets[0].line.props.ref).toMatchObject({
+      m: '327',
+      s: 'hcp=-1.5',
+      o0: '1715',
+      o1: '1714',
+    });
+  });
+
+  it('polymarket: line là mức chấp của yes, quy về teams[0]; mức không hỗ trợ bị bỏ', async () => {
+    const t = new PolymarketOddsTranslator(teams);
+    const [c] = await t.translate(
+      msg({
+        tenant: 'polymarket',
+        kind: 'polymarket.descriptor',
+        payload: polyEvents(-1.5),
+      }),
+    );
+    if (c?.type !== 'set') throw new Error('expected set');
+    expect(c.key.toString()).toBe(
+      'room:cs2:alliance~sinners:map-handicap-p1.5',
+    );
+    expect(c.line.props.ref).toMatchObject({ t0: 'tA', t1: 'tS' });
+
+    const t2 = new PolymarketOddsTranslator(teams);
+    expect(
+      await t2.translate(
+        msg({
+          tenant: 'polymarket',
+          kind: 'polymarket.descriptor',
+          payload: polyEvents(-3.5),
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('cùng kèo ở hai tenant → cùng room; khác mức → khác room', async () => {
+    const s = new SptPubOddsTranslator(teams);
+    const p = new PolymarketOddsTranslator(teams);
+    const sKeys = (
+      await s.translate(
+        msg({
+          ...spt(),
+          payload: {
+            version: 1,
+            events: sptEvent({
+              '327': {
+                'hcp=-1.5': { '1714': { k: '2.1' }, '1715': { k: '1.7' } },
+                'hcp=-2.5': { '1714': { k: '4.0' }, '1715': { k: '1.2' } },
+              },
+            }),
+          },
+        }),
+      )
+    ).map((c) => c.key.toString());
+    const [pc] = await p.translate(
+      msg({
+        tenant: 'polymarket',
+        kind: 'polymarket.descriptor',
+        payload: polyEvents(-1.5),
+      }),
+    );
+    expect(sKeys).toContain(pc?.key.toString());
+    expect(sKeys).toContain('room:cs2:alliance~sinners:map-handicap-p2.5');
+    expect(pc?.key.toString()).not.toBe(
+      'room:cs2:alliance~sinners:map-handicap-p2.5',
+    );
+  });
+
+  it('sptpub: gỡ đúng specifier, gỡ cả market, gỡ cả trận', async () => {
+    const t = new SptPubOddsTranslator(teams);
+    const priced = {
+      '186': { '': { '4': { k: '1.5' }, '5': { k: '2.5' } } },
+      '327': {
+        'hcp=-1.5': { '1714': { k: '2.1' }, '1715': { k: '1.7' } },
+        'hcp=1.5': { '1714': { k: '1.2' }, '1715': { k: '4.0' } },
+      },
+    };
+    const removed = (cs: Awaited<ReturnType<typeof t.translate>>) =>
+      cs.filter((c) => c.type === 'remove').map((c) => c.key.market);
+
+    await t.translate(
+      msg({ ...spt(), payload: { version: 1, events: sptEvent(priced) } }),
+    );
+    expect(
+      removed(
+        await t.translate(
+          msg({
+            ...spt(),
+            payload: {
+              version: 2,
+              events: { H: { markets: { '327': { 'hcp=-1.5': null } } } },
+            },
+          }),
+        ),
+      ),
+    ).toEqual(['map-handicap-p1.5']);
+    expect(
+      removed(
+        await t.translate(
+          msg({
+            ...spt(),
+            payload: {
+              version: 3,
+              events: { H: { markets: { '327': null } } },
+            },
+          }),
+        ),
+      ),
+    ).toEqual(['map-handicap-m1.5']);
+
+    await t.translate(
+      msg({ ...spt(), payload: { version: 4, events: sptEvent(priced) } }),
+    );
+    expect(
+      removed(
+        await t.translate(
+          msg({ ...spt(), payload: { version: 5, events: { H: null } } }),
+        ),
+      ).sort(),
+    ).toEqual(['game-winner', 'map-handicap-m1.5', 'map-handicap-p1.5']);
+  });
+});
+
+describe('total maps', () => {
+  /** competitor1 = Sinners → c1 KHÔNG phải teams[0]; over/under vẫn không được đảo. */
+  const sptEvent = (markets: Record<string, unknown>) => ({
+    T: {
+      desc: {
+        scheduled: 1790326800,
+        type: 'match',
+        sport: '109',
+        competitors: [
+          { id: 'a', name: 'Sinners Esports' },
+          { id: 'b', name: 'Alliance' },
+        ],
+      },
+      markets,
+    },
+  });
+
+  const moneyline = {
+    conditionId: '0xm',
+    slug: 'cs2-x',
+    state: { closed: false, acceptingOrders: true },
+    outcomes: {
+      yes: { label: 'Sinners', tokenId: 'mS' },
+      no: { label: 'Alliance', tokenId: 'mA' },
+    },
+    prices: { bestBid: '0.40', bestAsk: '0.50' },
+    sports: { sportsMarketType: 'moneyline' },
+  };
+  const totals = (line: number) => ({
+    conditionId: `0xt${line}`,
+    slug: `cs2-x-total-games-${line}`,
+    state: { closed: false, acceptingOrders: true },
+    outcomes: {
+      yes: { label: 'Over', tokenId: `over${line}` },
+      no: { label: 'Under', tokenId: `under${line}` },
+    },
+    prices: { bestBid: '0.40', bestAsk: '0.50' },
+    sports: { sportsMarketType: 'totals', line },
+  });
+  const polyEvent = (markets: unknown[]) => [
+    {
+      id: '1',
+      slug: 'cs2-x',
+      schedule: { startTime: '2026-09-25T09:00:00Z' },
+      sports: { sport: { sport: 'cs2' } },
+      markets,
+    },
+  ];
+  const poly = (payload: unknown) =>
+    msg({ tenant: 'polymarket', kind: 'polymarket.descriptor', payload });
+
+  it('sptpub: total=x → total-maps-x, odds giữ [over, under]; mốc không hỗ trợ bị bỏ', async () => {
+    const t = new SptPubOddsTranslator(teams);
+    const changes = await t.translate(
+      msg({
+        channel: 'delta',
+        payload: {
+          version: 1,
+          events: sptEvent({
+            '328': {
+              'total=2.5': { '12': { k: '2.2' }, '13': { k: '1.6' } },
+              'total=5.5': { '12': { k: '9.0' }, '13': { k: '1.01' } },
+            },
+          }),
+        },
+      }),
+    );
+    expect(changes).toHaveLength(1);
+    const [c] = changes;
+    if (c?.type !== 'set') throw new Error('expected set');
+    expect(c.key.toString()).toBe('room:cs2:alliance~sinners:total-maps-2.5');
+    expect(c.line.props.odds).toEqual([2.2, 1.6]);
+    expect(c.line.props.ref).toMatchObject({
+      m: '328',
+      s: 'total=2.5',
+      o0: '12',
+      o1: '13',
+    });
+  });
+
+  it('polymarket: totals lấy cặp đội từ moneyline, token giữ [over, under]', async () => {
+    const t = new PolymarketOddsTranslator(teams);
+    const changes = await t.translate(
+      poly(polyEvent([moneyline, totals(2.5), totals(5.5)])),
+    );
+    const c = changes.find((x) => x.key.market === 'total-maps-2.5');
+    if (c?.type !== 'set') throw new Error('expected set');
+    expect(c.key.toString()).toBe('room:cs2:alliance~sinners:total-maps-2.5');
+    expect(c.line.props.ref).toMatchObject({ t0: 'over2.5', t1: 'under2.5' });
+    expect(changes.map((x) => x.key.market).sort()).toEqual([
+      'game-winner',
+      'total-maps-2.5',
+    ]);
+  });
+
+  it('polymarket: event không có moneyline → bỏ totals (không biết đội)', async () => {
+    const t = new PolymarketOddsTranslator(teams);
+    expect(await t.translate(poly(polyEvent([totals(2.5)])))).toEqual([]);
+  });
+
+  it('cùng mốc ở hai tenant → cùng room', async () => {
+    const s = new SptPubOddsTranslator(teams);
+    const p = new PolymarketOddsTranslator(teams);
+    const [sc] = await s.translate(
+      msg({
+        channel: 'delta',
+        payload: {
+          version: 1,
+          events: sptEvent({
+            '328': { 'total=2.5': { '12': { k: '2.2' }, '13': { k: '1.6' } } },
+          }),
+        },
+      }),
+    );
+    const pc = (
+      await p.translate(poly(polyEvent([moneyline, totals(2.5)])))
+    ).find((x) => x.key.market === 'total-maps-2.5');
+    expect(sc?.key.toString()).toBe(pc?.key.toString());
+  });
+});
+
+describe('map winner', () => {
+  /** competitor1 = Sinners → c1 KHÔNG phải teams[0]. */
+  const sptEvent = (markets: Record<string, unknown>) => ({
+    W: {
+      desc: {
+        scheduled: 1790326800,
+        type: 'match',
+        sport: '109',
+        competitors: [
+          { id: 'a', name: 'Sinners Esports' },
+          { id: 'b', name: 'Alliance' },
+        ],
+      },
+      markets,
+    },
+  });
+  const child = (title: string | null, slug: string) => ({
+    conditionId: `0x${slug}`,
+    slug,
+    groupItemTitle: title,
+    state: { closed: false, acceptingOrders: true },
+    outcomes: {
+      yes: { label: 'Sinners', tokenId: `${slug}-S` },
+      no: { label: 'Alliance', tokenId: `${slug}-A` },
+    },
+    prices: { bestBid: '0.40', bestAsk: '0.50' },
+    sports: { sportsMarketType: 'child_moneyline' },
+  });
+  const poly = (sport: string, markets: unknown[]) =>
+    msg({
+      tenant: 'polymarket',
+      kind: 'polymarket.descriptor',
+      payload: [
+        {
+          id: '1',
+          slug: 'x',
+          schedule: { startTime: '2026-09-25T09:00:00Z' },
+          sports: { sport: { sport } },
+          markets,
+        },
+      ],
+    });
+
+  it('sptpub: mapnr=n → map-n-winner, odds đảo theo thứ tự đội; map không hỗ trợ bị bỏ', async () => {
+    const t = new SptPubOddsTranslator(teams);
+    const changes = await t.translate(
+      msg({
+        channel: 'delta',
+        payload: {
+          version: 1,
+          events: sptEvent({
+            '330': {
+              'mapnr=1': { '4': { k: '1.27' }, '5': { k: '3.45' } },
+              'mapnr=6': { '4': { k: '1.5' }, '5': { k: '2.5' } },
+            },
+          }),
+        },
+      }),
+    );
+    expect(changes).toHaveLength(1);
+    const [c] = changes;
+    if (c?.type !== 'set') throw new Error('expected set');
+    expect(c.key.toString()).toBe('room:cs2:alliance~sinners:map-1-winner');
+    expect(c.line.props.odds).toEqual([3.45, 1.27]); // [alliance, sinners]
+    expect(c.line.props.ref).toMatchObject({ s: 'mapnr=1', o0: '5', o1: '4' });
+  });
+
+  it('polymarket: số map lấy từ "Map n Winner" / "Game n Winner", dự phòng slug', async () => {
+    const t = new PolymarketOddsTranslator(teams);
+    const cs2 = await t.translate(
+      poly('cs2', [
+        child('Map 1 Winner', 'cs2-x-game1'),
+        child(null, 'cs2-x-game2'),
+        child('Something else', 'cs2-x-other'),
+      ]),
+    );
+    expect(cs2.map((c) => c.key.toString())).toEqual([
+      'room:cs2:alliance~sinners:map-1-winner',
+      'room:cs2:alliance~sinners:map-2-winner',
+    ]);
+    const [c] = cs2;
+    expect(c?.type === 'set' && c.line.props.ref).toMatchObject({
+      t0: 'cs2-x-game1-A',
+      t1: 'cs2-x-game1-S',
+    });
+
+    const lol = await t.translate(
+      poly('lol', [child('Game 3 Winner', 'lol-x-game3')]),
+    );
+    expect(lol.map((c) => c.key.toString())).toEqual([
+      'room:lol:alliance~sinners:map-3-winner',
+    ]);
+  });
+
+  it('cùng map ở hai tenant → cùng room; khác map → khác room', async () => {
+    const s = new SptPubOddsTranslator(teams);
+    const p = new PolymarketOddsTranslator(teams);
+    const sKeys = (
+      await s.translate(
+        msg({
+          channel: 'delta',
+          payload: {
+            version: 1,
+            events: sptEvent({
+              '330': {
+                'mapnr=1': { '4': { k: '1.27' }, '5': { k: '3.45' } },
+                'mapnr=2': { '4': { k: '1.3' }, '5': { k: '3.2' } },
+              },
+            }),
+          },
+        }),
+      )
+    ).map((c) => c.key.toString());
+    const [pc] = await p.translate(
+      poly('cs2', [child('Map 2 Winner', 'cs2-x-game2')]),
+    );
+    expect(sKeys).toContain(pc?.key.toString());
+    expect(pc?.key.market).toBe('map-2-winner');
+  });
+});
+
+describe('polymarket: đối chiếu theo vòng quét', () => {
+  const ev = (id: string) => ({
+    id,
+    slug: `cs2-${id}`,
+    schedule: { startTime: '2026-09-25T09:00:00Z' },
+    sports: { sport: { sport: 'cs2' } },
+    markets: [
+      {
+        conditionId: `0x${id}`,
+        slug: `cs2-${id}`,
+        state: { closed: false, acceptingOrders: true },
+        outcomes: {
+          yes: { label: `${id}a`, tokenId: `${id}-a` },
+          no: { label: `${id}b`, tokenId: `${id}-b` },
+        },
+        prices: { bestBid: '0.40', bestAsk: '0.50' },
+        sports: { sportsMarketType: 'moneyline' },
+      },
+    ],
+  });
+  const m = (channel: string, payload: unknown) =>
+    msg({
+      taskId: 'poly-events',
+      tenant: 'polymarket',
+      kind: 'polymarket.descriptor',
+      channel,
+      payload,
+    });
+  /** Một vòng quét đầy đủ với các event cho trước; trả về thay đổi của mốc cuối vòng. */
+  const cycle = async (
+    t: PolymarketOddsTranslator,
+    ids: string[],
+    pages = 1,
+  ) => {
+    await t.translate(m('cycle-start', { cycle: 1 }));
+    if (ids.length) await t.translate(m('events', ids.map(ev)));
+    return t.translate(m('cycle-complete', { cycle: 1, pages }));
+  };
+
+  it('vắng 2 vòng liên tiếp mới gỡ (missing_from_listing); mốc vòng không bị đếm là parse_failed', async () => {
+    const reports: unknown[] = [];
+    const skips: string[] = [];
+    const t = new PolymarketOddsTranslator(
+      teams,
+      undefined,
+      (_k, r) => skips.push(r),
+      (r) => reports.push(r),
+    );
+    await cycle(t, ['x', 'y']);
+    expect(await cycle(t, ['x'])).toEqual([]); // y vắng lần 1 → chờ
+    const removed = await cycle(t, ['x']); // y vắng lần 2 → gỡ
+    expect(removed).toEqual([
+      expect.objectContaining({
+        type: 'remove',
+        tenant: 'polymarket',
+        reason: 'missing_from_listing',
+      }),
+    ]);
+    expect(removed[0]?.key.toString()).toBe('room:cs2:ya~yb:game-winner');
+    expect(reports.at(-2)).toMatchObject({ known: 2, pending: 1, removed: 0 });
+    expect(reports.at(-1)).toMatchObject({
+      known: 2,
+      removed: 1,
+      massive: false,
+    });
+    expect(skips).not.toContain('parse_failed');
+  });
+
+  it('không có cycle-start hoặc 0 trang → không đối chiếu', async () => {
+    const t = new PolymarketOddsTranslator(teams);
+    await cycle(t, ['x']);
+    await t.translate(m('cycle-complete', { cycle: 2, pages: 3 })); // thiếu cycle-start
+    await t.translate(m('cycle-complete', { cycle: 3, pages: 3 }));
+    expect(await cycle(t, [], 0)).toEqual([]);
+    expect(await cycle(t, [], 0)).toEqual([]);
+    // x vẫn còn: một vòng hợp lệ có x → không gỡ gì
+    expect(await cycle(t, ['x'])).toEqual([]);
+  });
+
+  it('gỡ hàng loạt bất thường → giữ lại tối đa maxHeldCycles vòng rồi mới gỡ', async () => {
+    const reports: { held: number; removed: number; massive: boolean }[] = [];
+    const t = new PolymarketOddsTranslator(
+      teams,
+      undefined,
+      undefined,
+      (r) => reports.push(r),
+      {
+        missingCycles: 2,
+        massiveRatio: 0.3,
+        massiveMinKnown: 2,
+        maxHeldCycles: 1,
+      },
+    );
+    await cycle(t, ['p', 'q', 'r']);
+    await cycle(t, ['z']); // cả ba vắng lần 1 (z là market mới)
+    expect(await cycle(t, ['z'])).toEqual([]); // vắng lần 2: 3/4 = 75% → giữ lại
+    expect(reports.at(-1)).toMatchObject({
+      held: 3,
+      removed: 0,
+      massive: true,
+    });
+    const removed = await cycle(t, ['z']); // hết thời gian giữ → gỡ
+    expect(removed).toHaveLength(3);
+    expect(reports.at(-1)).toMatchObject({
+      held: 0,
+      removed: 3,
+      massive: true,
+    });
   });
 });

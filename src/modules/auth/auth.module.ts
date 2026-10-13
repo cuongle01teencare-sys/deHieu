@@ -11,6 +11,7 @@ import { AuthorizationService } from './application/authorization.service.js';
 import { StaticTokenAuthenticator } from './infrastructure/static-token.authenticator.js';
 import { ConfigRolePermissionProvider } from './infrastructure/config-role-permission.provider.js';
 import { PermissionsGuard } from './presentation/permissions.guard.js';
+import { WsTicketService } from './application/ws-ticket.service.js';
 
 /**
  * Xác thực + phân quyền theo QUYỀN (không theo vai trò cố định).
@@ -38,8 +39,10 @@ import { PermissionsGuard } from './presentation/permissions.guard.js';
         new AuthorizationService(roles),
     },
     { provide: APP_GUARD, useClass: PermissionsGuard },
+    { provide: WsTicketService, useValue: new WsTicketService() },
   ],
   // AUTHENTICATOR: cho kênh WebSocket (admin stream) dùng chung cách xác thực với REST.
-  exports: [AuthorizationService, AUTHENTICATOR],
+  // WsTicketService: vé ngắn hạn cho trình duyệt mở admin stream.
+  exports: [AuthorizationService, AUTHENTICATOR, WsTicketService],
 })
 export class AuthModule {}

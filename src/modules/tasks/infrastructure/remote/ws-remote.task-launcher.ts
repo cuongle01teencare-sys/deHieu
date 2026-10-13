@@ -18,6 +18,11 @@ import {
   type AppToNodeFrame,
   type NodeToAppFrame,
 } from './node-protocol.js';
+import { safeEqual } from '../../../../shared/infrastructure/security/safe-equal.js';
+import {
+  DEFAULT_HELLO_TIMEOUT_MS,
+  type WsServerLimits,
+} from '../../../../shared/infrastructure/security/ws-limits.js';
 
 interface RemoteTask {
   onMessage: ((msg: TaskToAppMessage) => void)[];
@@ -45,10 +50,16 @@ export class WsRemoteTaskLauncher implements TaskLauncher, NodeDirectory {
   constructor(
     private readonly _port: number,
     private readonly _token: string,
+    /** Frame dữ liệu của node có thể lớn (snapshot, trang danh sách) → giới hạn rộng hơn kênh khác. */
+    private readonly _limits: WsServerLimits = {},
   ) {}
 
   listen(): void {
-    this._server = new WebSocketServer({ port: this._port });
+    this._server = new WebSocketServer({
+      port: this._port,
+      host: this._limits.host,
+      maxPayload: this._limits.maxPayloadBytes ?? 64 * 1024 * 1024,
+    });
     this._server.on('connection', (ws) => this._onConnection(ws));
   }
 
@@ -120,16 +131,24 @@ export class WsRemoteTaskLauncher implements TaskLauncher, NodeDirectory {
 
   private _onConnection(ws: WebSocket) {
     let nodeId: string | null = null;
+    const helloTimer = setTimeout(() => {
+      if (!nodeId) ws.terminate();
+    }, this._limits.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS);
+    ws.on('error', () => ws.terminate());
 
     ws.on('message', (raw) => {
       const frame = parseFrame<NodeToAppFrame>(raw);
       if (!frame) return;
 
       if (frame.type === 'hello') {
-        if (frame.token !== this._token) {
+        if (
+          !safeEqual(frame.token, this._token) ||
+          typeof frame.nodeId !== 'string'
+        ) {
           this._send(ws, { type: 'rejected', reason: 'BAD_TOKEN' });
           return ws.close();
         }
+        clearTimeout(helloTimer);
         nodeId = frame.nodeId;
         this._nodes.get(nodeId)?.close(); // node cũ cùng id
         this._nodes.set(nodeId, ws);
@@ -153,6 +172,7 @@ export class WsRemoteTaskLauncher implements TaskLauncher, NodeDirectory {
     });
 
     ws.on('close', () => {
+      clearTimeout(helloTimer);
       if (!nodeId || this._nodes.get(nodeId) !== ws) return;
       const id = nodeId;
       this._nodes.delete(id);

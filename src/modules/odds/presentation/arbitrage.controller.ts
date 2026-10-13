@@ -14,10 +14,14 @@ import {
   Query,
 } from '@nestjs/common';
 import { z } from 'zod';
+import { queryDate } from '../../../shared/presentation/query-date.js';
 import { GetRoomHandler } from '../application/queries/get-room.query.js';
 import { ListRoomsHandler } from '../application/queries/list-rooms.query.js';
+import { ListMatchesHandler } from '../application/queries/list-matches.query.js';
+import { GetMatchHandler } from '../application/queries/get-match.query.js';
 import { GetArbitrageStatsHandler } from '../application/queries/get-arbitrage-stats.query.js';
 import { ListLanesHandler } from '../application/queries/list-lanes.query.js';
+import { GetIngestStatsHandler } from '../application/queries/get-ingest-stats.query.js';
 import { ListSignalHistoryHandler } from '../application/queries/list-signal-history.query.js';
 import { GetSignalHistoryHandler } from '../application/queries/get-signal-history.query.js';
 import { SIGNAL_STATUSES } from '../domain/signal-history.js';
@@ -51,12 +55,31 @@ const RoomsQuery = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
+const MatchesQuery = z.object({
+  q: z.string().optional(),
+  sport: z.string().optional(),
+  tenant: z.string().optional(),
+  phase: z.enum(PHASES).optional(),
+  matched: z
+    .enum(['true', 'false'])
+    .transform((v) => v === 'true')
+    .optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+const CandidatesQuery = z.object({
+  sport: z.string().optional(),
+  minScore: z.coerce.number().min(0).max(1).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
+});
+
 const HistoryQuery = z.object({
   status: z.enum(SIGNAL_STATUSES).optional(),
   phase: z.enum(PHASES).optional(),
   room: z.string().optional(),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
+  from: queryDate(),
+  to: queryDate(),
   limit: z.coerce.number().int().min(1).max(500).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
@@ -68,9 +91,13 @@ export class ArbitrageController {
   constructor(
     @Inject(GetRoomHandler) private readonly _room: GetRoomHandler,
     @Inject(ListRoomsHandler) private readonly _rooms: ListRoomsHandler,
+    @Inject(ListMatchesHandler) private readonly _matches: ListMatchesHandler,
+    @Inject(GetMatchHandler) private readonly _match: GetMatchHandler,
     @Inject(GetArbitrageStatsHandler)
     private readonly _stats: GetArbitrageStatsHandler,
     @Inject(ListLanesHandler) private readonly _lanes: ListLanesHandler,
+    @Inject(GetIngestStatsHandler)
+    private readonly _ingest: GetIngestStatsHandler,
     @Inject(ListSignalHistoryHandler)
     private readonly _history: ListSignalHistoryHandler,
     @Inject(GetSignalHistoryHandler)
@@ -130,6 +157,44 @@ export class ArbitrageController {
     return r;
   }
 
+  @Get('matches')
+  @RequirePermissions(P.ARBITRAGE_READ)
+  @ApiOperation({
+    summary: 'Danh sách trận (gom mọi market của cùng cặp đội)',
+    description:
+      'Quyền: arbitrage:read. Mỗi trận: tenants, số market, matchedMarkets (≥2 tenant), coverage (tenant → số market), bestMargin trên mọi market. Sắp theo bestMargin giảm dần rồi giờ bắt đầu. Lọc: q, sport, tenant, phase, matched=true (có ít nhất một market ≥2 tenant).',
+  })
+  @ApiZodQuery(MatchesQuery)
+  matches(@Query() query: unknown) {
+    return this._matches.execute(MatchesQuery.parse(query));
+  }
+
+  @Get('matches/:match')
+  @RequirePermissions(P.ARBITRAGE_READ)
+  @ApiOperation({
+    summary: 'Chi tiết một trận: ma trận market × tenant',
+    description:
+      'Quyền: arbitrage:read. Mỗi market: room id, nhãn hai phía (picks), dòng kèo của từng tenant (odds, trạng thái, ageMs...), số tổ hợp, bestMargin. 404 nếu trận không còn room nào.',
+  })
+  @ApiParam({ name: 'match', example: 'cs2:alliance~sinners' })
+  async match(@Param('match') match: string) {
+    const r = await this._match.execute({ match });
+    if (!r) throw new NotFoundException();
+    return r;
+  }
+
+  @Get('match-candidates')
+  @RequirePermissions(P.ARBITRAGE_READ)
+  @ApiOperation({
+    summary: 'Trận có thể bị ghép trượt (tên đội lệch) + gợi ý bí danh',
+    description:
+      'Quyền: arbitrage:read. Cặp trận cùng môn, giờ bắt đầu lệch ≤ maxStartDriftMs, do hai nhóm tenant khác nhau báo, có ít nhất một đội gần như trùng tên. `aliases` dùng thẳng cho POST /team-aliases. minScore mặc định 0.6.',
+  })
+  @ApiZodQuery(CandidatesQuery)
+  matchCandidates(@Query() query: unknown) {
+    return this._matches.candidates(CandidatesQuery.parse(query));
+  }
+
   /** Lịch sử kèo đã phát (mới nhất trước), lọc theo trạng thái / kênh / room / khoảng thời gian. */
   @Get('history')
   @RequirePermissions(P.ARBITRAGE_READ)
@@ -165,6 +230,18 @@ export class ArbitrageController {
   })
   lanes() {
     return this._lanes.execute();
+  }
+
+  /** Bộ đếm theo chặng của luồng ingest. */
+  @Get('ingest')
+  @RequirePermissions(P.ARBITRAGE_READ)
+  @ApiOperation({
+    summary: 'Dữ liệu vào theo chặng (tenant × kind)',
+    description:
+      'Quyền: arbitrage:read. Cộng dồn từ lúc app khởi động (`since`): received (message nhận), failed (translator ném lỗi), skipped theo lý do (parse_failed, unsupported_event, unsupported_sport, unsupported_market, unsupported_line, missing_fields, same_team_names, no_moneyline_teams, invalid_event, unknown_asset), set/remove (thay đổi dòng kèo sinh ra). Tốc độ = chênh lệch giữa hai lần gọi.',
+  })
+  ingest() {
+    return this._ingest.execute();
   }
 
   @Get('settings')

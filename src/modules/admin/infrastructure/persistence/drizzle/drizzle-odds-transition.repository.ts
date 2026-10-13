@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, lt, lte, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, lte, sql, type SQL } from 'drizzle-orm';
 import type { TransactionContext } from '../../../../../shared/infrastructure/database/transaction-context.js';
 import type {
   OddsTransitionQuery,
@@ -25,17 +25,30 @@ export class DrizzleOddsTransitionRepository implements OddsTransitionRepository
     );
   }
 
-  async list(q: OddsTransitionQuery): Promise<OddsTransition[]> {
+  async count(q: OddsTransitionQuery): Promise<number> {
+    const [row] = await this._tx.executor
+      .select({ n: sql<number>`count(*)::int` })
+      .from(t)
+      .where(this._where(q));
+    return row?.n ?? 0;
+  }
+
+  private _where(q: OddsTransitionQuery): SQL | undefined {
     const where: SQL[] = [];
     if (q.room) where.push(eq(t.room, q.room));
     if (q.tenant) where.push(eq(t.tenant, q.tenant));
     if (q.to) where.push(eq(t.toStatus, q.to));
     if (q.from) where.push(gte(t.at, q.from));
     if (q.until) where.push(lte(t.at, q.until));
+    return where.length ? and(...where) : undefined;
+  }
+
+  async list(q: OddsTransitionQuery): Promise<OddsTransition[]> {
+    const where = this._where(q);
     const rows = await this._tx.executor
       .select()
       .from(t)
-      .where(where.length ? and(...where) : undefined)
+      .where(where)
       .orderBy(desc(t.at), desc(t.id))
       .limit(q.limit)
       .offset(q.offset);

@@ -3,6 +3,7 @@ import type { OddsRoom } from '../../domain/odds-room.js';
 import type { Phase } from '../../domain/phase.js';
 import type { ArbitrageSettingsStore } from '../arbitrage-settings.js';
 import type { OddsRoomStore } from '../odds-room.store.js';
+import { pickOf } from '../../domain/pick.js';
 
 export interface ListRoomsQuery {
   /** Chỉ room có dòng kèo của tenant này. */
@@ -24,6 +25,8 @@ export interface RoomListItem {
   readonly sport: string;
   readonly market: string;
   readonly teams: readonly [string, string];
+  /** Nhãn hai phía, vd ["alliance +1.5", "sinners -1.5"]. */
+  readonly picks: readonly [string, string];
   readonly tenants: readonly string[];
   readonly phases: readonly Phase[];
   /** Margin tốt nhất (âm = không có arbitrage); null = chưa ghép được. */
@@ -145,6 +148,7 @@ function toItem(
     sport: room.key.sport,
     market: room.key.market,
     teams: room.key.teams,
+    picks: [pickOf(room.key, 0), pickOf(room.key, 1)],
     tenants: [...room.lines.keys()].sort(),
     phases: [...new Set(lines.map((l) => l.props.phase))],
     bestMargin: best,

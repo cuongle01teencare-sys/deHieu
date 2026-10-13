@@ -36,4 +36,12 @@ export class InMemoryOddsRoomStore implements OddsRoomStore {
     }
     return Promise.resolve(rooms);
   }
+
+  clear() {
+    const rooms = this._rooms.size;
+    let lines = 0;
+    for (const r of this._rooms.values()) lines += r.size;
+    this._rooms.clear();
+    return Promise.resolve({ rooms, lines });
+  }
 }

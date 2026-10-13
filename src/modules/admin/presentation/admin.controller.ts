@@ -6,9 +6,11 @@ import {
   Param,
   Post,
   Query,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
+import { queryDate } from '../../../shared/presentation/query-date.js';
 import { ApiZodQuery } from '../../../shared/presentation/openapi.js';
 import {
   CurrentPrincipal,
@@ -20,6 +22,8 @@ import { ListIncidentsHandler } from '../application/queries/list-incidents.quer
 import { ListAuditHandler } from '../application/queries/list-audit.query.js';
 import { ListOddsTransitionsHandler } from '../application/queries/list-odds-transitions.query.js';
 import { AcknowledgeIncidentHandler } from '../application/commands/acknowledge-incident.command.js';
+import { WsTicketService } from '../../auth/application/ws-ticket.service.js';
+import type { Principal } from '../../auth/domain/principal.js';
 
 const page = {
   limit: z.coerce.number().int().min(1).max(500).default(50),
@@ -39,16 +43,16 @@ const AuditQuery = z.object({
   principalId: z.string().optional(),
   method: z.string().optional(),
   route: z.string().optional(),
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
+  from: queryDate(),
+  to: queryDate(),
   ...page,
 });
 const TransitionsQuery = z.object({
   room: z.string().optional(),
   tenant: z.string().optional(),
   to: z.enum(['open', 'suspended', 'removed']).optional(),
-  from: z.coerce.date().optional(),
-  until: z.coerce.date().optional(),
+  from: queryDate(),
+  until: queryDate(),
   ...page,
 });
 
@@ -66,7 +70,20 @@ export class AdminController {
     @Inject(ListAuditHandler) private readonly _audit: ListAuditHandler,
     @Inject(ListOddsTransitionsHandler)
     private readonly _transitions: ListOddsTransitionsHandler,
+    @Inject(WsTicketService) private readonly _tickets: WsTicketService,
   ) {}
+
+  @Post('ws-ticket')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Cấp vé một lần để mở admin stream từ trình duyệt',
+    description:
+      'Quyền: admin:read. Vé sống 60s, dùng một lần: gửi { "type": "hello", "ticket": "..." } ngay khi mở WebSocket admin. Server web (giữ token API) gọi endpoint này rồi đưa vé cho trình duyệt — token dài hạn không rời server.',
+  })
+  wsTicket(@CurrentPrincipal() principal: Principal | undefined) {
+    if (!principal) throw new UnauthorizedException();
+    return this._tickets.issue(principal);
+  }
 
   @Get('snapshot')
   @RequirePermissions(P.READ)

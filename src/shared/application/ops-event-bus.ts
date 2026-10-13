@@ -74,6 +74,29 @@ export type OpsEvent =
         reason?: string;
       }
     >
+  /** Xóa sạch room lúc khởi động (dòng kèo mồ côi từ lần chạy trước). */
+  | Base<'odds.reset', { rooms: number; lines: number; reason: string }>
+  /** Kết quả một vòng đối chiếu danh sách market của tenant (vd polymarket descriptor). */
+  | Base<
+      'odds.reconciled',
+      {
+        tenant: string;
+        taskId: string;
+        /** Market task này đang sở hữu trước khi đối chiếu. */
+        known: number;
+        /** Có mặt trong vòng quét. */
+        seen: number;
+        /** Vắng mặt nhưng chưa đủ số vòng để gỡ. */
+        pending: number;
+        /** Đã gỡ trong vòng này. */
+        removed: number;
+        /** Đang giữ lại (không gỡ) vì số lượng vắng mặt bất thường. */
+        held: number;
+        /** Tỉ lệ vắng mặt đủ điều kiện gỡ / known. */
+        ratio: number;
+        massive: boolean;
+      }
+    >
   | Base<
       'incident.opened' | 'incident.resolved' | 'incident.acknowledged',
       {

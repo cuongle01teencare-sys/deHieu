@@ -39,6 +39,9 @@ import { GetArbitrageStatsHandler } from '../odds/application/queries/get-arbitr
 import { ListLanesHandler } from '../odds/application/queries/list-lanes.query.js';
 import { GetArbitrageSettingsHandler } from '../odds/application/queries/get-arbitrage-settings.query.js';
 import { GetRoomHandler } from '../odds/application/queries/get-room.query.js';
+import { GetIngestStatsHandler } from '../odds/application/queries/get-ingest-stats.query.js';
+import { GetMatchHandler } from '../odds/application/queries/get-match.query.js';
+import { WsTicketService } from '../auth/application/ws-ticket.service.js';
 import {
   ADMIN_SOURCES,
   type AdminSources,
@@ -73,6 +76,9 @@ import {
   OddsTransitionRecorder,
 } from './application/odds-transition.recorder.js';
 import { OpsWatchdog } from './application/ops-watchdog.js';
+import { ReconcileIncidentRelay } from './application/reconcile-incident.relay.js';
+import { RetentionJob } from './application/retention-job.js';
+import { PurgeSignalHistoryHandler } from '../odds/application/commands/purge-signal-history.command.js';
 import { GetAdminSnapshotHandler } from './application/queries/get-admin-snapshot.query.js';
 import { ListIncidentsHandler } from './application/queries/list-incidents.query.js';
 import { ListAuditHandler } from './application/queries/list-audit.query.js';
@@ -92,6 +98,8 @@ import { HealthController } from './presentation/health.controller.js';
 import { AuditInterceptor } from './presentation/audit.interceptor.js';
 
 const WATCHDOG_INTERVAL_MS = 5_000;
+const RETENTION_FIRST_RUN_MS = 60_000;
+const RETENTION_INTERVAL_MS = 24 * 3_600_000;
 const HEALTH_INTERVAL_MS = 10_000;
 const ADMIN_QUEUE = Symbol('ADMIN_QUEUE');
 
@@ -151,6 +159,7 @@ const ADMIN_QUEUE = Symbol('ADMIN_QUEUE');
         GetArbitrageStatsHandler,
         ListLanesHandler,
         GetArbitrageSettingsHandler,
+        GetIngestStatsHandler,
       ],
       useFactory: (
         supervisor: TaskSupervisor,
@@ -159,6 +168,7 @@ const ADMIN_QUEUE = Symbol('ADMIN_QUEUE');
         stats: GetArbitrageStatsHandler,
         lanes: ListLanesHandler,
         settings: GetArbitrageSettingsHandler,
+        ingest: GetIngestStatsHandler,
       ): AdminSources => ({
         tasks: () => supervisor.list(),
         nodes: () => nodes.list(),
@@ -166,6 +176,7 @@ const ADMIN_QUEUE = Symbol('ADMIN_QUEUE');
         arbitrage: () => stats.execute(),
         lanes: () => lanes.execute(),
         settings: () => settings.execute(),
+        ingest: () => ingest.execute(),
       }),
     },
 
@@ -226,6 +237,12 @@ const ADMIN_QUEUE = Symbol('ADMIN_QUEUE');
       },
     },
     {
+      provide: ReconcileIncidentRelay,
+      inject: [OPS_EVENT_BUS, IncidentTracker],
+      useFactory: (ops: OpsEventBus, incidents: IncidentTracker) =>
+        new ReconcileIncidentRelay(ops, incidents),
+    },
+    {
       provide: MetricsSampler,
       inject: [ADMIN_SOURCES],
       useFactory: (src: AdminSources) => new MetricsSampler(src),
@@ -265,13 +282,55 @@ const ADMIN_QUEUE = Symbol('ADMIN_QUEUE');
 
     // ---------- queries / commands
     {
+      provide: RetentionJob,
+      inject: [
+        INCIDENT_REPOSITORY,
+        AUDIT_REPOSITORY,
+        PurgeSignalHistoryHandler,
+        ConfigService,
+      ],
+      useFactory: (
+        incidents: IncidentRepository,
+        audit: AuditRepository,
+        signals: PurgeSignalHistoryHandler,
+        cfg: ConfigService<Env, true>,
+      ) =>
+        new RetentionJob([
+          {
+            name: 'arbitrage_signals',
+            retentionDays: cfg.get('SIGNAL_HISTORY_RETENTION_DAYS', {
+              infer: true,
+            }),
+            purge: (before, limit) => signals.execute({ before, limit }),
+          },
+          {
+            name: 'ops_incidents',
+            retentionDays: cfg.get('INCIDENT_RETENTION_DAYS', { infer: true }),
+            purge: (before, limit) => incidents.purgeOlderThan(before, limit),
+          },
+          {
+            name: 'audit_log',
+            retentionDays: cfg.get('AUDIT_RETENTION_DAYS', { infer: true }),
+            purge: (before, limit) => audit.purgeOlderThan(before, limit),
+          },
+        ]),
+    },
+    {
       provide: GetAdminSnapshotHandler,
-      inject: [ADMIN_SOURCES, IncidentTracker, HealthMonitor],
+      inject: [ADMIN_SOURCES, IncidentTracker, HealthMonitor, RetentionJob],
       useFactory: (
         src: AdminSources,
         incidents: IncidentTracker,
         health: HealthMonitor,
-      ) => new GetAdminSnapshotHandler(src, incidents, health),
+        retention: RetentionJob,
+      ) =>
+        new GetAdminSnapshotHandler(
+          src,
+          incidents,
+          health,
+          Date.now,
+          retention,
+        ),
     },
     {
       provide: ListIncidentsHandler,
@@ -307,6 +366,8 @@ const ADMIN_QUEUE = Symbol('ADMIN_QUEUE');
         GetAdminSnapshotHandler,
         MetricsSampler,
         GetRoomHandler,
+        GetMatchHandler,
+        WsTicketService,
       ],
       useFactory: (
         cfg: ConfigService<Env, true>,
@@ -316,10 +377,15 @@ const ADMIN_QUEUE = Symbol('ADMIN_QUEUE');
         snapshot: GetAdminSnapshotHandler,
         metrics: MetricsSampler,
         room: GetRoomHandler,
+        match: GetMatchHandler,
+        tickets: WsTicketService,
       ) => {
         const logger = new Logger('AdminStream');
         return new AdminWsHub(
-          { port: cfg.get('ADMIN_WS_PORT', { infer: true }) },
+          {
+            port: cfg.get('ADMIN_WS_PORT', { infer: true }),
+            host: cfg.get('WS_BIND_HOST', { infer: true }),
+          },
           ops,
           auth,
           authz,
@@ -327,6 +393,11 @@ const ADMIN_QUEUE = Symbol('ADMIN_QUEUE');
           metrics,
           (r) => room.execute({ room: r }),
           (m) => logger.error(m),
+          {
+            match: (id) => match.execute({ match: id }),
+            matchOfRoom: (r) => match.matchOfRoom(r),
+            redeemTicket: (t) => tickets.redeem(t),
+          },
         );
       },
     },
@@ -336,6 +407,8 @@ const ADMIN_QUEUE = Symbol('ADMIN_QUEUE');
 export class AdminModule implements OnModuleInit, OnApplicationShutdown {
   private readonly _logger = new Logger('Admin');
   private _timers: ReturnType<typeof setInterval>[] = [];
+  private _unsubscribers: (() => void)[] = [];
+  private _firstPurge: ReturnType<typeof setTimeout> | null = null;
   private _ticking = false;
 
   constructor(
@@ -346,6 +419,9 @@ export class AdminModule implements OnModuleInit, OnApplicationShutdown {
     private readonly _transitions: OddsTransitionRecorder,
     @Inject(AdminWsHub) private readonly _hub: AdminWsHub,
     @Inject(ADMIN_QUEUE) private readonly _queue: BackgroundQueue,
+    @Inject(ReconcileIncidentRelay)
+    private readonly _reconcile: ReconcileIncidentRelay,
+    @Inject(RetentionJob) private readonly _retention: RetentionJob,
   ) {}
 
   async onModuleInit() {
@@ -356,6 +432,7 @@ export class AdminModule implements OnModuleInit, OnApplicationShutdown {
       this._logger.error(`không đóng được sự cố cũ: ${errorText(e)}`);
     }
     this._transitions.start();
+    this._unsubscribers.push(this._reconcile.start());
     this._hub.listen();
 
     await this._health.check();
@@ -366,12 +443,36 @@ export class AdminModule implements OnModuleInit, OnApplicationShutdown {
           .catch((e: unknown) => this._logger.error(errorText(e)));
       }, HEALTH_INTERVAL_MS),
       setInterval(() => void this._tick(), WATCHDOG_INTERVAL_MS),
+      setInterval(() => void this._purge(), RETENTION_INTERVAL_MS),
     );
+    this._firstPurge = setTimeout(
+      () => void this._purge(),
+      RETENTION_FIRST_RUN_MS,
+    );
+  }
+
+  /** Chính sách giữ lại: dọn lịch sử kèo / sự cố / audit quá hạn. */
+  private async _purge() {
+    try {
+      const r = await this._retention.run();
+      for (const t of r?.targets ?? []) {
+        if (t.error) this._logger.error(`dọn ${t.name} lỗi: ${t.error}`);
+        else if (t.deleted)
+          this._logger.log(
+            `dọn ${t.name}: xóa ${t.deleted} bản ghi > ${t.retentionDays} ngày${t.incomplete ? ' (còn nữa, lần sau dọn tiếp)' : ''}`,
+          );
+      }
+    } catch (e: unknown) {
+      this._logger.error(`retention lỗi: ${errorText(e)}`);
+    }
   }
 
   async onApplicationShutdown() {
     this._timers.forEach(clearInterval);
     this._timers = [];
+    if (this._firstPurge) clearTimeout(this._firstPurge);
+    this._unsubscribers.forEach((u) => u());
+    this._unsubscribers = [];
     await this._hub.close();
     await this._transitions.stop();
     await this._queue.flush();

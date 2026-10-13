@@ -29,6 +29,8 @@ const setup = () => {
   let now = 1_000;
   const saved: Incident[] = [];
   const repo: IncidentRepository = {
+    purgeOlderThan: () => Promise.resolve(0),
+    count: () => Promise.resolve(0),
     save: (i) => {
       saved.push(i);
       return Promise.resolve();

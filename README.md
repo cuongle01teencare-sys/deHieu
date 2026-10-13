@@ -25,6 +25,10 @@
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
+## Tài liệu hệ thống
+
+Xem [thuật ngữ và cách hệ thống chạy](web/content/system-guide.md), hoặc mở **Tài liệu hệ thống** tại `/tai-lieu` trong web sau khi đăng nhập. Nội dung trên web và bản tải Markdown dùng chung file này.
+
 ## Project setup
 
 ```bash
