@@ -58,6 +58,11 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
   private readonly _books = new Map<string, Map<string, Book>>();
   /** taskId → eventId đã thấy trong lần snapshot đang chạy (để dọn trận đã biến mất). */
   private readonly _seen = new Map<string, Set<string>>();
+  /**
+   * taskId → `${eventId}|${marketId}|${specifier}` đã thấy trong lần snapshot đang chạy.
+   * sptpub có lúc gỡ market mà KHÔNG gửi delta (trận vẫn còn) → hết snapshot thì gỡ cả market vắng mặt.
+   */
+  private readonly _seenBooks = new Map<string, Set<string>>();
   private readonly _sourceLinks = new Map<string, SptPubSourceLinks>();
 
   constructor(
@@ -71,6 +76,7 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
     if (!phase) return Promise.resolve([]); // descriptor: chưa dùng tới
     if (msg.channel === 'snapshot-start') {
       this._seen.set(msg.taskId, new Set());
+      this._seenBooks.set(msg.taskId, new Set());
       this._sourceLinks.delete(msg.taskId);
       return Promise.resolve([]);
     }
@@ -166,6 +172,11 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
           book.phase = route.phase;
           book.updatedAt = msg.sentAt;
           books.set(id, book);
+          if (msg.channel === 'snapshot') {
+            // snapshot mang trọn market: bỏ outcome cũ không còn trong nguồn
+            book.outcomes.clear();
+            this._seenBooks.get(msg.taskId)?.add(`${eventId}|${id}`);
+          }
           for (const [oid, o] of Object.entries(outs))
             if (o) book.outcomes.set(oid, o);
 
@@ -174,13 +185,27 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
       }
     }
 
-    // hết snapshot: trận của feed này mà không còn trong snapshot → đã biến mất trong lúc gián đoạn
+    // hết snapshot: trận của feed này mà không còn trong snapshot → đã biến mất trong lúc gián đoạn;
+    // trận còn nhưng market/specifier vắng mặt → market đó đã bị gỡ mà không có delta
     const seen = this._seen.get(msg.taskId);
+    const seenBooks = this._seenBooks.get(msg.taskId);
     if (msg.channel === 'snapshot' && parsed.data.snapshot_complete && seen) {
-      for (const [eventId, route] of this._routes)
-        if (route.taskId === msg.taskId && !seen.has(eventId))
+      for (const [eventId, route] of this._routes) {
+        if (route.taskId !== msg.taskId) continue;
+        if (!seen.has(eventId)) {
           changes.push(...this._removeEvent(eventId));
+          continue;
+        }
+        const books = this._books.get(eventId);
+        if (!books || !seenBooks) continue;
+        for (const [id, book] of books)
+          if (!seenBooks.has(`${eventId}|${id}`)) {
+            books.delete(id);
+            changes.push(...this._remove(book));
+          }
+      }
       this._seen.delete(msg.taskId);
+      this._seenBooks.delete(msg.taskId);
     }
     return Promise.resolve(changes);
   }
@@ -191,6 +216,7 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
     for (const [eventId, route] of this._routes)
       if (route.taskId === taskId) changes.push(...this._removeEvent(eventId));
     this._seen.delete(taskId);
+    this._seenBooks.delete(taskId);
     this._sourceLinks.delete(taskId);
     return Promise.resolve(changes);
   }

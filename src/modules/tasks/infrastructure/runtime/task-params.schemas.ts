@@ -20,6 +20,18 @@ export const SptPubFeedParamsSchema = z.strictObject({
   ...sptpubEndpoint,
   intervalMs: z.number().int().min(250).default(1_000),
   maxConsecutiveErrors: z.number().int().positive().optional(),
+  /** Chu kỳ tự tải lại snapshot để bù phần sptpub đổi/gỡ mà không gửi delta; 0 = tắt. */
+  resnapshotEveryMs: z
+    .number()
+    .int()
+    .refine(
+      (v) => v === 0 || v >= 1_000,
+      'resnapshotEveryMs: 0 (tắt) hoặc ≥ 1000',
+    )
+    .default(5_000)
+    .describe(
+      'Chu kỳ tự tải lại snapshot (ms), chỉ phát phần lệch, để bù phần sptpub đổi/gỡ mà không gửi delta; 0 = tắt',
+    ),
 });
 
 const polymarketEndpoints = z

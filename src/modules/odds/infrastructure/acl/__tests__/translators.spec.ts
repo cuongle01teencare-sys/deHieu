@@ -112,6 +112,77 @@ describe('SptPubOddsTranslator', () => {
     });
   });
 
+  it('kênh resync (phần lệch sau khi task tự tải lại snapshot) cập nhật giá và gỡ market như delta', async () => {
+    const t = new SptPubOddsTranslator(teams);
+    await t.translate(
+      msg({
+        channel: 'snapshot',
+        payload: { version: 1, events: event('Q', '2.58', '1.45') },
+      }),
+    );
+    const [c] = await t.translate(
+      msg({
+        channel: 'resync',
+        payload: {
+          version: 2,
+          events: {
+            Q: {
+              markets: {
+                '186': { '': { '4': { k: '2.62' }, '5': { k: '1.47' } } },
+              },
+            },
+          },
+          resync: { events: 1, at: 1 },
+        },
+      }),
+    );
+    expect(c?.type === 'set' && [...c.line.props.odds].sort()).toEqual([
+      1.47, 2.62,
+    ]);
+    const removed = await t.translate(
+      msg({
+        channel: 'resync',
+        payload: { version: 3, events: { Q: { markets: { '186': null } } } },
+      }),
+    );
+    expect(removed.map((x) => x.type)).toEqual(['remove']);
+  });
+
+  it('chụp lại snapshot: ghi đè giá cũ, gỡ market vắng mặt dù trận vẫn còn (sptpub không gửi delta gỡ)', async () => {
+    const t = new SptPubOddsTranslator(teams);
+    const withMap = (k1: string, k2: string, map: boolean) => {
+      const e = event('R', k1, k2);
+      if (map)
+        (e.R.markets as Record<string, unknown>)['330'] = {
+          'mapnr=1': { '4': { k: '2' }, '5': { k: '1.8' } },
+        };
+      return e;
+    };
+    const snapshot = async (events: Record<string, unknown>) => {
+      await t.translate(
+        msg({ channel: 'snapshot-start', payload: { feed: 'live' } }),
+      );
+      return t.translate(
+        msg({
+          channel: 'snapshot',
+          payload: { version: 1, snapshot_complete: true, events },
+        }),
+      );
+    };
+    const first = await snapshot(withMap('2.58', '1.45', true));
+    expect(first.filter((c) => c.type === 'set')).toHaveLength(2);
+
+    // sptpub đổi giá + gỡ market 330 mà KHÔNG gửi delta; lần chụp lại sau mới thấy
+    const again = await snapshot(withMap('2.62', '1.47', false));
+    const set = again.find((c) => c.type === 'set');
+    expect(set?.type === 'set' && [...set.line.props.odds].sort()).toEqual([
+      1.47, 2.62,
+    ]);
+    expect(
+      again.filter((c) => c.type === 'remove').map((c) => c.key.market),
+    ).toEqual(['map-1-winner']);
+  });
+
   it('outcome bị khóa (b:1) → dòng suspended', async () => {
     const t = new SptPubOddsTranslator(teams);
     await t.translate(msg({ payload: { version: 1, events: event('Q') } }));
