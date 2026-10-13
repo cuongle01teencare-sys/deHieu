@@ -1,4 +1,5 @@
 import type {
+  NotifyKind,
   NotifyMessage,
   NotifySender,
 } from '../../application/notify/notify.ports.js';
@@ -25,38 +26,75 @@ const DEFAULTS: HttpNotifySenderOptions = {
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+/** Màu thanh bên của embed Discord theo loại tin. */
+const DISCORD_COLOR: Record<NotifyKind, number> = {
+  issued: 0x22c55e, // xanh lá: kèo mới
+  updated: 0x3b82f6, // xanh dương: kèo ghi đè
+  cancelled: 0x6b7280, // xám: kèo hủy
+  test: 0xa855f7,
+};
+
+const MARK: Record<NotifyKind, string> = {
+  issued: '🟢',
+  updated: '🔵',
+  cancelled: '⚪',
+  test: '🟣',
+};
+
+const cut = (s: string, n: number) =>
+  s.length > n ? `${s.slice(0, n - 1)}…` : s;
+
+/** **đậm** + [nhãn](url) → cú pháp từng nền tảng (nội dung do app tạo, không phải người dùng). */
+const toTelegram = (s: string) =>
+  escapeHtml(s)
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/\[(.+?)\]\((https?:[^)\s]+)\)/g, '<a href="$2">$1</a>');
+const toSlack = (s: string) =>
+  s
+    .replace(/\*\*(.+?)\*\*/g, '*$1*')
+    .replace(/\[(.+?)\]\((https?:[^)\s]+)\)/g, '<$2|$1>');
+
 /** Định dạng theo từng nền tảng. */
 export const formatMessage = {
-  discord: (m: NotifyMessage) =>
-    [
-      `**${m.title}**`,
-      ...m.lines,
-      ...(m.links.length
-        ? [m.links.map((l) => `[${l.label}](<${l.url}>)`).join(' · ')]
-        : []),
-    ].join('\n'),
+  /** Discord: embed có màu, các cửa cược đặt cạnh nhau. */
+  discord: (m: NotifyMessage) => ({
+    embeds: [
+      {
+        title: cut(`${MARK[m.kind]} ${m.title}`, 256),
+        ...(m.description ? { description: cut(m.description, 4096) } : {}),
+        color: DISCORD_COLOR[m.kind],
+        ...(m.links[0] ? { url: m.links[0].url } : {}),
+        fields: m.fields.slice(0, 25).map((f) => ({
+          name: cut(f.name, 256),
+          value: cut(f.value, 1024),
+          inline: f.inline ?? false,
+        })),
+        ...(m.footer ? { footer: { text: cut(m.footer, 2048) } } : {}),
+        timestamp: new Date(m.at).toISOString(),
+      },
+    ],
+    allowed_mentions: { parse: [] },
+  }),
   slack: (m: NotifyMessage) =>
     [
-      `*${m.title}*`,
-      ...m.lines,
-      ...(m.links.length
-        ? [m.links.map((l) => `<${l.url}|${l.label}>`).join(' · ')]
-        : []),
+      `${MARK[m.kind]} *${m.title}*`,
+      ...(m.description ? [toSlack(m.description)] : []),
+      '',
+      ...m.fields.map(
+        (f) => `*${f.name}*: ${toSlack(f.value).replace(/\n/g, ' · ')}`,
+      ),
+      ...(m.footer ? [`_${m.footer}_`] : []),
     ].join('\n'),
   telegram: (m: NotifyMessage) =>
     [
-      `<b>${escapeHtml(m.title)}</b>`,
-      ...m.lines.map(escapeHtml),
-      ...(m.links.length
-        ? [
-            m.links
-              .map(
-                (l) =>
-                  `<a href="${escapeHtml(l.url)}">${escapeHtml(l.label)}</a>`,
-              )
-              .join(' · '),
-          ]
-        : []),
+      `${MARK[m.kind]} <b>${escapeHtml(m.title)}</b>`,
+      ...(m.description ? [toTelegram(m.description)] : []),
+      '',
+      ...m.fields.map(
+        (f) =>
+          `<b>${escapeHtml(f.name)}</b>: ${toTelegram(f.value).replace(/\n/g, ' · ')}`,
+      ),
+      ...(m.footer ? [`<i>${escapeHtml(m.footer)}</i>`] : []),
     ].join('\n'),
 };
 
@@ -98,10 +136,7 @@ export class HttpNotifySender implements NotifySender {
   private async _sendOnce(ch: NotifyChannel, m: NotifyMessage) {
     const c = ch.config;
     if (c.type === 'discord')
-      return this._post(c.webhookUrl, {
-        content: formatMessage.discord(m).slice(0, 2000),
-        allowed_mentions: { parse: [] },
-      });
+      return this._post(c.webhookUrl, formatMessage.discord(m));
     if (c.type === 'slack')
       return this._post(c.webhookUrl, { text: formatMessage.slack(m) });
     return this._post(

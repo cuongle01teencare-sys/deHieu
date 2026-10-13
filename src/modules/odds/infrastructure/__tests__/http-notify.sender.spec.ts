@@ -4,19 +4,89 @@ import {
 } from '../notify/http-notify.sender.js';
 import type { NotifyChannel } from '../../domain/notify-channel.js';
 
-const msg = {
+import { issuedMessage } from '../../application/notify/signal-message.js';
+import type { NotifyMessage } from '../../application/notify/notify.ports.js';
+
+const msg: NotifyMessage = {
+  kind: 'issued',
   title: 'Kèo mới · VIP · +5.00%',
-  lines: ['CS2 · a <b> vs b'],
+  description: '**CS2** · a <b> vs b',
+  fields: [
+    {
+      name: '1. polymarket',
+      value: '**a** @ **2.100**\n[Mở trận](https://polymarket.com/event/x)',
+      inline: true,
+    },
+  ],
   links: [{ label: 'polymarket', url: 'https://polymarket.com/event/x' }],
+  footer: 'Hết hạn 15:00:00 · s1',
+  at: 0,
 };
 
 describe('HttpNotifySender', () => {
-  it('định dạng theo từng nền tảng', () => {
-    expect(formatMessage.discord(msg)).toContain('**Kèo mới');
-    expect(formatMessage.slack(msg)).toContain(
-      '<https://polymarket.com/event/x|polymarket>',
+  it('Discord: embed có màu theo loại tin, field cạnh nhau, không ping ai', () => {
+    const body = formatMessage.discord(msg);
+    const [e] = body.embeds;
+    expect(e?.title).toBe('🟢 Kèo mới · VIP · +5.00%');
+    expect(e?.color).toBe(0x22c55e);
+    expect(e?.url).toBe('https://polymarket.com/event/x');
+    expect(e?.fields[0]).toMatchObject({ name: '1. polymarket', inline: true });
+    expect(e?.footer?.text).toContain('s1');
+    expect(body.allowed_mentions).toEqual({ parse: [] });
+    expect(
+      formatMessage.discord({ ...msg, kind: 'cancelled' }).embeds[0]?.color,
+    ).toBe(0x6b7280);
+  });
+
+  it('Telegram (HTML) và Slack (mrkdwn): chuyển chữ đậm + link, escape HTML', () => {
+    const tg = formatMessage.telegram(msg);
+    expect(tg).toContain('<b>CS2</b> · a &lt;b&gt; vs b');
+    expect(tg).toContain(
+      '<a href="https://polymarket.com/event/x">Mở trận</a>',
     );
-    expect(formatMessage.telegram(msg)).toContain('a &lt;b&gt; vs b');
+    const sl = formatMessage.slack(msg);
+    expect(sl).toContain('*CS2*');
+    expect(sl).toContain('<https://polymarket.com/event/x|Mở trận>');
+  });
+
+  it('kèo mới: chia vốn đúng để lời bằng nhau, đủ thông tin hai cửa', () => {
+    const m = issuedMessage(
+      {
+        signalId: 's1',
+        room: 'room:cs2:a~b:game-winner',
+        sport: 'cs2',
+        market: 'game-winner',
+        teams: ['a', 'b'],
+        comboId: 'x',
+        phase: 'prematch',
+        margin: 1 / (1 / 2.2 + 1 / 2.2) - 1,
+        legs: [
+          { tenant: 'sptpub', side: 0, pick: 'a', odds: 2.2, ref: {} },
+          {
+            tenant: 'polymarket',
+            side: 1,
+            pick: 'b',
+            odds: 2.2,
+            ref: { url: 'https://polymarket.com/event/x' },
+          },
+        ],
+        issuedAt: 0,
+        expiresAt: 30_000,
+      },
+      { id: 't', name: 'VIP', minMargin: 0.05, maxMargin: null },
+      false,
+    );
+    expect(m.title).toBe('Kèo mới · VIP · +10.00%');
+    expect(m.fields.map((f) => f.name)).toEqual([
+      '1. sptpub',
+      '2. polymarket',
+      'Lời',
+    ]);
+    expect(m.fields[0]?.value).toContain('Vốn 50.0%');
+    expect(m.fields[1]?.value).toContain(
+      '[Mở trận](https://polymarket.com/event/x)',
+    );
+    expect(m.fields[2]?.value).toContain('100 → 110.00');
   });
 
   it('telegram: gọi Bot API sendMessage; 429 → chờ retry_after rồi thử lại', async () => {
