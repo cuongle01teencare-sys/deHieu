@@ -6,6 +6,7 @@ import type { NotifyChannel } from '../../domain/notify-channel.js';
 
 import { issuedMessage } from '../../application/notify/signal-message.js';
 import type { NotifyMessage } from '../../application/notify/notify.ports.js';
+import type { ArbitrageSignal } from '../../domain/arbitrage-signal.js';
 
 const msg: NotifyMessage = {
   kind: 'issued',
@@ -29,7 +30,7 @@ describe('HttpNotifySender', () => {
     const [e] = body.embeds;
     expect(e?.title).toBe('🟢 Kèo mới · VIP · +5.00%');
     expect(e?.color).toBe(0x22c55e);
-    expect(e?.url).toBe('https://polymarket.com/event/x');
+    expect(e).not.toHaveProperty('url'); // tiêu đề không dẫn lệch về một sàn
     expect(e?.fields[0]).toMatchObject({ name: '1. polymarket', inline: true });
     expect(e?.footer?.text).toContain('s1');
     expect(body.allowed_mentions).toEqual({ parse: [] });
@@ -50,43 +51,60 @@ describe('HttpNotifySender', () => {
   });
 
   it('kèo mới: chia vốn đúng để lời bằng nhau, đủ thông tin hai cửa', () => {
+    const sig: ArbitrageSignal = {
+      signalId: 's1',
+      room: 'room:cs2:a~b:game-winner',
+      sport: 'cs2',
+      market: 'game-winner',
+      teams: ['a', 'b'],
+      comboId: 'x',
+      phase: 'prematch',
+      margin: 1 / (1 / 2.2 + 1 / 2.2) - 1,
+      legs: [
+        { tenant: 'sptpub', side: 0, pick: 'a', odds: 2.2, ref: {} },
+        {
+          tenant: 'polymarket',
+          side: 1,
+          pick: 'b',
+          odds: 2.2,
+          ref: { url: 'https://polymarket.com/event/x' },
+        },
+      ],
+      issuedAt: 0,
+      expiresAt: 30_000,
+    };
     const m = issuedMessage(
-      {
-        signalId: 's1',
-        room: 'room:cs2:a~b:game-winner',
-        sport: 'cs2',
-        market: 'game-winner',
-        teams: ['a', 'b'],
-        comboId: 'x',
-        phase: 'prematch',
-        margin: 1 / (1 / 2.2 + 1 / 2.2) - 1,
-        legs: [
-          { tenant: 'sptpub', side: 0, pick: 'a', odds: 2.2, ref: {} },
-          {
-            tenant: 'polymarket',
-            side: 1,
-            pick: 'b',
-            odds: 2.2,
-            ref: { url: 'https://polymarket.com/event/x' },
-          },
-        ],
-        issuedAt: 0,
-        expiresAt: 30_000,
-      },
+      sig,
       { id: 't', name: 'VIP', minMargin: 0.05, maxMargin: null },
       false,
     );
     expect(m.title).toBe('Kèo mới · VIP · +10.00%');
     expect(m.fields.map((f) => f.name)).toEqual([
-      '1. sptpub',
-      '2. polymarket',
-      'Lời',
+      'Cửa 1 · sptpub',
+      'Cửa 2 · polymarket',
+      'Lợi nhuận',
     ]);
-    expect(m.fields[0]?.value).toContain('Vốn 50.0%');
-    expect(m.fields[1]?.value).toContain(
-      '[Mở trận](https://polymarket.com/event/x)',
+    expect(m.fields[0]?.value).toContain('vốn **50.0%**');
+    // chỉ polymarket có link → không gắn link nào (không dẫn lệch về một sàn)
+    expect(m.links).toEqual([]);
+    expect(m.fields.some((f) => f.value.includes('Mở trang'))).toBe(false);
+    expect(m.fields[2]?.value).toContain('nhận về **110.00**');
+
+    const both = issuedMessage(
+      {
+        ...sig,
+        legs: [
+          { ...sig.legs[0], ref: { url: 'https://csgoempire.com/x' } },
+          sig.legs[1],
+        ],
+      },
+      null,
+      false,
     );
-    expect(m.fields[2]?.value).toContain('100 → 110.00');
+    expect(both.links.map((l) => l.label)).toEqual(['sptpub', 'polymarket']);
+    expect(both.fields[0]?.value).toContain(
+      '[Mở trang sptpub](https://csgoempire.com/x)',
+    );
   });
 
   it('telegram: gọi Bot API sendMessage; 429 → chờ retry_after rồi thử lại', async () => {

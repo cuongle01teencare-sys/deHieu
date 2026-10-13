@@ -45,7 +45,12 @@ const polymarketEndpoints = z
 export const PolymarketEventsParamsSchema = z.strictObject({
   tagIds: z.array(z.number().int()).min(1),
   intervalMs: z.number().int().min(5_000).default(30_000),
-  live: z.boolean().optional(),
+  live: z
+    .boolean()
+    .optional()
+    .describe(
+      'Bật = chỉ trận đang live. Tắt/bỏ trống = mọi trận (đang live + sắp diễn ra)',
+    ),
   pageSize: z.number().int().min(1).max(500).optional(),
   endpoints: polymarketEndpoints,
 });

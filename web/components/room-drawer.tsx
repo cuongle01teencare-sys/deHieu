@@ -3,7 +3,7 @@
 import { useEffect } from 'react';
 import { Check, Minus } from 'lucide-react';
 import Link from 'next/link';
-import { fmtAge, fmtClock, fmtOdds, fmtStamp } from '@/lib/format';
+import { fmtAge, fmtClock, fmtOdds, fmtStamp, timeLeft } from '@/lib/format';
 import { marketLabel } from '@/lib/markets';
 import type { ListResult, OddsTransition, RoomDetailView } from '@/lib/types';
 import { CANCEL_REASONS } from '@/lib/skip-reasons';
@@ -171,8 +171,7 @@ function RoomBody({ room }: { room: string }) {
 
 function ActiveSignal({ s }: { s: RoomDetailView['activeSignals'][number] }) {
   const now = useNow(1_000);
-  const left = Math.max(0, s.expiresAt - now);
-  const total = s.expiresAt - s.issuedAt || 1;
+  const { left, ratio } = timeLeft(s, now);
   return (
     <div className="border-b border-line py-3 last:border-0">
       <div className="flex items-center gap-3">
@@ -181,8 +180,8 @@ function ActiveSignal({ s }: { s: RoomDetailView['activeSignals'][number] }) {
         <span className="num ml-auto text-caption text-muted-fg">còn {fmtAge(left)}</span>
       </div>
       <SignalLegs legs={s.legs} className="mt-1.5" />
-      <div className="mt-2.5 h-px w-full bg-line">
-        <div className="h-px bg-ok transition-[width] duration-1000 ease-linear" style={{ width: `${(left / total) * 100}%` }} />
+      <div className="mt-2.5 h-px w-full overflow-hidden bg-line">
+        <div className="h-px bg-ok transition-[width] duration-1000 ease-linear" style={{ width: `${ratio * 100}%` }} />
       </div>
     </div>
   );

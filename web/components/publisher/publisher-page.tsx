@@ -378,6 +378,8 @@ function CreateTask({ open, onOpenChange, nodes, onCreated }: { open: boolean; o
     for (const p of info.params) {
       const v = values[p.name];
       if (v === '' || v === undefined) continue;
+      // công tắc tắt mà backend không có mặc định = "không đặt" (không gửi false: vd polymarket live=false lọc mất trận)
+      if (p.type === 'boolean' && v === false && p.default === undefined) continue;
       if (p.type === 'number') params[p.name] = Number(v);
       else if (p.type === 'number[]') params[p.name] = String(v).split(',').map((x) => Number(x.trim())).filter((x) => !Number.isNaN(x));
       else if (p.type === 'json') {

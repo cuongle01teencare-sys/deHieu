@@ -41,7 +41,18 @@ const time = (ms: number) =>
   });
 
 const matchLine = (s: ArbitrageSignal) =>
-  `**${SPORT[s.sport] ?? s.sport}** · ${s.teams[0]} vs ${s.teams[1]}`;
+  `**${SPORT[s.sport] ?? s.sport}** · **${s.teams[0]}** vs **${s.teams[1]}**`;
+
+const phaseLabel = (s: ArbitrageSignal) =>
+  s.phase === 'live' ? 'Đang đánh (live)' : 'Trước trận';
+
+/** Link trang trận của từng cửa — chỉ dùng khi CẢ HAI cửa đều có, để không dẫn lệch về một bên. */
+const legUrls = (s: ArbitrageSignal): [string, string] | null => {
+  const urls = s.legs.map((l) =>
+    l.ref.url?.startsWith('http') ? l.ref.url : null,
+  );
+  return urls[0] && urls[1] ? [urls[0], urls[1]] : null;
+};
 
 /**
  * Chia vốn để lời bằng nhau dù cửa nào thắng: tỉ lệ cửa i = (1/odds_i) / Σ(1/odds).
@@ -65,17 +76,15 @@ export function issuedMessage(
   replaces: boolean,
 ): NotifyMessage {
   const split = stakeSplit([s.legs[0].odds, s.legs[1].odds]);
+  const urls = legUrls(s);
   const legField = (i: 0 | 1) => {
     const l = s.legs[i];
-    const url = l.ref.url?.startsWith('http') ? l.ref.url : null;
     return {
-      name: `${i + 1}. ${l.tenant}`,
+      name: `Cửa ${i + 1} · ${l.tenant}`,
       value: [
-        `**${l.pick}** @ **${l.odds.toFixed(3)}**`,
-        `Vốn ${split.shares[i].toFixed(1)}%`,
-        ...(url ? [`[Mở trận](${url})`] : []),
+        `**${l.pick}**  ·  odds **${l.odds.toFixed(3)}**  ·  vốn **${split.shares[i].toFixed(1)}%**`,
+        ...(urls ? [`[Mở trang ${l.tenant}](${urls[i]})`] : []),
       ].join('\n'),
-      inline: true,
     };
   };
   return {
@@ -83,21 +92,20 @@ export function issuedMessage(
     title: `${replaces ? 'Kèo cập nhật' : 'Kèo mới'}${tier ? ` · ${tier.name}` : ''} · +${pct(s.margin)}`,
     description: [
       matchLine(s),
-      `${marketLabel(s.market)} · ${s.phase === 'live' ? 'Live' : 'Prematch'}`,
+      `${marketLabel(s.market)} · ${phaseLabel(s)}`,
     ].join('\n'),
     fields: [
       legField(0),
       legField(1),
       {
-        name: 'Lời',
-        value: `**+${pct(s.margin)}**\n100 → ${split.payoutPer100.toFixed(2)}`,
-        inline: true,
+        name: 'Lợi nhuận',
+        value: `**+${pct(s.margin)}**  ·  đặt 100 nhận về **${split.payoutPer100.toFixed(2)}**`,
       },
     ],
-    links: s.legs
-      .filter((l) => l.ref.url?.startsWith('http'))
-      .map((l) => ({ label: l.tenant, url: l.ref.url })),
-    footer: `Hết hạn ${time(s.expiresAt)} · ${s.signalId}`,
+    links: urls
+      ? s.legs.map((l, i) => ({ label: l.tenant, url: urls[i] }))
+      : [],
+    footer: `Hết hạn ${time(s.expiresAt)}  ·  id ${s.signalId}`,
     at: s.issuedAt,
   };
 }
@@ -114,12 +122,12 @@ export function cancelledMessage(
     description: s
       ? [
           matchLine(s),
-          `${marketLabel(s.market)} · trước đó +${pct(s.margin)}`,
+          `${marketLabel(s.market)} · ${phaseLabel(s)} · trước đó +${pct(s.margin)}`,
         ].join('\n')
       : '',
     fields: [{ name: 'Lý do', value: CANCEL[reason] ?? reason }],
     links: [],
-    footer: signalId,
+    footer: `id ${signalId}`,
     at,
   };
 }

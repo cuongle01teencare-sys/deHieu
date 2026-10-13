@@ -10,7 +10,11 @@ export interface PolymarketEventsParams {
   /** Tag của gamma, vd [100639] (esports). */
   readonly tagIds: readonly number[];
   readonly intervalMs: number; // vd 30_000
-  /** true = chỉ trận đang live. Bỏ trống = cả sắp diễn ra. */
+  /**
+   * true = chỉ trận đang live. false / bỏ trống = mọi trận (đang live + sắp diễn ra).
+   * KHÔNG gửi live=false lên gamma: gamma hiểu là "chỉ event có cờ live = false",
+   * loại mất các trận chưa có cờ live (thường là trận còn vài ngày nữa mới đánh).
+   */
   readonly live?: boolean;
   readonly pageSize?: number; // mặc định 100
   /** Ghi đè endpoint (staging, bản giả để test). Bỏ trống = production. */
@@ -40,7 +44,7 @@ export class PolymarketEventsTask implements Task<PolymarketEventsParams> {
         const pages = client.listEvents({
           tagIds: [...p.tagIds],
           closed: false,
-          ...(p.live === undefined ? {} : { live: p.live }),
+          ...(p.live === true ? { live: true } : {}),
           pageSize: p.pageSize ?? 100,
         });
         for await (const page of pages) {

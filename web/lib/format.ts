@@ -111,3 +111,13 @@ export const fmtDuration = (ms: number): string => {
   if (m < 60) return `${m} phút`;
   return `${(m / 60).toFixed(m % 60 ? 1 : 0)} giờ`;
 };
+
+/**
+ * Thời gian còn lại của kèo, kẹp trong [0, thời hạn]. Đồng hồ máy xem web có thể lệch đồng hồ server
+ * (vd chậm 7s → "còn 37s" với kèo 30s): không kẹp thì thanh rộng > 100% và tràn bố cục.
+ */
+export function timeLeft(s: { issuedAt: number; expiresAt: number }, now: number) {
+  const total = Math.max(1, s.expiresAt - s.issuedAt);
+  const left = Math.min(total, Math.max(0, s.expiresAt - now));
+  return { left, total, ratio: left / total };
+}

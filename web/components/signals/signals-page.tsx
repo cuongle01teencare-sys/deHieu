@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Zap, History } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { ArbitrageSignal, ListResult, SignalHistoryItem, SignalStatus } from '@/lib/types';
-import { fmtAge, fmtClock, fmtStamp } from '@/lib/format';
+import { fmtAge, fmtClock, fmtStamp, timeLeft } from '@/lib/format';
 import { marketLabel } from '@/lib/markets';
 import { CANCEL_REASONS } from '@/lib/skip-reasons';
 import { cn } from '@/lib/utils';
@@ -131,8 +131,7 @@ function LiveFeed() {
 
 function FeedRow({ s, isNew, minMargin, onOpen }: { s: FeedItem; isNew: boolean; minMargin: number; onOpen: () => void }) {
   const now = useNow(1_000);
-  const total = s.expiresAt - s.issuedAt || 1;
-  const left = Math.max(0, s.expiresAt - now);
+  const { left, ratio } = timeLeft(s, now);
   const gone = !!s.gone;
   return (
     <li
@@ -170,8 +169,8 @@ function FeedRow({ s, isNew, minMargin, onOpen }: { s: FeedItem; isNew: boolean;
       <SignalLegs legs={s.legs} className="mt-3 md:hidden" stacked />
       {/* thời hạn: vạch mảnh co dần */}
       {!gone ? (
-        <div className="absolute inset-x-0 bottom-[-1px] h-px">
-          <div className="h-px bg-ok/70 transition-[width] duration-1000 ease-linear" style={{ width: `${(left / total) * 100}%` }} />
+        <div className="absolute inset-x-0 bottom-[-1px] h-px overflow-hidden">
+          <div className="h-px bg-ok/70 transition-[width] duration-1000 ease-linear" style={{ width: `${ratio * 100}%` }} />
         </div>
       ) : null}
     </li>

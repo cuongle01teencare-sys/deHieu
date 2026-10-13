@@ -63,7 +63,6 @@ export const formatMessage = {
         title: cut(`${MARK[m.kind]} ${m.title}`, 256),
         ...(m.description ? { description: cut(m.description, 4096) } : {}),
         color: DISCORD_COLOR[m.kind],
-        ...(m.links[0] ? { url: m.links[0].url } : {}),
         fields: m.fields.slice(0, 25).map((f) => ({
           name: cut(f.name, 256),
           value: cut(f.value, 1024),
@@ -80,9 +79,7 @@ export const formatMessage = {
       `${MARK[m.kind]} *${m.title}*`,
       ...(m.description ? [toSlack(m.description)] : []),
       '',
-      ...m.fields.map(
-        (f) => `*${f.name}*: ${toSlack(f.value).replace(/\n/g, ' · ')}`,
-      ),
+      ...m.fields.flatMap((f) => [`*${f.name}*`, toSlack(f.value), '']),
       ...(m.footer ? [`_${m.footer}_`] : []),
     ].join('\n'),
   telegram: (m: NotifyMessage) =>
@@ -90,10 +87,11 @@ export const formatMessage = {
       `${MARK[m.kind]} <b>${escapeHtml(m.title)}</b>`,
       ...(m.description ? [toTelegram(m.description)] : []),
       '',
-      ...m.fields.map(
-        (f) =>
-          `<b>${escapeHtml(f.name)}</b>: ${toTelegram(f.value).replace(/\n/g, ' · ')}`,
-      ),
+      ...m.fields.flatMap((f) => [
+        `<b>${escapeHtml(f.name)}</b>`,
+        toTelegram(f.value),
+        '',
+      ]),
       ...(m.footer ? [`<i>${escapeHtml(m.footer)}</i>`] : []),
     ].join('\n'),
 };
