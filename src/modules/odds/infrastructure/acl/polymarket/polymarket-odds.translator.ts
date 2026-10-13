@@ -27,6 +27,7 @@ interface MarketRoute {
   startsAt: number;
   conditionId: string;
   slug: string;
+  eventUrl: string;
   tokens: [string, string]; // token theo thứ tự đội của MatchKey
   asks: [number | null, number | null];
   /** Task 'polymarket.descriptor' đã khai báo market này. */
@@ -219,14 +220,19 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
           (ev.data.state?.live ?? startsAt <= msg.sentAt) ? 'live' : 'prematch';
         this._cycleSeen.get(msg.taskId)?.add(m.conditionId);
         let route = this._markets.get(m.conditionId);
+        const eventUrl = ev.data.slug
+          ? `https://polymarket.com/event/${encodeURIComponent(ev.data.slug)}`
+          : '';
         if (route) {
           route.phase = phase; // trận chuyển prematch → live
+          if (eventUrl) route.eventUrl = eventUrl;
         } else {
           const created: MarketRoute = {
             key,
             startsAt,
             conditionId: m.conditionId,
             slug: m.slug ?? ev.data.slug ?? '',
+            eventUrl,
             tokens,
             asks: flip ? [seed[1], seed[0]] : seed,
             taskId: msg.taskId,
@@ -442,6 +448,7 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
         ref: {
           c: r.conditionId,
           slug: r.slug,
+          url: r.eventUrl,
           t0: r.tokens[0],
           t1: r.tokens[1],
         },

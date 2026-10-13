@@ -91,6 +91,7 @@ describe('GetRoomHandler', () => {
     await evaluator.evaluate(arb);
     const get = new GetRoomHandler(rooms, settings, signals, () => NOW);
     const d = await get.execute({ room: arb.toString() });
+    expect(d?.picks).toEqual(['alpha', 'beta']);
     expect(d?.lines.polymarket).toMatchObject({
       odds: [1.6, 2.2],
       ageMs: 3_000,
@@ -102,6 +103,21 @@ describe('GetRoomHandler', () => {
     expect(d?.activeSignals).toHaveLength(1);
     expect(await get.execute({ room: 'room:cs2:x~y:game-winner' })).toBeNull();
     expect(await get.execute({ room: 'rác' })).toBeNull();
+  });
+
+  it('returns market-specific picks with only one tenant and no combinations', async () => {
+    const { rooms, settings, signals } = await setup();
+    const total = MatchKey.of({
+      sport: 'cs2',
+      teamX: 'alpha',
+      teamY: 'beta',
+      market: 'total-maps-2.5',
+    });
+    await rooms.setLine(total, line('sptpub', [1.8, 2.2]));
+    const get = new GetRoomHandler(rooms, settings, signals, () => NOW);
+    const detail = await get.execute({ room: total.toString() });
+    expect(detail?.picks).toEqual(['over 2.5', 'under 2.5']);
+    expect(detail?.combos).toEqual([]);
   });
 });
 

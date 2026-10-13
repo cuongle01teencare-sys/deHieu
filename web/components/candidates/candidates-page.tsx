@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowRight, GitMerge, ExternalLink } from 'lucide-react';
-import type { MatchCandidate } from '@/lib/types';
+import { ArrowRight, GitMerge } from 'lucide-react';
+import type { MatchCandidate, MatchDetail } from '@/lib/types';
+import { matchHref } from '@/lib/match-links';
 import { fmtDuration, fmtStamp } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useApi } from '@/hooks/use-api';
@@ -18,6 +19,7 @@ import { Empty, ErrorState, SkeletonRows } from '../ui/states';
 import { Meter } from '../ui/stats';
 import { Tenant } from '../ui/tenant';
 import { LiveStamp } from '../ui/values';
+import { TenantSourceLinks } from '../matches/tenant-source-links';
 
 const DISMISS_KEY = 'arbops-dismissed-candidates';
 const cid = (c: MatchCandidate) => `${c.a.match}|${c.b.match}`;
@@ -150,9 +152,9 @@ function CandidateView({ c, onDismiss, onDone }: { c: MatchCandidate; onDismiss:
 
       {/* A | B */}
       <div className={cn('grid', mobile ? 'gap-6' : 'grid-cols-[1fr_auto_1fr] gap-8')}>
-        <Side label="A" side={c.a} />
+        <Side key={c.a.match} label="A" side={c.a} />
         {!mobile ? <div className="w-px bg-line" /> : <div className="h-px bg-line" />}
-        <Side label="B" side={c.b} />
+        <Side key={c.b.match} label="B" side={c.b} />
       </div>
 
       {/* nối tên đội */}
@@ -195,6 +197,7 @@ function CandidateView({ c, onDismiss, onDone }: { c: MatchCandidate; onDismiss:
 }
 
 function Side({ label, side }: { label: string; side: MatchCandidate['a'] }) {
+  const { data, error, reload } = useApi<MatchDetail>(`arbitrage/matches/${encodeURIComponent(side.match)}`, 15_000);
   return (
     <div className="min-w-0">
       <div className="mb-3 flex items-center gap-3">
@@ -203,16 +206,19 @@ function Side({ label, side }: { label: string; side: MatchCandidate['a'] }) {
           <Tenant key={t} tenant={t} />
         ))}
       </div>
-      <div className="text-[18px] font-semibold tracking-tight text-fg [overflow-wrap:anywhere]">
+      <Link href={matchHref(side.match)} className="block text-[18px] font-semibold text-fg hover:text-accent-text hover:underline [overflow-wrap:anywhere]">
         {side.teams[0]} <span className="font-normal text-faint">vs</span> {side.teams[1]}
-      </div>
+      </Link>
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
         <StartsAt at={side.startsAt} />
         <span className="num text-caption text-faint">{fmtStamp(side.startsAt)}</span>
       </div>
-      <Link href={`/tran-dau/${encodeURIComponent(side.match)}`} className="num mt-2 inline-flex items-center gap-1 text-caption text-muted-fg hover:text-fg">
-        {side.match} <ExternalLink className="size-3" />
+      <Link href={matchHref(side.match)} className="num mt-2 flex min-h-8 min-w-0 items-center gap-2 text-caption text-accent-text hover:underline">
+        <span className="break-all">{side.match}</span> <ArrowRight className="size-3 shrink-0" />
       </Link>
+      <div className="mt-2">
+        {data ? <TenantSourceLinks markets={data.markets} tenants={side.tenants} /> : error ? <ErrorState message={error} onRetry={reload} /> : <span className="text-caption text-faint">Đang tải nguồn trận…</span>}
+      </div>
     </div>
   );
 }

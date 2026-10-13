@@ -1,12 +1,14 @@
 'use client';
 
-import { Fragment, useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { Fragment, useEffect, useRef } from 'react';
+import Link from 'next/link';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ChevronDown, SearchX } from 'lucide-react';
 import { Collapsible } from 'radix-ui';
 import type { MatchDetail, MatchMarketRow } from '@/lib/types';
 import { MARKET_GROUPS, marketGroup, marketLabel, marketOrder, SPORT_LABEL } from '@/lib/markets';
 import { sortTenants } from '@/lib/tenants';
+import { matchHref, matchPhases } from '@/lib/match-links';
 import { fmtPct, fmtStamp } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import { useApi } from '@/hooks/use-api';
@@ -16,10 +18,12 @@ import { RoomDrawer } from '../room-drawer';
 import { PhasePill, SportIcon, StartsAt } from '../domain';
 import { Eyebrow } from '../ui/layout';
 import { Empty, ErrorState, SkeletonRows } from '../ui/states';
-import { Pill, StatusDot } from '../ui/status';
+import { Pill } from '../ui/status';
 import { Tenant, TenantDot } from '../ui/tenant';
 import { Age, LiveStamp, Margin, OddsCell } from '../ui/values';
 import { Hint } from '../ui/tooltip';
+import { CopyButton } from '../ui/code';
+import { TenantSourceLinks } from './tenant-source-links';
 
 const STALE_MS = 30_000;
 
@@ -39,11 +43,19 @@ function grouped(markets: MatchMarketRow[]) {
 
 export function MatchDetailPage({ id }: { id: string }) {
   const params = useSearchParams();
+  const router = useRouter();
   const mobile = useIsMobile();
   const { data, error, reload, updatedAt } = useApi<MatchDetail>(`arbitrage/matches/${encodeURIComponent(id)}`, 3_000);
   const { onEvent } = useConsoleData();
-  const [room, setRoom] = useState<string | null>(null);
   const highlight = params.get('market');
+  const room = data?.markets.find((row) => row.market === highlight)?.room ?? null;
+  const selectRoom = (room: string | null) => {
+    const query = new URLSearchParams(params);
+    const market = data?.markets.find((row) => row.room === room)?.market;
+    if (market) query.set('market', market);
+    else query.delete('market');
+    router.push(`${matchHref(id)}${query.size ? `?${query}` : ''}`, { scroll: false });
+  };
 
   useEffect(() => onEvent((e) => e.topic === `match:${id}` && void reload()), [onEvent, reload, id]);
 
@@ -59,7 +71,7 @@ export function MatchDetailPage({ id }: { id: string }) {
   const groups = grouped(data.markets);
   const matched = data.markets.filter((m) => Object.keys(m.lines).length >= 2);
   const best = matched.reduce<number | null>((b, r) => (r.bestMargin !== null && (b === null || r.bestMargin > b) ? r.bestMargin : b), null);
-  const live = data.phases.includes('live');
+  const phases = matchPhases(data.markets);
   const coverage = Object.fromEntries(tenants.map((t) => [t, data.markets.filter((m) => m.lines[t]).length]));
 
   return (
@@ -71,7 +83,7 @@ export function MatchDetailPage({ id }: { id: string }) {
             <SportIcon sport={data.sport} /> {SPORT_LABEL[data.sport] ?? data.sport}
           </span>
           <span className="text-faint">·</span>
-          <PhasePill phase={live ? 'live' : 'prematch'} />
+          {phases.map((phase) => <PhasePill key={phase} phase={phase} />)}
           <Hint content={fmtStamp(data.startsAt)}>
             <span>
               <StartsAt at={data.startsAt} />
@@ -80,8 +92,9 @@ export function MatchDetailPage({ id }: { id: string }) {
           <span className="ml-auto hidden md:inline">
             <LiveStamp at={updatedAt} staleAfter={10_000} />
           </span>
+          <CopyButton text={typeof window === 'undefined' ? matchHref(id) : new URL(matchHref(id), window.location.origin).href} label="Sao chép URL trận" />
         </div>
-        <h1 className="text-[26px] font-semibold leading-tight tracking-[-0.025em] text-fg [overflow-wrap:anywhere] md:text-[34px]">
+        <h1 className="text-[26px] font-semibold leading-tight text-fg [overflow-wrap:anywhere] md:text-[34px]">
           {data.teams[0]} <span className="font-normal text-faint">vs</span> {data.teams[1]}
         </h1>
         <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 text-body text-muted-fg">
@@ -100,14 +113,20 @@ export function MatchDetailPage({ id }: { id: string }) {
           <span className="text-faint">ngưỡng {fmtPct(data.minMargin, 0)}</span>
         </div>
       </header>
+      <div className="-mt-6 mb-8 border-t border-line pt-3">
+        <TenantSourceLinks markets={data.markets} tenants={tenants} />
+      </div>
+
+      {error ? <ErrorState message={error} onRetry={reload} className="mb-6" /> : null}
+      {highlight && !room ? <Empty icon={SearchX}>Dòng kèo này không còn trong trận.</Empty> : null}
 
       {mobile ? (
-        <MobileMatrix groups={groups} tenants={tenants} minMargin={data.minMargin} onOpen={setRoom} highlight={highlight} />
+        <MobileMatrix match={id} groups={groups} tenants={tenants} minMargin={data.minMargin} highlight={highlight} />
       ) : (
-        <Matrix groups={groups} tenants={tenants} minMargin={data.minMargin} onOpen={setRoom} highlight={highlight} active={room} />
+        <Matrix match={id} groups={groups} tenants={tenants} minMargin={data.minMargin} onOpen={selectRoom} highlight={highlight} active={room} />
       )}
 
-      <RoomDrawer room={room} onClose={() => setRoom(null)} />
+      <RoomDrawer room={room} onClose={() => selectRoom(null)} />
     </div>
   );
 }
@@ -116,6 +135,7 @@ type Groups = ReturnType<typeof grouped>;
 
 /** Ma trận market × tenant: bảng mở, nhóm bằng tiêu đề phụ chữ hoa nhỏ. */
 function Matrix({
+  match,
   groups,
   tenants,
   minMargin,
@@ -123,6 +143,7 @@ function Matrix({
   highlight,
   active,
 }: {
+  match: string;
   groups: Groups;
   tenants: string[];
   minMargin: number;
@@ -133,7 +154,7 @@ function Matrix({
   const hlRef = useRef<HTMLTableRowElement>(null);
   useEffect(() => {
     hlRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  }, []);
+  }, [highlight]);
   return (
     <div className="-mx-1 overflow-x-auto px-1 lg:overflow-visible">
       <table className="w-full min-w-[760px] border-separate border-spacing-0">
@@ -163,7 +184,6 @@ function Matrix({
               </tr>
               {g.rows.map((row) => {
                 const best = bestOdds(row);
-                const signals = row.activeSignals ?? (row.aboveMinMargin ? 1 : 0);
                 const hl = highlight === row.market;
                 return (
                   <tr
@@ -171,14 +191,14 @@ function Matrix({
                     ref={hl ? hlRef : undefined}
                     tabIndex={0}
                     onClick={() => onOpen(row.room)}
-                    onKeyDown={(e) => e.key === 'Enter' && onOpen(row.room)}
+                    onKeyDown={(e) => e.target === e.currentTarget && e.key === 'Enter' && onOpen(row.room)}
                     className={cn(
                       'group/row cursor-pointer transition-colors duration-150 [&>td]:border-b [&>td]:border-line hover:bg-hover/50 focus-visible:bg-hover/50 focus-visible:outline-none',
                       (hl || active === row.room) && 'bg-accent-soft hover:bg-accent-soft',
                     )}
                   >
                     <td className="py-3 pr-4 align-middle">
-                      <div className="text-body font-medium text-fg">{marketLabel(row.market)}</div>
+                      <Link href={matchHref(match, row.market)} scroll={false} onClick={(e) => e.stopPropagation()} className="text-body font-medium text-fg hover:text-accent-text hover:underline">{marketLabel(row.market)}</Link>
                       <div className="mt-0.5 flex min-w-0 gap-2 text-caption text-muted-fg">
                         <span className="truncate">{row.picks[0]}</span>
                         <span className="text-faint">/</span>
@@ -208,7 +228,7 @@ function Matrix({
                       <Margin value={Object.keys(row.lines).length >= 2 ? row.bestMargin : null} min={minMargin} />
                     </td>
                     <td className="py-3 pl-3 text-right align-middle">
-                      {signals > 0 ? <Pill tone="ok">có kèo</Pill> : null}
+                      {row.aboveMinMargin ? <Pill tone="ok">vượt ngưỡng</Pill> : null}
                     </td>
                   </tr>
                 );
@@ -217,25 +237,22 @@ function Matrix({
           ))}
         </tbody>
       </table>
-      <p className="mt-4 text-caption text-faint">
-        Gạch chân = odds tốt nhất mỗi phía · <StatusDot tone="ok" className="mx-1 align-middle" /> mở · <StatusDot tone="warn" className="mx-1 align-middle" /> tạm khóa · đồng hồ = dữ liệu cũ hơn 30s. Bấm một hàng để xem room.
-      </p>
     </div>
   );
 }
 
 /** Mobile: mỗi market một mục (không viền), nhóm thu gọn được; một hàng mỗi tenant. */
 function MobileMatrix({
+  match,
   groups,
   tenants,
   minMargin,
-  onOpen,
   highlight,
 }: {
+  match: string;
   groups: Groups;
   tenants: string[];
   minMargin: number;
-  onOpen: (room: string) => void;
   highlight: string | null;
 }) {
   return (
@@ -252,12 +269,11 @@ function MobileMatrix({
           <Collapsible.Content>
             {g.rows.map((row) => {
               const best = bestOdds(row);
-              const signals = row.activeSignals ?? 0;
               return (
-                <button
-                  type="button"
+                <Link
+                  href={matchHref(match, row.market)}
+                  scroll={false}
                   key={row.market}
-                  onClick={() => onOpen(row.room)}
                   className={cn('block w-full border-b border-line pb-4 pt-1 text-left last:border-b-0', highlight === row.market && '-mx-4 w-[calc(100%+2rem)] bg-accent-soft px-4')}
                 >
                   <div className="flex items-baseline justify-between gap-3">
@@ -289,11 +305,11 @@ function MobileMatrix({
                   <div className="mt-1 flex items-center justify-between">
                     <span className="text-caption text-muted-fg">Margin tốt nhất</span>
                     <span className="flex items-center gap-2">
-                      {signals ? <Pill tone="ok">có kèo</Pill> : null}
+                      {row.aboveMinMargin ? <Pill tone="ok">vượt ngưỡng</Pill> : null}
                       <Margin value={Object.keys(row.lines).length >= 2 ? row.bestMargin : null} min={minMargin} className="font-medium" />
                     </span>
                   </div>
-                </button>
+                </Link>
               );
             })}
           </Collapsible.Content>
@@ -307,8 +323,8 @@ function DetailSkeleton() {
   return (
     <div>
       <div className="skeleton mb-4 h-3 w-48" />
-      <div className="skeleton mb-5 h-8 w-80" />
-      <div className="skeleton mb-12 h-3 w-96 opacity-60" />
+      <div className="skeleton mb-5 h-8 w-80 max-w-full" />
+      <div className="skeleton mb-12 h-3 w-96 max-w-full opacity-60" />
       <SkeletonRows rows={9} cols={[28, 20, 20, 8, 10]} />
     </div>
   );

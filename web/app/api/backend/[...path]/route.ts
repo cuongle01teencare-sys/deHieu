@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/session';
 import { callBackend, isAllowedPath } from '@/lib/backend';
+import { decodePathSegment } from '@/lib/match-links';
 
 /**
  * BFF: trình duyệt gọi /api/backend/<path> bằng cookie phiên; server Next.js gắn token API
@@ -11,8 +12,8 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ path: string[] 
   if (!session.username)
     return NextResponse.json({ message: 'Chưa đăng nhập' }, { status: 401 });
 
-  // Next.js đã giải mã từng đoạn path; callBackend mã hóa lại khi gọi backend
-  const path = (await ctx.params).path.join('/');
+  // Decode route segments once; callBackend encodes them for the upstream URL.
+  const path = (await ctx.params).path.map(decodePathSegment).join('/');
   if (!isAllowedPath(path))
     return NextResponse.json({ message: 'Không được phép' }, { status: 403 });
 

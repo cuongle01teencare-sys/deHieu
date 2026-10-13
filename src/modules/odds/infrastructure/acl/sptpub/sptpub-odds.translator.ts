@@ -13,6 +13,7 @@ import { OddsLine } from '../../../domain/odds-line.js';
 import type { Phase } from '../../../domain/phase.js';
 import { SptPubFeedSchema, type SptPubOutcomeDTO } from './sptpub-feed.dto.js';
 import { SPTPUB_MARKETS, SPTPUB_SPORTS } from './sptpub-odds.mapping.js';
+import { SptPubSourceLinks } from './sptpub-source-links.js';
 
 const FEED_PHASE: Readonly<Record<string, Phase>> = {
   'sptpub.live': 'live',
@@ -26,6 +27,7 @@ interface Route {
   /** Feed (task) sở hữu trận: live và prematch cùng gửi một trận khi trận chuyển sang live. */
   taskId: string;
   phase: Phase;
+  sourceDesc: unknown;
 }
 
 /** Một (market, specifier) đã ghi vào room — nhớ để cập nhật delta và để gỡ đúng room. */
@@ -53,6 +55,7 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
   private readonly _books = new Map<string, Map<string, Book>>();
   /** taskId → eventId đã thấy trong lần snapshot đang chạy (để dọn trận đã biến mất). */
   private readonly _seen = new Map<string, Set<string>>();
+  private readonly _sourceLinks = new Map<string, SptPubSourceLinks>();
 
   constructor(
     private readonly _teams: TeamNameResolver,
@@ -65,6 +68,7 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
     if (!phase) return Promise.resolve([]); // descriptor: chưa dùng tới
     if (msg.channel === 'snapshot-start') {
       this._seen.set(msg.taskId, new Set());
+      this._sourceLinks.delete(msg.taskId);
       return Promise.resolve([]);
     }
     const parsed = SptPubFeedSchema.safeParse(msg.payload);
@@ -73,6 +77,10 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
       return Promise.resolve([]);
     }
 
+    const sourceLinks =
+      this._sourceLinks.get(msg.taskId) ?? new SptPubSourceLinks();
+    sourceLinks.update(parsed.data);
+    this._sourceLinks.set(msg.taskId, sourceLinks);
     const changes: OddsLineChange[] = [];
     for (const [eventId, ev] of Object.entries(parsed.data.events ?? {})) {
       if (msg.channel === 'snapshot') this._seen.get(msg.taskId)?.add(eventId);
@@ -94,6 +102,7 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
             startsAt: ev.desc.scheduled * 1000,
             taskId: msg.taskId,
             phase,
+            sourceDesc: ev.desc,
           });
       }
       const route = this._routes.get(eventId);
@@ -175,6 +184,7 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
             !(Number(first.k) > 1) || // cũng bắt NaN / chuỗi rỗng
             !(Number(second.k) > 1);
 
+          const sourceUrl = sourceLinks.eventUrl(eventId, route.sourceDesc);
           changes.push({
             type: 'set',
             key,
@@ -193,6 +203,7 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
                 s: spec,
                 o0: oidFirst,
                 o1: oidSecond,
+                ...(sourceUrl ? { url: sourceUrl } : {}),
               },
             }),
           });
@@ -217,6 +228,7 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
     for (const [eventId, route] of this._routes)
       if (route.taskId === taskId) changes.push(...this._removeEvent(eventId));
     this._seen.delete(taskId);
+    this._sourceLinks.delete(taskId);
     return Promise.resolve(changes);
   }
 

@@ -11,19 +11,25 @@ const salt = randomBytes(16);
 const password = 'test-only-password';
 const key = scryptSync(password, salt, 32, { N: 16384 });
 const passwordHash = `scrypt$16384$${salt.toString('base64')}$${key.toString('base64')}`;
-const input = { apiHost: 'api.example.com', username: 'cuong', passwordHash };
+const databaseUrl =
+  'postgresql://postgres.test:encoded%40password@pooler.example.com:5432/postgres?sslmode=require';
+const input = {
+  apiHost: 'api.example.com',
+  username: 'cuong',
+  passwordHash,
+  databaseUrl,
+};
 
-test('Vercel values preserve the password hash; API and database credentials match', () => {
+test('Vercel values preserve the password hash; backend uses the supplied Supabase URL', () => {
   const env = buildEnv(input);
   const backend = parseEnv(env.backend);
   const web = parseEnv(env.vercel);
   const user = JSON.parse(web.WEB_USERS)[0];
   assert.equal(user.passwordHash, passwordHash);
   assert.equal(backend.API_TOKENS, `${user.apiToken}:cuong:admin`);
-  assert.equal(
-    new URL(backend.DATABASE_URL).password,
-    backend.POSTGRES_PASSWORD,
-  );
+  assert.equal(backend.DATABASE_URL, databaseUrl);
+  assert.equal(backend.POSTGRES_PASSWORD, undefined);
+  assert.equal(web.DATABASE_URL, undefined);
   assert.equal(new URL(backend.REDIS_URL).password, backend.REDIS_PASSWORD);
   assert.equal(web.BACKEND_ADMIN_WS_URL, 'wss://api.example.com/admin-ws');
   assert.equal(web.BACKEND_URL, 'https://api.example.com');
@@ -31,7 +37,6 @@ test('Vercel values preserve the password hash; API and database credentials mat
   assert.equal(backend.HTTP_BIND_HOST, '127.0.0.1');
   assert.equal(backend.WS_BIND_HOST, '127.0.0.1');
   const secrets = [
-    backend.POSTGRES_PASSWORD,
     backend.REDIS_PASSWORD,
     backend.TASK_WS_TOKEN,
     backend.CONSUMER_WS_TOKEN,
@@ -40,6 +45,43 @@ test('Vercel values preserve the password hash; API and database credentials mat
   ];
   assert.equal(new Set(secrets).size, secrets.length);
   assert.ok(secrets.every((value) => value.length === 64));
+});
+
+test('database URL defaults to TLS and survives special password characters', () => {
+  const url =
+    "postgresql://postgres.test:abc$def%23ghi'j@pooler.example.com:5432/postgres";
+  const backend = parseEnv(buildEnv({ ...input, databaseUrl: url }).backend);
+  const database = new URL(backend.DATABASE_URL);
+  assert.equal(database.searchParams.get('sslmode'), 'require');
+  assert.equal(decodeURIComponent(database.password), "abc$def#ghi'j");
+  assert.equal(backend.DATABASE_URL.includes("'"), false);
+});
+
+test('accepts direct connections and preserves existing TLS settings', () => {
+  const databaseUrl =
+    'postgres://postgres:encoded%40password@db.test.supabase.co:5432/postgres?sslmode=verify-full&connect_timeout=10';
+  const backend = parseEnv(buildEnv({ ...input, databaseUrl }).backend);
+  assert.equal(backend.DATABASE_URL, databaseUrl);
+});
+
+test('rejects missing, non-Postgres, transaction pooler and insecure database URLs without leaking secrets', () => {
+  const invalid = [
+    undefined,
+    'https://example.com',
+    databaseUrl.replace(':5432/', ':6543/'),
+    databaseUrl.replace('sslmode=require', 'sslmode=disable'),
+    `${databaseUrl}\nBAD=1`,
+    databaseUrl.replace('encoded%40password', 'private#password'),
+  ];
+  for (const databaseUrl of invalid) {
+    assert.throws(
+      () => buildEnv({ ...input, databaseUrl }),
+      (error) => {
+        assert.equal(error.message.includes('private#password'), false);
+        return true;
+      },
+    );
+  }
 });
 
 test('rejects invalid domain, username and incomplete password hash', () => {

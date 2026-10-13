@@ -7,7 +7,45 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const secret = () => randomBytes(32).toString('hex');
 
-export function buildEnv({ apiHost, username, passwordHash }) {
+export function buildEnv({ apiHost, username, passwordHash, databaseUrl }) {
+  let database;
+  try {
+    if (typeof databaseUrl !== 'string' || /[\r\n\0]/.test(databaseUrl)) {
+      throw new Error();
+    }
+    database = new URL(databaseUrl.trim());
+    if (
+      !['postgres:', 'postgresql:'].includes(database.protocol) ||
+      !database.hostname ||
+      !database.username ||
+      !database.password ||
+      database.pathname.length <= 1 ||
+      database.hash
+    ) {
+      throw new Error();
+    }
+  } catch {
+    throw new Error(
+      'DATABASE_URL must be a complete PostgreSQL connection string with an encoded password.',
+    );
+  }
+  if (database.port === '6543') {
+    throw new Error(
+      'Use Supabase Direct connection or Session pooler (5432), not Transaction pooler (6543).',
+    );
+  }
+  if (!database.searchParams.has('sslmode')) {
+    database.searchParams.set('sslmode', 'require');
+  }
+  if (
+    !['require', 'verify-ca', 'verify-full'].includes(
+      database.searchParams.get('sslmode'),
+    )
+  ) {
+    throw new Error(
+      'DATABASE_URL must require TLS (sslmode=require, verify-ca or verify-full).',
+    );
+  }
   if (
     !/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(
       apiHost,
@@ -38,7 +76,6 @@ export function buildEnv({ apiHost, username, passwordHash }) {
   }
   // Verify the parameters match the same scrypt implementation used at login.
   scryptSync('check', Buffer.from(salt, 'base64'), 32, { N: Number(cost) });
-  const postgresPassword = secret();
   const redisPassword = secret();
   const apiToken = secret();
   const backend = [
@@ -47,8 +84,8 @@ export function buildEnv({ apiHost, username, passwordHash }) {
     'HTTP_BIND_HOST=127.0.0.1',
     'WS_BIND_HOST=127.0.0.1',
     'API_DOCS_ENABLED=false',
-    `POSTGRES_PASSWORD=${postgresPassword}`,
-    `DATABASE_URL=postgres://postgres:${postgresPassword}@127.0.0.1:5432/deHieu`,
+    // Single quotes prevent Compose from expanding literal $ inside the URI.
+    `DATABASE_URL='${database.toString().replaceAll("'", '%27')}'`,
     `REDIS_PASSWORD=${redisPassword}`,
     `REDIS_URL=redis://:${redisPassword}@127.0.0.1:6379`,
     'TASK_WS_PORT=3001',
@@ -110,6 +147,12 @@ export async function writeEnvFiles(directory, env) {
 }
 
 async function main() {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error(
+      'Set DATABASE_URL to your Supabase connection string before running this script; see deploy/README.md.',
+    );
+  }
   const input = createInterface({
     input: process.stdin,
     output: process.stdout,
@@ -125,7 +168,10 @@ async function main() {
     const passwordHash = (
       await input.question('Password hash (scrypt$...): ')
     ).trim();
-    await writeEnvFiles(root, buildEnv({ apiHost, username, passwordHash }));
+    await writeEnvFiles(
+      root,
+      buildEnv({ apiHost, username, passwordHash, databaseUrl }),
+    );
     console.log(
       'Created .env (VPS) and deploy/.env.vercel (Vercel values) with matching tokens.',
     );

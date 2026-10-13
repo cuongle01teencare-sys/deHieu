@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { Check, Minus } from 'lucide-react';
+import Link from 'next/link';
 import { fmtAge, fmtClock, fmtOdds, fmtStamp } from '@/lib/format';
 import { marketLabel } from '@/lib/markets';
 import type { ListResult, OddsTransition, RoomDetailView } from '@/lib/types';
@@ -9,6 +10,7 @@ import { CANCEL_REASONS } from '@/lib/skip-reasons';
 import { useApi } from '@/hooks/use-api';
 import { useNow } from '@/hooks/use-now';
 import { cn } from '@/lib/utils';
+import { roomHref, tenantHref } from '@/lib/match-links';
 import { useConsoleData } from './console-data';
 import { Panel } from './ui/panel';
 import { Eyebrow, KV } from './ui/layout';
@@ -18,9 +20,11 @@ import { CopyButton, JsonBlock, Mono } from './ui/code';
 import { ErrorState, SkeletonText } from './ui/states';
 import { PhasePill, StartsAt, Teams } from './domain';
 import { SignalLegs } from './signal-legs';
+import { TenantSourceLink } from './matches/tenant-source-links';
 
 /** Drawer chi tiết room (bottom sheet trên mobile). Làm mới khi có odds.changed của room trên stream. */
 export function RoomDrawer({ room, onClose }: { room: string | null; onClose: () => void }) {
+  const href = room ? roomHref(room) : null;
   return (
     <Panel
       open={!!room}
@@ -29,7 +33,11 @@ export function RoomDrawer({ room, onClose }: { room: string | null; onClose: ()
       title={room ? <RoomTitle room={room} /> : ''}
       width="lg"
     >
-      {room ? <RoomBody room={room} /> : null}
+      {href ? <div className="mb-5 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+        <Link href={href} className="text-caption text-accent-text hover:underline">Chi tiết trận / dòng kèo</Link>
+        <CopyButton text={typeof window === 'undefined' ? href : new URL(href, window.location.origin).href} label="Sao chép URL dòng kèo" />
+      </div> : null}
+      {room ? <RoomBody key={room} room={room} /> : null}
     </Panel>
   );
 }
@@ -67,7 +75,7 @@ function RoomBody({ room }: { room: string }) {
     Math.max(...Object.values(data.lines).map((l) => l.odds[0])),
     Math.max(...Object.values(data.lines).map((l) => l.odds[1])),
   ];
-  const picks: [string, string] = data.combos[0] ? [data.combos[0].legs[0]!.pick, data.combos[0].legs[1]!.pick] : data.teams;
+  const picks: [string, string] = data.picks ?? (data.combos[0] ? [data.combos[0].legs[0]!.pick, data.combos[0].legs[1]!.pick] : data.teams);
 
   return (
     <div className="flex flex-col">
@@ -92,6 +100,9 @@ function RoomBody({ room }: { room: string }) {
                 <Tenant tenant={t} className="flex-1" />
                 <OddsCell odds={l.odds} status={l.status} ageMs={l.ageMs} best={[l.odds[0] === best[0], l.odds[1] === best[1]]} />
               </div>
+              <div className="mt-1">
+                <TenantSourceLink tenant={t} reference={l.ref} />
+              </div>
               <details className="group mt-2">
                 <summary className="cursor-pointer list-none text-caption text-faint hover:text-muted-fg">
                   <span className="group-open:hidden">Chi tiết dòng</span>
@@ -104,7 +115,7 @@ function RoomBody({ room }: { room: string }) {
                     ['Kênh', l.phase === 'live' ? 'Live' : 'Trước trận'],
                     ['Cập nhật', <span key="u" className="num">{fmtStamp(l.updatedAt)} · {fmtAge(l.ageMs)}</span>],
                     ['Bắt đầu', <span key="s" className="num">{fmtStamp(l.startsAt)}</span>],
-                    ...Object.entries(l.ref).filter(([, v]) => v).map(([k, v]) => [<span key={k} className="num">ref.{k}</span>, <Mono key={`${k}v`} copy>{v}</Mono>] as [React.ReactNode, React.ReactNode]),
+                    ...Object.entries(l.ref).filter(([, v]) => v).map(([k, v]) => [<span key={k} className="num">ref.{k}</span>, k === 'url' && tenantHref(l.ref) ? <a key={`${k}v`} href={tenantHref(l.ref)!} target="_blank" rel="noopener noreferrer" className="num break-all text-accent-text hover:underline">{v}</a> : <Mono key={`${k}v`} copy>{v}</Mono>] as [React.ReactNode, React.ReactNode]),
                   ]}
                 />
                 <div className="mt-3 flex items-start gap-2">
@@ -147,7 +158,8 @@ function RoomBody({ room }: { room: string }) {
 
       {/* --- dòng thời gian */}
       <DrawerSection title="Dòng thời gian odds" hint="7 ngày gần nhất">
-        {tl.data?.items.length ? <Timeline items={tl.data.items} /> : tl.data ? <p className="text-body text-muted-fg">Chưa có chuyển trạng thái nào.</p> : <SkeletonText lines={4} />}
+        {tl.error ? <ErrorState message={tl.error} onRetry={tl.reload} /> : null}
+        {tl.data?.items.length ? <Timeline items={tl.data.items} /> : tl.data ? <p className="text-body text-muted-fg">Chưa có chuyển trạng thái nào.</p> : !tl.error ? <SkeletonText lines={4} /> : null}
       </DrawerSection>
 
       <div className="pt-2">

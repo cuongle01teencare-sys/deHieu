@@ -40,6 +40,57 @@ const event = (id: string, k1 = '1.5', k2 = '2.5') => ({
 });
 
 describe('SptPubOddsTranslator', () => {
+  it('preserves the source URL from feed slugs through odds-only deltas', async () => {
+    const t = new SptPubOddsTranslator(teams);
+    const id = '2721501408921788440';
+    const ev = event(id)[id];
+    await t.translate(
+      msg({
+        payload: {
+          version: 1,
+          sports: { '109': { slug: 'counter-strike' } },
+          categories: { c: { slug: 'counter-strike' } },
+          tournaments: { t: { slug: 'original-league' } },
+        },
+      }),
+    );
+    const [first] = await t.translate(
+      msg({
+        payload: {
+          version: 2,
+          events: {
+            [id]: {
+              ...ev,
+              desc: {
+                ...ev.desc,
+                slug: 'original-home-original-away',
+                category: 'c',
+                tournament: 't',
+              },
+            },
+          },
+        },
+      }),
+    );
+    if (first?.type !== 'set') throw new Error('expected set');
+    expect(new URL(first.line.props.ref.url).searchParams.get('bt-path')).toBe(
+      `/counter-strike/counter-strike/original-league/original-home-original-away-${id}`,
+    );
+    const [delta] = await t.translate(
+      msg({
+        payload: {
+          version: 3,
+          events: {
+            [id]: { markets: { '186': { '': { '4': { k: '1.7' } } } } },
+          },
+        },
+      }),
+    );
+    expect(delta?.type === 'set' && delta.line.props.ref.url).toBe(
+      first.line.props.ref.url,
+    );
+  });
+
   it('đưa odds về thứ tự đội của room, ref mang id gốc', async () => {
     const t = new SptPubOddsTranslator(teams);
     const [c] = await t.translate(
@@ -163,6 +214,42 @@ describe('PolymarketOddsTranslator', () => {
       ],
     },
   ];
+
+  it('links to the event slug, not a child market slug, including stream updates', async () => {
+    const t = new PolymarketOddsTranslator(teams);
+    const [first] = await t.translate(
+      msg({
+        tenant: 'polymarket',
+        kind: 'polymarket.descriptor',
+        payload: [
+          {
+            ...events[0],
+            slug: 'original-event',
+            markets: [{ ...events[0].markets[0], slug: 'child-market' }],
+          },
+        ],
+      }),
+    );
+    if (first?.type !== 'set') throw new Error('expected set');
+    expect(first.line.props.ref.url).toBe(
+      'https://polymarket.com/event/original-event',
+    );
+    expect(first.line.props.ref.slug).toBe('child-market');
+    const [delta] = await t.translate(
+      msg({
+        tenant: 'polymarket',
+        kind: 'polymarket.stream',
+        payload: {
+          topic: 'market',
+          type: 'price_change',
+          payload: { priceChanges: [{ assetId: 'tA', bestAsk: '0.25' }] },
+        },
+      }),
+    );
+    expect(delta?.type === 'set' && delta.line.props.ref.url).toBe(
+      first.line.props.ref.url,
+    );
+  });
 
   it('đảo token theo thứ tự đội của room và yêu cầu subscribe token', async () => {
     const sync = vi.fn().mockResolvedValue(undefined);

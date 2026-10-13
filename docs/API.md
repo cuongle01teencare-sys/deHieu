@@ -201,6 +201,11 @@ Lý do hủy (`reason`):
 - sptpub: `e` (eventId), `m` (marketId), `s` (specifier, vd `hcp=-1.5`, `total=2.5`), `o0`/`o1` (outcomeId của side 0 / side 1)
 - polymarket: `c` (conditionId), `slug`, `t0`/`t1` (tokenId của side 0 / side 1)
 
+`ref.url` (nếu có metadata): URL trang trận của tenant để mở trên trình duyệt.
+CSGOEmpire dùng slug gốc của sport/category/tournament/event và ID trận từ feed;
+Polymarket dùng slug event gốc, không phải slug market con. URL không thay thế ID dùng đặt lệnh.
+Chi tiết room còn trả `picks: [side0, side1]` để hiển thị đúng nhãn kể cả khi chỉ có một tenant.
+
 ### Microservice publisher → app (`ws://<host>:${TASK_WS_PORT}`, mặc định 3001)
 
 Dùng nội bộ bởi `pnpm start:task-runner`, xác thực bằng `TASK_WS_TOKEN`.

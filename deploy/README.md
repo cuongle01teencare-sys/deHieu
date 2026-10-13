@@ -1,6 +1,7 @@
 # Web trên Vercel, NestJS trên VPS Ubuntu 26.04 LTS
 
-**VPS không chạy web.** VPS chạy một NestJS bằng pnpm + systemd, PostgreSQL và Dragonfly dùng Docker Compose có sẵn.
+**VPS không chạy web hoặc PostgreSQL.** VPS chạy một NestJS bằng pnpm + systemd; Docker Compose chỉ chạy Dragonfly.
+PostgreSQL nằm trên **Supabase**, backend kết nối bằng `DATABASE_URL` qua TLS.
 Vercel build/phục vụ ứng dụng trong `web/`. Không chạy `pnpm --filter arb-ops-web start` trên VPS.
 
 ## 1. Hai bên nối với nhau thế nào?
@@ -16,6 +17,9 @@ Trình duyệt --HTTPS--> Web trên Vercel
                          +--HTTPS xin vé WS----> api.example.com --> NestJS :3000
 
 Trình duyệt --WSS + vé một lần--> api.example.com/admin-ws --> NestJS :3003
+
+NestJS trên VPS --PostgreSQL qua TLS--> Supabase
+NestJS trên VPS --Redis nội bộ-------> Dragonfly 127.0.0.1:6379
 ```
 
 - REST: trình duyệt gọi `/api/backend/*` trên web; Next.js gắn token người dùng rồi gọi VPS qua HTTPS.
@@ -50,8 +54,9 @@ sudo ufw status
 ```
 
 Firewall của nhà cung cấp cũng phải mở SSH, 80, 443.
-**Không mở 3000–3003, 3100, 5432, 6379 ra internet.** Compose đã bind database/cache vào localhost;
+**Không mở 3000–3003, 3100, 5432, 6379 ra internet.** Compose đã bind cache vào localhost;
 không bỏ `127.0.0.1` vì Docker publish cổng công khai có thể đi vòng qua UFW.
+VPS kết nối **đi ra** Supabase, không cần mở cổng PostgreSQL đi vào VPS.
 
 ## 3. pnpm, Node và lấy code
 
@@ -77,18 +82,37 @@ Không cài `--prod` trước build: Nest CLI/TypeScript cần devDependencies.
 
 ## 4. Tạo cấu hình hai bên
 
-Ở `/opt/arb-ops`, user `arbops`, tạo hash mật khẩu admin web rồi chạy script cấu hình:
+Trong Supabase, mở project > **Connect**, chọn connection string dạng URI PostgreSQL:
+
+- VPS chỉ có IPv4: chọn **Session pooler**, cổng `5432`.
+- Có IPv6 hoạt động hoặc Supabase IPv4 add-on: có thể dùng **Direct connection**.
+- Không chọn **Transaction pooler** (`6543`): driver hiện tại dùng prepared statements.
+
+Đây là URL bắt đầu bằng `postgresql://`, **không phải** URL HTTPS/API key của Supabase.
+Thay chỗ mật khẩu bằng mật khẩu database thật; percent-encode ký tự đặc biệt trong mật khẩu
+(ví dụ `@` thành `%40`, `#` thành `%23`). Giữ đúng host và username Supabase cung cấp.
+Xem [các kiểu kết nối Supabase](https://supabase.com/docs/guides/database/connecting-to-postgres).
+
+Ở `/opt/arb-ops`, user `arbops`, tạo hash mật khẩu admin web rồi chạy script cấu hình.
+Lệnh `read -rsp` không hiện giá trị bạn nhập, tránh ghi connection string vào lịch sử lệnh:
 
 ```bash
 read -rsp 'Mat khau admin web: ' WEB_PASSWORD
 printf '\n'
 pnpm --filter arb-ops-web hash-password "$WEB_PASSWORD"
 unset WEB_PASSWORD
+read -rsp 'Supabase connection string: ' DATABASE_URL
+printf '\n'
+export DATABASE_URL
 pnpm exec node deploy/configure-env.mjs
+unset DATABASE_URL
 ```
 
 Script hỏi domain API, tên admin và hash vừa tạo (`scrypt$16384$...`).
-Nó tạo token/mật khẩu ngẫu nhiên riêng biệt và hai file quyền `600`:
+Nó giữ connection string Supabase bạn nhập, thêm `sslmode=require` nếu chưa có;
+tạo riêng token ứng dụng, mật khẩu Redis, khóa session và hai file quyền `600`.
+`sslmode=require` mã hóa kết nối; muốn xác minh chứng chỉ server cần CA tin cậy và cấu hình xác minh phù hợp,
+không coi chế độ này là xác minh đầy đủ danh tính server.
 
 | File | Dùng ở đâu? |
 | --- | --- |
@@ -96,7 +120,7 @@ Nó tạo token/mật khẩu ngẫu nhiên riêng biệt và hai file quyền `6
 | `/opt/arb-ops/deploy/.env.vercel` | Giá trị nhập vào Environment Variables của Vercel |
 
 **Không ghi đè file có sẵn.** Nếu đã có cấu hình/database, sửa file hiện có;
-không đổi mật khẩu DB tùy tiện vì PostgreSQL volume đã khởi tạo không đổi mật khẩu theo `.env` mới.
+giữ nguyên token và khóa session. Mật khẩu trong URL phải khớp database Supabase, script không đổi mật khẩu trên Supabase.
 Hai file đã gitignore; sao lưu riêng tư, không gửi nội dung vào chat/log công khai.
 
 Script tự nối `WEB_USERS[].apiToken` với token trong `API_TOKENS` của backend, và đặt:
@@ -168,21 +192,23 @@ Docker service phải `active (running)`; `docker version` có cả Client và S
 Dùng **`docker compose`**, không phải `docker-compose`. Giữ `sudo` khi quản lý container;
 không cần cấp nhóm Docker (quyền gần tương đương root) cho user ứng dụng `arbops`.
 
-### 5.4. Chạy database và cache
+### 5.4. Chạy Dragonfly (cache)
 
 Vẫn dùng tài khoản quản trị, `.env` phải đã được tạo ở bước 4:
 
 ```bash
 cd /opt/arb-ops
-sudo docker compose up -d
+sudo docker compose up -d dragonfly
 sudo docker compose ps
-sudo docker compose logs --tail=50 postgres dragonfly
+sudo docker compose logs --tail=50 dragonfly
 ```
 
-Đợi PostgreSQL `healthy`, Dragonfly không restart lặp lại, rồi migrate/build:
+Dragonfly phải chạy ổn định, không restart lặp lại. Không có container PostgreSQL cần khởi động.
 
 ### 5.5. Migration và build backend
 
+Kiểm tra `DATABASE_URL` trỏ đúng project Supabase và backup trước khi thay đổi schema.
+Nếu project đã chứa dữ liệu/bảng của ứng dụng khác, kiểm tra migration để tránh xung đột.
 Chuyển về user ứng dụng:
 
 ```bash
@@ -193,9 +219,48 @@ pnpm build
 exit
 ```
 
-Migration đọc `.env` ở gốc. Build ở gốc **chỉ build NestJS**, không build web trên VPS.
-PostgreSQL lưu dữ liệu trong volume `postgres_data`; Dragonfly là cache RAM, không có snapshot bền vững.
-**Không chạy `docker compose down -v`**, vì sẽ xóa volume database.
+Migration đọc `.env` ở gốc và cập nhật schema **trên Supabase**. Nó không chuyển dữ liệu từ database khác sang.
+Build ở gốc **chỉ build NestJS**, không build web trên VPS.
+Database do Supabase lưu trữ; Dragonfly là cache RAM, không có snapshot bền vững.
+
+### 5.6. Nếu đã deploy PostgreSQL local theo hướng dẫn cũ
+
+Không chạy lại script tạo env: bạn đã có token khớp với Vercel.
+Sau khi commit/push thay đổi ở máy local, trên VPS dùng tài khoản quản trị:
+
+```bash
+sudo systemctl stop arb-backend
+sudo -iu arbops
+cd /opt/arb-ops
+git pull --ff-only
+nano .env
+```
+
+Trong editor, thay **chỉ** `DATABASE_URL` bằng connection string Supabase, đặt trong nháy đơn,
+thêm `?sslmode=require` (hoặc `&sslmode=require` nếu URL đã có query).
+Xóa dòng `POSTGRES_PASSWORD` cũ; giữ nguyên `API_TOKENS`, `REDIS_PASSWORD`, `REDIS_URL` và các token khác.
+Không gửi connection string lên Vercel hay commit vào Git.
+
+Nếu database local có dữ liệu cần giữ, backup và chuyển dữ liệu riêng trước khi chạy app trên Supabase;
+**đổi URL và chạy migration không tự chuyển dữ liệu**. Sau khi kiểm tra/backup database đích:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+pnpm db:migrate
+exit
+sudo docker compose -f /opt/arb-ops/docker-compose.yml --env-file /opt/arb-ops/.env up -d dragonfly
+sudo systemctl start arb-backend
+curl --fail http://127.0.0.1:3000/health
+curl --fail https://dehieu-api.duckdns.org/health
+```
+
+Chỉ đi tiếp khi từng lệnh thành công; thay domain ở lệnh cuối nếu bạn dùng domain khác.
+Nếu migration thất bại, không start backend. Nếu `/health` lỗi, xem log và xử lý trước khi dừng database cũ.
+Khi health trả 200 và đã xác nhận dữ liệu Supabase đúng, kiểm tra container cũ bằng `sudo docker ps -a`.
+Nếu đúng container PostgreSQL của app này có tên `postgres`, dừng bằng `sudo docker stop postgres`.
+Giữ lại container/volume cũ để đối chiếu; không dùng `--remove-orphans`, `down -v` hoặc `docker volume prune` để chuyển đổi.
+Không cần đổi cấu hình HTTPS/WSS của Caddy hay Vercel.
 
 ## 6. Chạy NestJS bằng systemd
 
@@ -363,6 +428,8 @@ Vercel không cần mở cổng WebSocket hay proxy stream của VPS.
 | HTTPS lỗi chứng chỉ | DNS A/AAAA, 80/443, proxy log, domain trên chứng chỉ |
 | 502 | Backend chưa chạy hoặc proxy nhầm cổng |
 | `/health` 503 | DB/cache, `DATABASE_URL`, `REDIS_URL` |
+| Supabase `ENETUNREACH`/timeout | VPS không có IPv6 thì dùng Session pooler 5432; kiểm tra DNS, kết nối đi ra và IP allowlist nếu bật |
+| Lỗi prepared statement | Không dùng Transaction pooler 6543; lấy URI Direct/Session trong Supabase Connect |
 | REST 401/403 | Token `WEB_USERS` khớp `API_TOKENS`, role/quyền đúng |
 | Vẫn là dữ liệu mẫu | `ARB_MOCK=false` và Redeploy |
 | Login thất bại | JSON `WEB_USERS`, hash có nguyên dấu `$`, mật khẩu đúng |
@@ -379,7 +446,7 @@ sudo docker compose -f /opt/arb-ops/docker-compose.yml --env-file /opt/arb-ops/.
 ```
 
 Backend giữ task registry và một số settings trong RAM; mặc định xóa room khi khởi động lại.
-Sau restart/reboot cần tạo/chạy lại publisher và kiểm tra settings; lịch sử PostgreSQL vẫn giữ.
+Sau restart/reboot cần tạo/chạy lại publisher và kiểm tra settings; lịch sử trong Supabase vẫn giữ.
 Cập nhật đơn giản dưới đây **có khoảng dừng**, chưa phải zero downtime:
 
 ```bash
@@ -399,15 +466,13 @@ Chỉ start sau khi build/migration thành công. Backup DB trước migration; 
 Web cập nhật bằng push tới nhánh production của Vercel. Đổi API token thì cập nhật `WEB_USERS` và Redeploy;
 đổi `SESSION_SECRET` sẽ đăng xuất các phiên cũ.
 
-Backup PostgreSQL, từ `/opt/arb-ops` bằng tài khoản quản trị:
-
-```bash
-umask 077
-sudo docker compose exec -T postgres pg_dump -U postgres -d deHieu -Fc > "$HOME/arb-ops-$(date +%F-%H%M%S).dump"
-```
-
-Đưa backup ra nơi khác VPS, mã hóa và thử phục hồi định kỳ. Sao lưu `.env`/cấu hình Vercel riêng tư.
-Không dùng `docker compose down -v` để cập nhật.
+Backup database **trên Supabase**, không dùng `docker compose exec postgres` nữa.
+Kiểm tra backup khả dụng ở **Database > Backups** theo gói của project.
+Với gói Free, chủ động xuất dữ liệu định kỳ bằng Supabase CLI `db dump` theo
+[hướng dẫn backup](https://supabase.com/docs/guides/platform/backups) và
+[backup/restore bằng CLI](https://supabase.com/docs/guides/platform/migrating-within-supabase/backup-restore).
+Đưa bản xuất ra nơi khác VPS/Supabase, mã hóa và thử phục hồi định kỳ.
+Sao lưu `.env`/cấu hình Vercel riêng tư; không xóa volume PostgreSQL cũ khi chưa kiểm tra dữ liệu và backup.
 
 ## Kênh khác và giới hạn
 
@@ -427,3 +492,4 @@ frame admin/consumer tối đa 64 KB, publisher theo `TASK_WS_MAX_PAYLOAD_MB` (m
 - [Docker Ubuntu](https://docs.docker.com/engine/install/ubuntu/), [Ubuntu TLS/Certbot](https://ubuntu.com/server/docs/how-to/security/obtain-tls-certificates/).
 - [Caddy installation](https://caddyserver.com/docs/install), [Nginx WebSocket proxy](https://nginx.org/en/docs/http/websocket.html).
 - [Vercel monorepos](https://vercel.com/docs/monorepos), [build/Corepack](https://vercel.com/docs/builds/configure-a-build).
+- [Supabase connections](https://supabase.com/docs/guides/database/connecting-to-postgres), [Supabase backups](https://supabase.com/docs/guides/platform/backups).

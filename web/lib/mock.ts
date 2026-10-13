@@ -265,10 +265,12 @@ function lineOf(m: MatchSeed, ms: MarketSeed, tenant: string): MatchLine {
             s: ms.market.includes('handicap') ? `hcp=${ms.market.endsWith('m1.5') ? '-1.5' : '1.5'}` : ms.market.includes('total') ? 'total=2.5' : '',
             o0: String(1700 + Math.floor(rand(seed) * 99)),
             o1: String(1700 + Math.floor(rand(seed + 'x') * 99)),
+            url: `https://csgoempire.com/match-betting?${new URLSearchParams({ 'bt-path': `/counter-strike/counter-strike/league/${m.teams.join('-')}-${String(2715093596264079406n + BigInt(Math.floor(rand(matchId(m)) * 1e6)))}` })}`,
           }
         : {
             c: `0x${Math.floor(rand(seed) * 1e15).toString(16).padStart(13, '0')}…`,
             slug: `${m.sport}-${m.teams[0]}-${m.teams[1]}`,
+            url: `https://polymarket.com/event/${m.sport}-${m.teams[0]}-${m.teams[1]}`,
             t0: `${Math.floor(rand(seed + '0') * 1e12)}…`,
             t1: `${Math.floor(rand(seed + '1') * 1e12)}…`,
           },
@@ -318,7 +320,6 @@ function matchDetail(id: string): MatchDetail | null {
     sport: m.sport,
     teams: m.teams,
     tenants: [...new Set(markets.flatMap((r) => Object.keys(r.lines)))],
-    phases: [m.phase],
     startsAt: startsOf(m),
     minMargin: settings.minMargin,
     markets,
@@ -342,7 +343,7 @@ function matchList(search: string): ListResult<MatchListItem> {
       markets: d.markets.length,
       matchedMarkets: matched.length,
       coverage,
-      phases: d.phases,
+      phases: [m.phase],
       bestMargin: best,
       aboveMinMargin: best !== null && best >= settings.minMargin,
       startsAt: d.startsAt,
@@ -427,6 +428,7 @@ function roomDetail(id: string): RoomDetailView | null {
     market: row.market,
     teams: m.teams,
     lines,
+    picks: row.picks,
     combos: combosOf(row.lines).map((c) => ({
       comboId: `${c.a}>0|${c.b}>1`,
       phase: m.phase,
@@ -1029,7 +1031,7 @@ export async function mockRequest(
   await new Promise((r) => setTimeout(r, 90 + Math.random() * 80)); // giống độ trễ mạng
   const ok = (b: unknown, status = 200) => ({ status, body: b });
   const notFound = { status: 404, body: { message: 'Not Found' } };
-  const seg = (prefix: string) => (path.startsWith(prefix) ? decodeURIComponent(path.slice(prefix.length)) : null);
+  const seg = (prefix: string) => (path.startsWith(prefix) ? path.slice(prefix.length) : null);
 
   if (method === 'GET') {
     if (path === 'admin/snapshot') return ok(snapshot());

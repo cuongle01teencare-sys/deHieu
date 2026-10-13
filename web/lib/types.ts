@@ -241,6 +241,7 @@ export interface RoomDetailView {
   sport: string;
   market: string;
   teams: [string, string];
+  picks?: [string, string];
   lines: Record<string, RoomLineView>;
   combos: {
     comboId: string;
@@ -312,7 +313,6 @@ export interface MatchDetail {
   sport: string;
   teams: [string, string];
   tenants: string[];
-  phases: Phase[];
   startsAt: number;
   minMargin: number;
   markets: MatchMarketRow[];

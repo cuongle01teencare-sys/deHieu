@@ -34,6 +34,14 @@ Nối backend thật: đặt `BACKEND_URL`, `BACKEND_ADMIN_WS_URL`, `SESSION_SEC
 
 ## Kiến trúc
 
+- Chi tiết trận: `/tran-dau/{match}`; chi tiết dòng kèo: `/tran-dau/{match}?market={market}`.
+  Ví dụ `/tran-dau/cs2%3Aalliance~sinners?market=map-1-winner`. URL mở lại đúng drawer và hỗ trợ Back/Forward.
+- Link tenant dùng `lines[tenant].ref.url`, mở tab mới với `noopener noreferrer`.
+  CSGOEmpire ghép `bt-path` từ slug sport/category/tournament/event gốc trong feed và event ID;
+  Polymarket dùng slug event, không dùng slug market con. Thiếu metadata thì không đoán URL.
+  Dòng cũ cần snapshot/descriptor mới từ backend để có `ref.url`.
+- Kiểm tra URL và contract chi tiết trận: `pnpm --filter arb-ops-web test:match-links`.
+
 - **BFF:** trình duyệt chỉ gọi `/api/backend/*` bằng cookie phiên; server Next.js gắn token API
   của người dùng (`WEB_USERS[].apiToken`) và chuyển tiếp tới backend. Token không tới trình duyệt.
 - **Realtime:** `/api/ws-ticket` xin vé một lần (`POST /admin/ws-ticket`), trình duyệt mở thẳng

@@ -1,6 +1,7 @@
 import type { QueryHandler } from '../../../../shared/application/cqrs.js';
 import type { ArbitrageSignal } from '../../domain/arbitrage-signal.js';
 import { MatchKey } from '../../domain/match-key.js';
+import { pickOf } from '../../domain/pick.js';
 import type { Phase } from '../../domain/phase.js';
 import type { ArbitrageSettingsStore } from '../arbitrage-settings.js';
 import type { OddsRoomStore } from '../odds-room.store.js';
@@ -24,7 +25,8 @@ export interface RoomDetailView {
   readonly sport: string;
   readonly market: string;
   readonly teams: readonly [string, string];
-  /** tenant → dòng kèo; odds theo thứ tự `teams`. */
+  readonly picks: readonly [string, string];
+  /** tenant → dòng kèo; odds theo thứ tự `picks`. */
   readonly lines: Readonly<Record<string, RoomLineView>>;
   /** Mọi tổ hợp hợp lệ hiện tại, margin giảm dần (âm = không có arbitrage). */
   readonly combos: readonly RoomComboView[];
@@ -61,6 +63,7 @@ export class GetRoomHandler implements QueryHandler<
       sport: key.sport,
       market: key.market,
       teams: key.teams,
+      picks: [pickOf(key, 0), pickOf(key, 1)],
       lines: Object.fromEntries(
         [...r.lines].map(([t, l]) => [t, toLineView(l, now)]),
       ),

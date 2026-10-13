@@ -7,6 +7,7 @@ import { ArrowLeft, BellRing } from 'lucide-react';
 import { Toaster } from 'sonner';
 import { Drawer } from 'vaul';
 import { findNav } from '@/lib/nav';
+import { decodePathSegment } from '@/lib/match-links';
 import type { WebUser } from '@/lib/types';
 import { useTheme } from '@/hooks/use-theme';
 import { useMedia } from '@/hooks/use-media';
@@ -53,7 +54,7 @@ function useCrumbs(pathname: string) {
   let back: { href: string; label: string } | null = null;
   const m = /^\/tran-dau\/(.+)$/.exec(pathname);
   if (m) {
-    const id = decodeURIComponent(m[1]!);
+    const id = decodePathSegment(m[1]!);
     const [, pair = ''] = id.split(':');
     crumbs.push({ label: pair.replace('~', ' vs ') });
     back = { href: '/tran-dau', label: 'Trận đấu' };

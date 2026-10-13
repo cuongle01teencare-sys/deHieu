@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { ChevronRight, SearchX, SlidersHorizontal } from 'lucide-react';
 import type { ListResult, MatchListItem } from '@/lib/types';
 import { cn } from '@/lib/utils';
+import { matchHref } from '@/lib/match-links';
 import { useApi } from '@/hooks/use-api';
 import { useIsMobile } from '@/hooks/use-media';
 import { PhasePill, SportIcon, StartsAt, Teams } from '../domain';
@@ -42,7 +43,7 @@ export function MatchesPage() {
   const minMargin = 0.02;
   const tenants = useMemo(() => [...new Set((data?.items ?? []).flatMap((m) => m.tenants))].sort(), [data]);
   const activeFilters = [f.sport, f.tenant, f.phase, f.matched ? '1' : ''].filter(Boolean).length;
-  const open = (m: MatchListItem) => router.push(`/tran-dau/${encodeURIComponent(m.match)}`);
+  const open = (m: MatchListItem) => router.push(matchHref(m.match));
 
   const controls = (
     <>
@@ -123,7 +124,7 @@ export function MatchesPage() {
           <ul>
             {data.items.map((m) => (
               <li key={m.match}>
-                <Link href={`/tran-dau/${encodeURIComponent(m.match)}`} className="flex min-h-16 items-center gap-3 border-b border-line py-3 active:bg-hover/50">
+                <Link href={matchHref(m.match)} className="flex min-h-16 items-center gap-3 border-b border-line py-3 active:bg-hover/50">
                   <SportIcon sport={m.sport} />
                   <div className="min-w-0 flex-1">
                     <Teams teams={m.teams} className="text-[15px]" />
@@ -158,12 +159,12 @@ export function MatchesPage() {
             </THead>
             <tbody>
               {data.items.map((m) => (
-                <TR key={m.match} interactive tabIndex={0} onClick={() => open(m)} onKeyDown={(e) => e.key === 'Enter' && open(m)}>
+                <TR key={m.match} interactive tabIndex={0} onClick={() => open(m)} onKeyDown={(e) => e.target === e.currentTarget && e.key === 'Enter' && open(m)}>
                   <TD className="max-w-[340px]">
-                    <span className="flex items-center gap-3">
+                    <Link href={matchHref(m.match)} onClick={(e) => e.stopPropagation()} className="flex min-w-0 items-center gap-3 hover:text-accent-text">
                       <SportIcon sport={m.sport} />
                       <Teams teams={m.teams} />
-                    </span>
+                    </Link>
                   </TD>
                   <TD>
                     <StartsAt at={m.startsAt} />
