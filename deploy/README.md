@@ -220,21 +220,58 @@ Cả hai hỗ trợ REST và ba kênh WebSocket. `pnpm deploy` trong package.jso
 
 ### Cách A: Caddy
 
-Cài theo [Caddy cho Debian/Ubuntu](https://caddyserver.com/docs/install#debian-ubuntu-raspbian), rồi:
+Cài bằng apt repository stable chính thức của
+[Caddy cho Debian/Ubuntu](https://caddyserver.com/docs/install#debian-ubuntu-raspbian).
+Chạy bằng root/tài khoản quản trị có sudo, không phải user `arbops`.
+Gói apt cài binary, user/group `caddy` và service systemd; không cần tự tạo user này.
+
+**A.1. Cài Caddy trước**
+
+```bash
+sudo apt update
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https ca-certificates curl gnupg
+curl -1fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key -o /tmp/caddy-stable.gpg.key
+sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg /tmp/caddy-stable.gpg.key
+sudo curl -1fsSL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt -o /etc/apt/sources.list.d/caddy-stable.list
+sudo chmod 644 /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update
+sudo apt install -y caddy
+caddy version
+id caddy
+```
+
+Chỉ đi tiếp nếu các lệnh thành công. `id caddy` phải hiển thị user/group `caddy`.
+Nếu báo `install: invalid user: 'caddy'` thì bước cài chưa hoàn tất; không sửa bằng cách tạo thư mục log thuộc root.
+Nếu đã cài repository và gpg hỏi ghi đè key, kiểm tra đó đúng là key Caddy trước khi đồng ý.
+Gói apt có thể tự khởi động Caddy; nếu 80/443 đang do Nginx/dịch vụ khác sử dụng, giải quyết xung đột trước,
+không dừng dịch vụ đang phục vụ ứng dụng khác khi chưa kiểm tra.
+
+**A.2. Tạo log và cấu hình domain**
 
 ```bash
 sudo install -d -o caddy -g caddy /var/log/caddy
 sudo cp /opt/arb-ops/deploy/Caddyfile /etc/caddy/Caddyfile
 sudo nano /etc/caddy/Caddyfile
-sudo caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+```
+
+Thay mọi `api.example.com` bằng domain thật, ví dụ `dehieu-api.duckdns.org`.
+Nếu Caddy đã phục vụ dịch vụ khác, sao lưu và thêm block API, không ghi đè toàn bộ file đang dùng.
+
+**A.3. Kiểm tra và khởi động HTTPS/WSS**
+
+```bash
+sudo -u caddy -H caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 sudo systemctl enable --now caddy
 sudo systemctl reload caddy
+sudo systemctl status caddy --no-pager
 curl --fail https://api.example.com/health
 ```
 
-Thay mọi `api.example.com` bằng domain thật. DNS và 80/443 phải thông, Caddy tự xin/gia hạn chứng chỉ.
+Thay domain trong lệnh `curl` nữa. DNS và 80/443 phải thông, Caddy tự xin/gia hạn chứng chỉ.
+Validate bằng user `caddy` để file log được tạo với đúng chủ sở hữu, không phải root.
 Không cài Certbot/renew hook khi dùng Caddy.
-Nếu Caddy đã phục vụ dịch vụ khác, sao lưu và thêm block API, không ghi đè toàn bộ file đang dùng.
+Nếu service lỗi hoặc HTTPS chưa chạy, đọc `sudo journalctl -u caddy -n 100 --no-pager`.
+Không bỏ kiểm tra TLS bằng `curl -k` để coi việc deploy đã thành công.
 
 ### Cách B: Nginx + Certbot
 
