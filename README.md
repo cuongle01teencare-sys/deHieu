@@ -31,6 +31,8 @@ Xem [thuật ngữ và cách hệ thống chạy](web/content/system-guide.md), 
 
 ## Project setup
 
+Triển khai thực tế: [web trên Vercel, backend trên VPS Ubuntu](deploy/README.md).
+
 ```bash
 $ pnpm install
 ```

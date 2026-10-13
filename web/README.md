@@ -43,6 +43,10 @@ Nối backend thật: đặt `BACKEND_URL`, `BACKEND_ADMIN_WS_URL`, `SESSION_SEC
 
 ## Deploy Vercel
 
+Hướng dẫn đầy đủ: [Vercel web + NestJS trên VPS Ubuntu](../deploy/README.md).
+`web/vercel.json` khai báo build/install bằng pnpm; chọn Node 24.x và bật
+`ENABLE_EXPERIMENTAL_COREPACK=1` để dùng pnpm đã pin ở package.json gốc.
+
 Root Directory = `web`, framework Next.js, khai báo các biến trong `.env.example`.
 Backend phải mở qua **HTTPS** (REST) và **WSS** (admin stream) — đặt reverse proxy có TLS trước
 cổng 3000 và 3003.

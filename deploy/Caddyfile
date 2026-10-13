@@ -1,7 +1,7 @@
 # Reverse proxy TLS cho backend (Caddy tự xin + gia hạn chứng chỉ Let's Encrypt).
 # Dùng: thay api.example.com, đặt file ở /etc/caddy/Caddyfile, `sudo systemctl reload caddy`.
 #
-# Trong .env của backend:  WS_BIND_HOST=127.0.0.1   (cổng 3000–3003 chỉ nghe localhost)
+# Trong .env: HTTP_BIND_HOST=127.0.0.1 va WS_BIND_HOST=127.0.0.1.
 # Chỉ mở firewall cổng 80 + 443.
 #
 #   https://api.example.com/            → REST          127.0.0.1:3000
