@@ -185,7 +185,7 @@ function AccountForm({
   }, [value]);
 
   const evm = (s: string) => /^0x[0-9a-fA-F]{40}$/.test(s.trim());
-  const keyOk = !privateKey.trim() || /^(0x)?[0-9a-fA-F]{64}$/.test(privateKey.trim());
+  const keyOk = venue !== 'polymarket' || !privateKey.trim() || /^(0x)?[0-9a-fA-F]{64}$/.test(privateKey.trim());
   const missing =
     !label.trim() ||
     (venue === 'csgoempire'
@@ -202,7 +202,8 @@ function AccountForm({
       editing ? `trading/accounts/${encodeURIComponent(editing.id)}` : 'trading/accounts',
       {
         method: editing ? 'PUT' : 'POST',
-        body: { label: label.trim(), enabled, config, ...(privateKey.trim() ? { privateKey: privateKey.trim() } : {}) },
+        // key chỉ dành cho ví polymarket (đổi nền tảng sau khi gõ key → không gửi)
+        body: { label: label.trim(), enabled, config, ...(venue === 'polymarket' && privateKey.trim() ? { privateKey: privateKey.trim() } : {}) },
       },
       editing ? `Đã lưu ${label.trim()}` : `Đã thêm ${label.trim()}`,
     );
@@ -233,7 +234,14 @@ function AccountForm({
       <div className="flex flex-col gap-6">
         {!editing ? (
           <Field label="Nền tảng" htmlFor="ac-venue">
-            <Select id="ac-venue" value={venue} onChange={(e) => setVenue(e.target.value as TradingVenue)}>
+            <Select
+              id="ac-venue"
+              value={venue}
+              onChange={(e) => {
+                setVenue(e.target.value as TradingVenue);
+                setPrivateKey('');
+              }}
+            >
               <option value="csgoempire">csgoempire (odds sptpub)</option>
               <option value="polymarket">Polymarket</option>
             </Select>
