@@ -4,6 +4,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { MoreHorizontal, Play, Plus, Radio, Send, Square, Trash2, Server, Eye } from 'lucide-react';
 import type { NodeView, TaskRecord } from '@/lib/types';
+import { TRADER_KIND, type TraderProfile } from '@/lib/trading-types';
 import { normalizeKinds } from '@/lib/task-kinds';
 import { fmtAge, fmtStamp, fmtSince } from '@/lib/format';
 import { sortTenants } from '@/lib/tenants';
@@ -360,6 +361,8 @@ function CreateTask({ open, onOpenChange, nodes, onCreated }: { open: boolean; o
   const [values, setValues] = useState<Record<string, string | boolean>>({});
   const [busy, setBusy] = useState(false);
   const info = kinds?.find((k) => k.kind === kind);
+  // task trader: chọn profile thay vì gõ id
+  const profiles = useApi<TraderProfile[]>(open && kind === TRADER_KIND ? 'trading/profiles' : null);
 
   useEffect(() => {
     if (!info) return;
@@ -438,7 +441,11 @@ function CreateTask({ open, onOpenChange, nodes, onCreated }: { open: boolean; o
               ))}
             </Select>
           </Field>
-          {info?.multiInstance ? <p className="-mt-3 text-caption text-muted-fg">Kind này chạy được nhiều task song song, vd mỗi môn một task với tagIds riêng.</p> : null}
+          {info?.multiInstance ? (
+            <p className="-mt-3 text-caption text-muted-fg">
+              {kind === TRADER_KIND ? 'Mỗi profile trader một task; mọi task nhận cùng một kèo.' : 'Kind này chạy được nhiều task song song, vd mỗi môn một task với tagIds riêng.'}
+            </p>
+          ) : null}
           <Field label="taskId" htmlFor="taskId" help="Duy nhất. Dùng trong log, sự cố và thông báo.">
             <Input id="taskId" value={taskId} onChange={(e) => setTaskId(e.target.value)} className="num" />
           </Field>
@@ -469,7 +476,36 @@ function CreateTask({ open, onOpenChange, nodes, onCreated }: { open: boolean; o
               }
               help={p.hint ?? (p.default !== undefined ? `Mặc định ${JSON.stringify(p.default)}` : undefined)}
             >
-              {p.type === 'boolean' ? (
+              {kind === TRADER_KIND && p.name === 'profileId' ? (
+                <>
+                  <Select
+                    id={`p-${p.name}`}
+                    value={String(values[p.name] ?? '')}
+                    onChange={(e) => {
+                      const prof = profiles.data?.find((x) => x.id === e.target.value);
+                      setValues({ ...values, [p.name]: e.target.value });
+                      if (prof) setTaskId(`trader-${prof.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/gi, 'd').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 32) || prof.id.slice(0, 8)}`);
+                    }}
+                  >
+                    <option value="">— Chọn profile —</option>
+                    {profiles.data?.map((x) => (
+                      <option key={x.id} value={x.id}>
+                        {x.name}
+                        {x.enabled ? '' : ' (đang tắt)'}
+                      </option>
+                    ))}
+                  </Select>
+                  {profiles.data && !profiles.data.length ? (
+                    <p className="text-caption text-warn">
+                      Chưa có profile. Tạo ở trang{' '}
+                      <a href="/giao-dich" className="underline">
+                        Auto trade
+                      </a>{' '}
+                      → Profile (cần 1 tài khoản csgoempire + 1 ví Polymarket).
+                    </p>
+                  ) : null}
+                </>
+              ) : p.type === 'boolean' ? (
                 <Switch id={`p-${p.name}`} checked={Boolean(values[p.name])} onCheckedChange={(v) => setValues({ ...values, [p.name]: v })} label={p.name} />
               ) : (
                 <Input
