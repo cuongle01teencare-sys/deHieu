@@ -15,6 +15,8 @@ const leg = z.object({
   side: z.number().int(),
   pick: z.string(),
   odds: num,
+  /** Trang trận trên sàn (để mở kiểm tra). */
+  url: z.string().nullable().default(null),
 });
 
 /** Trạng thái một chân lệnh. Giấy = `simulated`; các trạng thái còn lại dành cho giao dịch thật. */

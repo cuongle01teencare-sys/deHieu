@@ -15,6 +15,10 @@ export interface ExposureLedger {
     amount: number,
     ttlMs: number,
   ): Promise<boolean>;
+  /** Giữ chỗ một khóa trong ttl (SET NX). false = đã có người giữ. */
+  hold(key: string, ttlMs: number): Promise<boolean>;
+  isHeld(key: string): Promise<boolean>;
+  release(key: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -61,6 +65,25 @@ export class RedisExposureLedger implements ExposureLedger {
     return r === 'OK';
   }
 
+  async hold(key: string, ttlMs: number) {
+    const r = await this._redis.set(
+      `${this._ns}:hold:${key}`,
+      '1',
+      'PX',
+      Math.max(1_000, Math.round(ttlMs)),
+      'NX',
+    );
+    return r === 'OK';
+  }
+
+  async isHeld(key: string) {
+    return (await this._redis.exists(`${this._ns}:hold:${key}`)) === 1;
+  }
+
+  async release(key: string) {
+    await this._redis.del(`${this._ns}:hold:${key}`);
+  }
+
   async used(keys: readonly string[]) {
     if (!keys.length) return [];
     const v = await this._redis.mget(...keys.map((k) => `${this._ns}:${k}`));
@@ -91,6 +114,27 @@ export class RedisExposureLedger implements ExposureLedger {
 export class InMemoryExposureLedger implements ExposureLedger {
   private readonly _v = new Map<string, { amount: number; until: number }>();
   private readonly _done = new Map<string, number>();
+  private readonly _held = new Map<string, number>();
+
+  hold(key: string, ttlMs: number) {
+    if (this._isHeld(key)) return Promise.resolve(false);
+    this._held.set(key, Date.now() + ttlMs);
+    return Promise.resolve(true);
+  }
+
+  isHeld(key: string) {
+    return Promise.resolve(this._isHeld(key));
+  }
+
+  release(key: string) {
+    this._held.delete(key);
+    return Promise.resolve();
+  }
+
+  private _isHeld(key: string) {
+    const until = this._held.get(key);
+    return until !== undefined && until > Date.now();
+  }
 
   claim(profileId: string, signalId: string, ttlMs: number) {
     const k = `${profileId}:${signalId}`;

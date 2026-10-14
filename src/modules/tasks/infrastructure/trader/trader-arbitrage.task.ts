@@ -17,6 +17,7 @@ import {
 } from './exposure-ledger.js';
 import { PolymarketMarketData } from './polymarket-market-data.js';
 import { TRADE_STRATEGIES } from './trade-strategies.js';
+import { depthSummary } from './arbitrage-sizing.js';
 import {
   TraderConfigSchema,
   type TraderConfig,
@@ -35,6 +36,12 @@ export interface TraderArbitrageParams {
 const CH_CONFIG_REQUEST = 'config_request';
 const CH_TRADE = 'trade';
 const CONFIG_RETRY_MS = 5_000;
+/**
+ * Nhịp báo sống (kênh 'status') khi đang nối hub. Trader chỉ gửi dữ liệu khi có kèo nên không có nhịp này
+ * watchdog sẽ báo "nguồn im lặng" lúc vắng kèo; còn mất hub thì ngừng nhịp → watchdog báo đúng.
+ */
+const STATUS_EVERY_MS = 30_000;
+const CH_STATUS = 'status';
 /** Phơi nhiễm theo trận giữ tối đa ngần này (trận kết thúc / app không giải phóng). */
 const EXPOSURE_TTL_MS = 12 * 3_600_000;
 
@@ -47,7 +54,16 @@ export const matchOf = (room: string): string => {
 };
 
 const bare = (l: HubLeg | undefined) =>
-  l ? { tenant: l.tenant, side: l.side, pick: l.pick, odds: l.odds } : null;
+  l
+    ? {
+        tenant: l.tenant,
+        side: l.side,
+        pick: l.pick,
+        odds: l.odds,
+        // link trang trận trên sàn (để admin mở kiểm tra)
+        url: l.ref.url ?? null,
+      }
+    : null;
 
 /**
  * Trader arbitrage (giấy): consumer của ConsumerHub. Mỗi profile một task, mọi task nhận CÙNG một
@@ -103,6 +119,19 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       }
       if (ctx.signal.aborted) return;
 
+      let connected = false;
+      const status = setInterval(() => {
+        if (connected)
+          ctx.emit(
+            {
+              profileId: p.profileId,
+              hubPaused: hub.paused,
+              inflight: this._inflight.size,
+              active: this._config?.active ?? false,
+            },
+            CH_STATUS,
+          );
+      }, STATUS_EVERY_MS);
       const hub = new ConsumerHubClient(
         { url: hubUrl, token, consumerId: `trader:${p.profileId}` },
         {
@@ -115,11 +144,19 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
               .get(c.signalId)
               ?.abort(`SIGNAL_CANCELLED: ${c.reason}`),
           onState: (state, detail) => {
-            if (state === 'disconnected' && detail) ctx.warn(detail);
+            if (state === 'connected') connected = true;
+            if (state === 'disconnected') {
+              connected = false;
+              if (detail) ctx.warn(detail);
+            }
           },
         },
       );
-      await hub.run(ctx.signal);
+      try {
+        await hub.run(ctx.signal);
+      } finally {
+        clearInterval(status);
+      }
     } finally {
       for (const ac of this._inflight.values()) ac.abort('TASK_STOPPED');
       await ledger.close();
@@ -238,6 +275,19 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       return emit('skipped', 'MISSING_REF: thiếu token/conditionId polymarket');
     if (!pick)
       return emit('skipped', `NO_TIER: margin ${(s.margin * 100).toFixed(2)}%`);
+    // cùng cửa đã vào (kèo bị hủy rồi phát lại = signalId mới nhưng vẫn là cửa cũ) → không mua chồng
+    const entryKey = `entry:${profileId}:${s.room}:${s.comboId}`;
+    const entryTtl =
+      cfg.risk.reentryCooldownMs > 0
+        ? cfg.risk.reentryCooldownMs
+        : EXPOSURE_TTL_MS;
+    if (await deps.ledger.isHeld(entryKey))
+      return emit(
+        'skipped',
+        cfg.risk.reentryCooldownMs > 0
+          ? `ALREADY_ENTERED: cửa này vừa vào, chờ ${Math.round(cfg.risk.reentryCooldownMs / 1000)}s mới vào lại`
+          : 'ALREADY_ENTERED: cửa này đã vào trong trận',
+      );
     const strategy = TRADE_STRATEGIES[cfg.strategy.id];
     if (!strategy)
       return emit('skipped', `UNKNOWN_STRATEGY: ${cfg.strategy.id}`);
@@ -251,7 +301,11 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         deps.market.tradingInfo(conditionId, signal),
       ]);
       marketDataAt = Date.now();
-      if (signal.aborted) return emit('cancelled', String(signal.reason));
+      if (signal.aborted)
+        return emit('cancelled', String(signal.reason), {
+          tokenId,
+          detail: { cancelledAfterMs: Date.now() - startedAt },
+        });
       if (!info.acceptingOrders) return emit('skipped', 'MARKET_CLOSED');
 
       const match = matchOf(s.room);
@@ -278,8 +332,25 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         budget,
         params: cfg.strategy.params,
       });
-      if (signal.aborted) return emit('cancelled', String(signal.reason));
+      if (signal.aborted)
+        return emit('cancelled', String(signal.reason), {
+          tokenId,
+          detail: { cancelledAfterMs: Date.now() - startedAt },
+        });
       const bestAsk = ob.asks[0]?.price ?? null;
+      const depth = depthSummary({
+        bookOdds: book.odds,
+        asks: ob.asks,
+        fee: info.fee,
+        targetStake: pick.stake,
+        minNetMargin: cfg.risk.minNetMargin,
+      });
+      const sizing = {
+        targetStake: pick.stake,
+        minStake: pick.row.minStake,
+        minShares: Math.max(info.minShares, ob.minShares ?? 0),
+        minNetMargin: cfg.risk.minNetMargin,
+      };
       if (!d.ok)
         return emit('skipped', `${d.reason}: ${d.detail}`, {
           tokenId,
@@ -287,10 +358,19 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
             bestAsk,
             budget: Number.isFinite(budget) ? budget : null,
             fee: info.fee,
+            depth,
+            sizing,
+            bookAt: ob.at,
           },
         });
 
-      if (!(await deps.ledger.reserve(caps, d.totalCost, EXPOSURE_TTL_MS)))
+      // giữ cửa trước (nguyên tử) rồi mới giữ hạn mức: hai kèo trùng cửa đến cùng lúc chỉ một kèo vào
+      if (!(await deps.ledger.hold(entryKey, entryTtl)))
+        return emit('skipped', 'ALREADY_ENTERED: cửa này vừa được vào', {
+          tokenId,
+        });
+      if (!(await deps.ledger.reserve(caps, d.totalCost, EXPOSURE_TTL_MS))) {
+        await deps.ledger.release(entryKey);
         return emit(
           'skipped',
           'CAP_REACHED: giới hạn tổng theo trận vừa bị trader khác dùng hết',
@@ -298,6 +378,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
             tokenId,
           },
         );
+      }
       return emit('paper_filled', null, {
         stake: d.stake,
         tokenId,
@@ -350,10 +431,16 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           fee: info.fee,
           budget: Number.isFinite(budget) ? budget : null,
           bookAt: ob.at,
+          depth,
+          sizing,
         },
       });
     } catch (e: unknown) {
-      if (signal.aborted) return emit('cancelled', String(signal.reason));
+      if (signal.aborted)
+        return emit('cancelled', String(signal.reason), {
+          tokenId,
+          detail: { cancelledAfterMs: Date.now() - startedAt },
+        });
       return emit('error', e instanceof Error ? e.message : String(e), {
         tokenId,
       });

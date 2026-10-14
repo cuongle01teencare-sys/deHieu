@@ -38,6 +38,7 @@ export const TraderConfigSchema = z.object({
     minNetMargin: z.number().finite().min(0).max(1),
     matchCapUsd: nonNeg,
     maxSignalAgeMs: nonNeg,
+    reentryCooldownMs: nonNeg.default(0),
   }),
   matchExposureCapUsd: nonNeg,
 });

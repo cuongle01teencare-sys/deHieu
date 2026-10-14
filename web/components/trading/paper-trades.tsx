@@ -17,33 +17,11 @@ import { Stat, StatStrip } from '../ui/stats';
 import { Pill } from '../ui/status';
 import { ListRow, Table, TD, TH, THead, TR } from '../ui/table';
 import { Hint } from '../ui/tooltip';
+import { REASON_LABEL, reasonText, TRADE_STATUS, TradeDetailPanel } from './trade-detail';
 
-const STATUS: Record<TradeStatus, { label: string; tone: 'ok' | 'muted' | 'warn' | 'critical' }> = {
-  paper_filled: { label: 'Vào (giấy)', tone: 'ok' },
-  skipped: { label: 'Bỏ qua', tone: 'muted' },
-  cancelled: { label: 'Kèo hủy', tone: 'warn' },
-  error: { label: 'Lỗi', tone: 'critical' },
-};
-
-/** Lý do bỏ qua (mã trước dấu ":"), để admin đọc nhanh. */
-const REASON: Record<string, string> = {
-  NO_EDGE: 'Hết lãi sau phí',
-  INSUFFICIENT_DEPTH: 'Sổ lệnh mỏng',
-  BUDGET_EXHAUSTED: 'Hết hạn mức trận',
-  CAP_REACHED: 'Hết hạn mức trận',
-  BELOW_MIN_ORDER: 'Dưới lệnh tối thiểu',
-  NO_TIER: 'Không thuộc hạng nào',
-  INACTIVE: 'Profile đứng yên',
-  STALE_SIGNAL: 'Kèo quá cũ',
-  SIGNAL_EXPIRED: 'Kèo hết hạn',
-  UNSUPPORTED_COMBO: 'Cặp sàn chưa hỗ trợ',
-  MISSING_REF: 'Thiếu mã Polymarket',
-  MARKET_CLOSED: 'Market đã đóng',
-  UNKNOWN_STRATEGY: 'Chiến lược không có',
-  HUB_PAUSED: 'Consumer bị tạm dừng',
-};
-const reasonCode = (r: string | null) => (r ?? '').split(':')[0] ?? '';
-const reasonLabel = (r: string | null) => REASON[reasonCode(r)] ?? reasonCode(r);
+const STATUS = TRADE_STATUS;
+const REASON = REASON_LABEL;
+const reasonLabel = (r: string | null) => reasonText({ reason: r });
 
 const usd = (n: number) => `${n < 0 ? '-' : ''}${Math.abs(n).toFixed(2)}$`;
 const PERIODS = { '24h': 86_400_000, '7d': 7 * 86_400_000, all: 0 } as const;
@@ -68,6 +46,7 @@ export function PaperTrades() {
   const page = useApi<TradeAttempt[]>(`trading/trades?${q({ limit: PAGE, ...(status ? { status } : {}) })}`, 10_000);
   const [older, setOlder] = useState<TradeAttempt[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [selected, setSelected] = useState<TradeAttempt | null>(null);
   useEffect(() => setOlder([]), [profileId, status]);
 
   const rows = useMemo(() => {
@@ -154,7 +133,7 @@ export function PaperTrades() {
         {rows.length && mobile ? (
           <div>
             {rows.map((t) => (
-              <ListRow key={t.id}>
+              <ListRow key={t.id} interactive onClick={() => setSelected(t)}>
                 <div className="flex items-center justify-between gap-3">
                   <span className="min-w-0 truncate text-body text-fg">
                     {t.teams[0]} vs {t.teams[1]}
@@ -191,7 +170,7 @@ export function PaperTrades() {
             </THead>
             <tbody>
               {rows.map((t) => (
-                <TR key={t.id}>
+                <TR key={t.id} interactive onClick={() => setSelected(t)}>
                   <TD className="text-caption text-muted-fg">
                     <Hint content={fmtStamp(t.createdAt)}>
                       <span className="num cursor-default">{fmtSince(t.createdAt, now)}</span>
@@ -270,6 +249,7 @@ export function PaperTrades() {
           </div>
         ) : null}
       </Section>
+      <TradeDetailPanel trade={selected} profileName={name} onClose={() => setSelected(null)} />
     </>
   );
 }

@@ -260,7 +260,7 @@ function ProfileForm({
     setPoly(e?.polymarketAccountId ?? polys[0]?.id ?? '');
     setPlan(e?.stakePlan ?? DEFAULT_STAKE_PLAN);
     setStrategy(e?.strategy.id ?? 'arb-taker');
-    setRisk(e?.risk ?? DEFAULT_RISK);
+    setRisk({ ...DEFAULT_RISK, ...e?.risk });
   }, [value]);
 
   const missing = !name.trim() || !empire || !poly;
@@ -346,7 +346,7 @@ function ProfileForm({
         <StakePlanEditor value={plan} onChange={setPlan} />
         <div className="h-px bg-line" />
 
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <Field label="Lãi ròng tối thiểu (%)" htmlFor="pf-net" help="Sau phí taker và trượt giá thật của sổ lệnh.">
             <NumInput id="pf-net" value={+(risk.minNetMargin * 100).toFixed(4)} onValue={(v) => v !== undefined && v < 100 && setRisk({ ...risk, minNetMargin: v / 100 })} />
           </Field>
@@ -355,6 +355,9 @@ function ProfileForm({
           </Field>
           <Field label="Bỏ kèo cũ hơn (giây)" htmlFor="pf-age" help="Tính từ lúc phát; 0 = không kiểm tra.">
             <NumInput id="pf-age" value={risk.maxSignalAgeMs / 1000} onValue={(v) => v !== undefined && setRisk({ ...risk, maxSignalAgeMs: Math.round(v * 1000) })} />
+          </Field>
+          <Field label="Vào lại cùng cửa sau (giây)" htmlFor="pf-reentry" help="Kèo hủy rồi phát lại vẫn là cửa cũ. 0 = mỗi cửa chỉ vào một lần mỗi trận.">
+            <NumInput id="pf-reentry" value={risk.reentryCooldownMs / 1000} onValue={(v) => v !== undefined && setRisk({ ...risk, reentryCooldownMs: Math.round(v * 1000) })} />
           </Field>
         </div>
         <Field label="Bật profile" htmlFor="pf-on" help="Tắt = task trader vẫn chạy nhưng bỏ qua mọi kèo (ghi lý do).">

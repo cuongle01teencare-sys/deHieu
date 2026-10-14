@@ -31,7 +31,7 @@ const trade = (id: string, over: Partial<TradeAttempt> = {}): TradeAttempt => ({
   reason: null,
   signalMargin: 0.06,
   tierName: 'VIP',
-  book: { tenant: 'sptpub', side: 0, pick: 'a', odds: 2, stake: 25 },
+  book: { tenant: 'sptpub', side: 0, pick: 'a', odds: 2, stake: 25, url: null },
   polymarket: null,
   totalCost: 45.6,
   payout: 50,

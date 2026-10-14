@@ -163,3 +163,74 @@ export function sizeArbitrage(i: SizingInput): SizingResult {
 }
 
 const pct = (x: number) => `${(x * 100).toFixed(2)}%`;
+
+/** Một mức giá của sổ lệnh kèm lãi ròng nếu ăn ở mức đó (để xem sổ lệnh mỏng cỡ nào). */
+export interface DepthLevel {
+  readonly price: number;
+  readonly size: number;
+  /** Tiền mua hết mức này (gồm phí). */
+  readonly usd: number;
+  /** Lãi ròng của cặp lệnh nếu mua ở đúng giá này. */
+  readonly netMargin: number;
+  /** Còn đạt ngưỡng lãi ròng tối thiểu. */
+  readonly ok: boolean;
+}
+
+export interface DepthSummary {
+  /** Tối đa `maxLevels` mức ask rẻ nhất. */
+  readonly levels: readonly DepthLevel[];
+  /** Giá cao nhất còn đạt ngưỡng lãi (null = không mức nào đạt). */
+  readonly maxPrice: number | null;
+  /** Tổng share / tiền (gồm phí) ở các mức còn đạt ngưỡng. */
+  readonly sharesAtEdge: number;
+  readonly usdAtEdge: number;
+  /** Số share cần để cân đủ tiền mục tiêu. */
+  readonly targetShares: number;
+  /** Tiền chân sách tối đa vào được với độ sâu hiện có. */
+  readonly maxStakeAtEdge: number;
+}
+
+/** Tóm tắt độ sâu sổ lệnh so với ngưỡng lãi — ghi vào lệnh để admin xem vì sao vào ít / bỏ qua. */
+export function depthSummary(
+  i: Pick<
+    SizingInput,
+    'bookOdds' | 'asks' | 'fee' | 'targetStake' | 'minNetMargin'
+  >,
+  maxLevels = 10,
+): DepthSummary {
+  const bookUnit = 1 / i.bookOdds;
+  const maxUnit = 1 / (1 + i.minNetMargin);
+  const asks = [...i.asks]
+    .filter((l) => l.price > 0 && l.price < 1 && l.size > 0)
+    .sort((a, b) => a.price - b.price);
+  let sharesAtEdge = 0;
+  let usdAtEdge = 0;
+  let maxPrice: number | null = null;
+  const levels: DepthLevel[] = [];
+  for (const l of asks) {
+    const fee = takerFeePerShare(l.price, i.fee);
+    const unit = bookUnit + l.price + fee;
+    const ok = unit <= maxUnit;
+    if (ok) {
+      sharesAtEdge += l.size;
+      usdAtEdge += l.size * (l.price + fee);
+      maxPrice = l.price;
+    }
+    if (levels.length < maxLevels)
+      levels.push({
+        price: l.price,
+        size: l.size,
+        usd: r6(l.size * (l.price + fee)),
+        netMargin: r6(1 / unit - 1),
+        ok,
+      });
+  }
+  return {
+    levels,
+    maxPrice,
+    sharesAtEdge: r6(sharesAtEdge),
+    usdAtEdge: r6(usdAtEdge),
+    targetShares: r6(i.targetStake * i.bookOdds),
+    maxStakeAtEdge: r6(sharesAtEdge * bookUnit),
+  };
+}

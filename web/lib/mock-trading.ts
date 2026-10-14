@@ -96,14 +96,35 @@ const trades: TradeAttempt[] = Array.from({ length: 48 }, (_, i) => {
     reason: i === 7 ? 'SIGNAL_CANCELLED: margin_decreased' : filled ? null : SKIPS[i % SKIPS.length]!,
     signalMargin: margin,
     tierName: margin >= 0.05 ? 'VIP' : 'Thường',
-    book: { tenant: 'sptpub', side: 0, pick: teams[0], odds, stake },
-    polymarket: { tenant: 'polymarket', side: 1, pick: teams[1], odds: round2(1 / price), tokenId: `tok-${i}`, shares, avgPrice: price, fee, cost },
+    book: { tenant: 'sptpub', side: 0, pick: teams[0], odds, stake, url: 'https://csgoempire.com/match-betting' },
+    polymarket: { tenant: 'polymarket', side: 1, pick: teams[1], odds: round2(1 / price), tokenId: `tok-${i}`, shares, avgPrice: price, fee, cost, url: `https://polymarket.com/event/${sport}-${teams.join('-').replace(/[^a-z0-9-]/g, '')}` },
     totalCost: filled ? total : 0,
     payout: filled ? shares : 0,
     profit: filled ? round2(shares - total) : 0,
     netMargin: filled ? (shares - total) / total : 0,
     latencyMs: 80 + ((i * 37) % 200),
-    detail: {},
+    detail: (() => {
+      const lv = [price, round2(price + 0.01), round2(price + 0.02), round2(price + 0.04)].map((p, k) => {
+        const size = [filled ? shares * 0.7 : 12, filled ? shares * 0.5 : 8, 40, 300][k]!;
+        const f = 0.05 * p * (1 - p);
+        const nm = 1 / (1 / odds + p + f) - 1;
+        return { price: p, size: round2(size), usd: round2(size * (p + f)), netMargin: nm, ok: nm >= 0.01 };
+      });
+      const edge = lv.filter((l) => l.ok);
+      const sh = edge.reduce((a, l) => a + l.size, 0);
+      return {
+        signalAgeMs: 6,
+        targetStake: 50,
+        bestAsk: price,
+        fee: { enabled: true, rate: 0.05, exponent: 1 },
+        limitedBy: 'stake',
+        levels: filled ? [{ price, shares: round2(shares * 0.7), fee }, { price: round2(price + 0.01), shares: round2(shares * 0.3), fee: 0 }] : [],
+        depth: { levels: lv, maxPrice: edge.at(-1)?.price ?? null, sharesAtEdge: round2(sh), usdAtEdge: round2(edge.reduce((a, l) => a + l.usd, 0)), targetShares: round2(50 * odds), maxStakeAtEdge: round2(sh / odds) },
+        sizing: { targetStake: 50, minStake: 25, minShares: 5, minNetMargin: 0.01 },
+        bookAt: Date.now() - i * 23 * 60_000,
+        ...(i === 7 ? { cancelledAfterMs: 84 } : {}),
+      };
+    })(),
     createdAt: Date.now() - i * 23 * 60_000,
     csgoempireAccountId: 'acc-empire-1',
     polymarketAccountId: 'acc-poly-1',

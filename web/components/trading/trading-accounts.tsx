@@ -184,7 +184,14 @@ function AccountForm({
     setPrivateKey('');
   }, [value]);
 
-  const evm = (s: string) => /^0x[0-9a-fA-F]{40}$/.test(s.trim());
+  // chấp nhận thiếu tiền tố 0x
+  const addr = (s: string) => {
+    const t = s.trim();
+    return /^[0-9a-fA-F]{40}$/.test(t) ? `0x${t}` : t;
+  };
+  const evm = (s: string) => /^0x[0-9a-fA-F]{40}$/.test(addr(s));
+  const walletErr = walletAddress.trim() && !evm(walletAddress) ? `Cần 0x + 40 ký tự hex (đang có ${walletAddress.trim().replace(/^0x/i, '').length} ký tự).` : undefined;
+  const funderErr = funderAddress.trim() && !evm(funderAddress) ? 'Cần 0x + 40 ký tự hex, hoặc để trống.' : undefined;
   const keyOk = venue !== 'polymarket' || !privateKey.trim() || /^(0x)?[0-9a-fA-F]{64}$/.test(privateKey.trim());
   const missing =
     !label.trim() ||
@@ -196,7 +203,7 @@ function AccountForm({
     const config =
       venue === 'csgoempire'
         ? { venue, browserProfile: browserProfile.trim() }
-        : { venue, walletAddress: walletAddress.trim(), funderAddress: funderAddress.trim() || null };
+        : { venue, walletAddress: addr(walletAddress), funderAddress: funderAddress.trim() ? addr(funderAddress) : null };
     setBusy(true);
     const r = await mutate(
       editing ? `trading/accounts/${encodeURIComponent(editing.id)}` : 'trading/accounts',
@@ -260,16 +267,16 @@ function AccountForm({
           </Field>
         ) : (
           <>
-            <Field label="Địa chỉ ví" htmlFor="ac-wallet" help="0x + 40 ký tự hex.">
+            <Field label="Địa chỉ ví" htmlFor="ac-wallet" error={walletErr} help="0x + 40 ký tự hex (thiếu 0x sẽ tự thêm).">
               <Input id="ac-wallet" className="num" value={walletAddress} onChange={(e) => setWalletAddress(e.target.value)} placeholder="0x…" />
             </Field>
-            <Field label="Ví funder (tùy chọn)" htmlFor="ac-funder" help="Ví proxy Polymarket nếu tài khoản đăng nhập bằng email/ví Polymarket; trống = trả bằng chính ví trên.">
+            <Field label="Ví funder (tùy chọn)" htmlFor="ac-funder" error={funderErr} help="Ví proxy Polymarket nếu tài khoản đăng nhập bằng email/ví Polymarket; trống = trả bằng chính ví trên.">
               <Input id="ac-funder" className="num" value={funderAddress} onChange={(e) => setFunderAddress(e.target.value)} placeholder="0x…" />
             </Field>
             <Field
               label="Private key"
               htmlFor="ac-key"
-              error={!keyOk ? '64 ký tự hex (có hoặc không 0x).' : secretKeyConfigured === false && privateKey.trim() ? 'Backend chưa đặt TRADING_SECRET_KEY nên sẽ từ chối lưu key.' : undefined}
+              error={!keyOk ? `Cần đúng 64 ký tự hex, có hoặc không 0x (đang có ${privateKey.trim().replace(/^0x/i, '').length} ký tự). Chạy giấy thì để trống.` : secretKeyConfigured === false && privateKey.trim() ? 'Backend chưa đặt TRADING_SECRET_KEY nên sẽ từ chối lưu key.' : undefined}
               help={
                 editing?.hasSecret
                   ? 'Đang có key đã mã hóa. Bỏ trống để giữ; nhập key mới để thay.'

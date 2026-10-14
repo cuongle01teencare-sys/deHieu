@@ -66,9 +66,11 @@ export interface RiskLimits {
   minNetMargin: number;
   matchCapUsd: number;
   maxSignalAgeMs: number;
+  /** Vào lại cùng cửa sau (ms); 0 = mỗi cửa chỉ vào một lần mỗi trận. */
+  reentryCooldownMs: number;
 }
 
-export const DEFAULT_RISK: RiskLimits = { minNetMargin: 0.01, matchCapUsd: 0, maxSignalAgeMs: 3_000 };
+export const DEFAULT_RISK: RiskLimits = { minNetMargin: 0.01, matchCapUsd: 0, maxSignalAgeMs: 3_000, reentryCooldownMs: 0 };
 
 export interface TraderProfile {
   id: string;
@@ -102,6 +104,39 @@ export interface TradeLeg {
   side: number;
   pick: string;
   odds: number;
+  /** Trang trận trên sàn. */
+  url?: string | null;
+}
+
+/** Một mức giá của sổ lệnh Polymarket lúc quyết định. */
+export interface DepthLevel {
+  price: number;
+  size: number;
+  usd: number;
+  netMargin: number;
+  ok: boolean;
+}
+
+/** Phần `detail` worker ghi (các trường có thể thiếu tùy kết quả). */
+export interface TradeDetail {
+  signalAgeMs?: number;
+  targetStake?: number | null;
+  bestAsk?: number | null;
+  budget?: number | null;
+  fee?: { enabled: boolean; rate: number; exponent: number };
+  limitedBy?: 'stake' | 'depth' | 'budget';
+  levels?: { price: number; shares: number; fee: number }[];
+  depth?: {
+    levels: DepthLevel[];
+    maxPrice: number | null;
+    sharesAtEdge: number;
+    usdAtEdge: number;
+    targetShares: number;
+    maxStakeAtEdge: number;
+  };
+  sizing?: { targetStake: number; minStake: number; minShares: number; minNetMargin: number };
+  cancelledAfterMs?: number;
+  bookAt?: number | null;
 }
 
 export interface TradeAttempt {

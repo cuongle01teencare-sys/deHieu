@@ -22,12 +22,18 @@ export interface RiskLimits {
   readonly matchCapUsd: number;
   /** Bỏ qua kèo đã phát quá lâu (ms) khi tới worker; 0 = không kiểm tra. */
   readonly maxSignalAgeMs: number;
+  /**
+   * Vào lại CÙNG cửa (cùng room + tổ hợp sàn/phía) sau bao lâu (ms). 0 = chỉ vào một lần mỗi trận.
+   * Kèo bị hủy rồi phát lại (signalId mới) vẫn là cùng một cửa: không mua chồng.
+   */
+  readonly reentryCooldownMs: number;
 }
 
 export const DEFAULT_RISK_LIMITS: RiskLimits = {
   minNetMargin: 0.01,
   matchCapUsd: 0,
   maxSignalAgeMs: 3_000,
+  reentryCooldownMs: 0,
 };
 
 /** Một "trader": 1 tài khoản csgoempire + 1 tài khoản polymarket + kế hoạch vốn + chiến lược + giới hạn rủi ro. */
@@ -48,6 +54,7 @@ export function validateRiskLimits(r: RiskLimits): string | null {
     return 'minNetMargin phải trong [0, 1)';
   if (!(r.matchCapUsd >= 0)) return 'matchCapUsd phải ≥ 0 (0 = không giới hạn)';
   if (!(r.maxSignalAgeMs >= 0)) return 'maxSignalAgeMs phải ≥ 0';
+  if (!(r.reentryCooldownMs >= 0)) return 'reentryCooldownMs phải ≥ 0';
   return null;
 }
 

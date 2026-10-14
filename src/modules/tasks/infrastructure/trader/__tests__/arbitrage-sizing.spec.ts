@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  depthSummary,
   NO_FEE,
   sizeArbitrage,
   takerFeePerShare,
@@ -88,5 +89,21 @@ describe('sizeArbitrage', () => {
       minStake: 0,
     });
     expect(r).toMatchObject({ ok: false, reason: 'BELOW_MIN_ORDER' });
+  });
+});
+
+describe('depthSummary', () => {
+  it('liệt kê mức giá kèm lãi ròng; cộng share/tiền ở các mức còn đạt ngưỡng', () => {
+    const d = depthSummary(base);
+    expect(d.levels.map((l) => [l.price, l.ok])).toEqual([
+      [0.4, true],
+      [0.45, true],
+      [0.49, false],
+    ]);
+    expect(d.maxPrice).toBe(0.45);
+    expect(d.sharesAtEdge).toBe(150);
+    expect(d.maxStakeAtEdge).toBe(75);
+    expect(d.targetShares).toBe(200);
+    expect(d.levels[0].netMargin).toBeCloseTo(1 / 0.912 - 1, 6);
   });
 });

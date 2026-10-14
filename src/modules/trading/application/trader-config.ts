@@ -58,7 +58,12 @@ export function buildTraderConfig(input: {
       accounts: { csgoempire: null, polymarket: null },
       stakeTable: [],
       strategy: { id: 'none', params: {} },
-      risk: { minNetMargin: 1, matchCapUsd: 0, maxSignalAgeMs: 0 },
+      risk: {
+        minNetMargin: 1,
+        matchCapUsd: 0,
+        maxSignalAgeMs: 0,
+        reentryCooldownMs: 0,
+      },
       matchExposureCapUsd: settings.matchExposureCapUsd,
     };
   const book = input.accounts.find(

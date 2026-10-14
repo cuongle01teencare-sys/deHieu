@@ -81,8 +81,15 @@ const ProfileBody = z.object({
       minNetMargin: z.number().min(0).max(0.99).default(0.01),
       matchCapUsd: money.default(0),
       maxSignalAgeMs: z.number().int().min(0).max(600_000).default(3_000),
+      /** 0 = mỗi cửa chỉ vào một lần mỗi trận. */
+      reentryCooldownMs: z.number().int().min(0).max(86_400_000).default(0),
     })
-    .default({ minNetMargin: 0.01, matchCapUsd: 0, maxSignalAgeMs: 3_000 }),
+    .default({
+      minNetMargin: 0.01,
+      matchCapUsd: 0,
+      maxSignalAgeMs: 3_000,
+      reentryCooldownMs: 0,
+    }),
 });
 
 const SettingsBody = z.object({ matchExposureCapUsd: money });

@@ -80,7 +80,12 @@ const config = (
     },
   ],
   strategy: { id: 'arb-taker', params: {} },
-  risk: { minNetMargin: 0.01, matchCapUsd: 0, maxSignalAgeMs: 0 },
+  risk: {
+    minNetMargin: 0.01,
+    matchCapUsd: 0,
+    maxSignalAgeMs: 0,
+    reentryCooldownMs: 0,
+  },
   matchExposureCapUsd: 0,
   ...over,
 });
@@ -95,7 +100,13 @@ const signal = (id: string) => ({
   phase: 'live',
   margin: 0.06,
   legs: [
-    { tenant: 'sptpub', side: 0, pick: 'alpha', odds: 2, ref: { e: '1' } },
+    {
+      tenant: 'sptpub',
+      side: 0,
+      pick: 'alpha',
+      odds: 2,
+      ref: { e: '1', url: 'https://csgoempire.com/match-betting?bt-path=x' },
+    },
     {
       tenant: 'polymarket',
       side: 1,
@@ -228,8 +239,22 @@ describe('TraderArbitrageTask (giấy)', () => {
       id: 'A:s1',
       status: 'paper_filled',
       tierName: 'Thường',
-      book: { tenant: 'sptpub', stake: 25 },
-      polymarket: { tokenId: 'tok-1', shares: 50, avgPrice: 0.4, fee: 0.6 },
+      book: {
+        tenant: 'sptpub',
+        stake: 25,
+        url: 'https://csgoempire.com/match-betting?bt-path=x',
+      },
+      detail: {
+        depth: { maxPrice: 0.4, sharesAtEdge: 50 },
+        sizing: { targetStake: 25 },
+      },
+      polymarket: {
+        tokenId: 'tok-1',
+        shares: 50,
+        avgPrice: 0.4,
+        fee: 0.6,
+        url: null,
+      },
       totalCost: 45.6,
       payout: 50,
     });
@@ -261,6 +286,45 @@ describe('TraderArbitrageTask (giấy)', () => {
     hub.broadcast({ type: 'signal', kind: 'refreshed', signal: signal('s1') });
     await new Promise((r) => setTimeout(r, 100));
     expect(trades(t)).toHaveLength(1);
+    await t.stop();
+  });
+
+  it('kèo hủy rồi phát lại (signalId mới, cùng cửa) → không vào chồng', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    await t.command('config', config('A'));
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('r1') });
+    await until(() => trades(t).length === 1);
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('r2') });
+    await until(() => trades(t).length === 2);
+    expect(trades(t).map((x) => x.status)).toEqual(['paper_filled', 'skipped']);
+    expect(String(trades(t)[1].reason)).toMatch(/^ALREADY_ENTERED/);
+    await t.stop();
+  });
+
+  it('cho phép vào lại sau thời gian chờ', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    await t.command(
+      'config',
+      config('A', {
+        risk: {
+          minNetMargin: 0.01,
+          matchCapUsd: 0,
+          maxSignalAgeMs: 0,
+          reentryCooldownMs: 1,
+        },
+      }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('q1') });
+    await until(() => trades(t).length === 1);
+    await new Promise((r) => setTimeout(r, 20));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('q2') });
+    await until(() => trades(t).length === 2);
+    expect(trades(t).map((x) => x.status)).toEqual([
+      'paper_filled',
+      'paper_filled',
+    ]);
     await t.stop();
   });
 
