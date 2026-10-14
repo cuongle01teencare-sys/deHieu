@@ -81,14 +81,20 @@ const ProfileBody = z.object({
       minNetMargin: z.number().min(0).max(0.99).default(0.01),
       matchCapUsd: money.default(0),
       maxSignalAgeMs: z.number().int().min(0).max(600_000).default(3_000),
-      /** 0 = mỗi cửa chỉ vào một lần mỗi trận. */
-      reentryCooldownMs: z.number().int().min(0).max(86_400_000).default(0),
+      /** Số lệnh tối đa cho một cửa ở mỗi hạng kèo (mỗi hạng tính riêng). */
+      maxEntriesPerTier: z.number().int().min(1).max(100).default(1),
+      /** Lý do hủy kèo mà trader vẫn vào tiếp lệnh đang tính. */
+      ignoreCancelReasons: z
+        .array(z.string().trim().min(1).max(60))
+        .max(30)
+        .default(['better_opportunity']),
     })
     .default({
       minNetMargin: 0.01,
       matchCapUsd: 0,
       maxSignalAgeMs: 3_000,
-      reentryCooldownMs: 0,
+      maxEntriesPerTier: 1,
+      ignoreCancelReasons: ['better_opportunity'],
     }),
 });
 

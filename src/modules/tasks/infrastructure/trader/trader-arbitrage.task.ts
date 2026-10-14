@@ -139,10 +139,14 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
             void this._handle(ctx, s, { market, ledger, hub }).catch((e) =>
               ctx.warn(e),
             ),
-          onCancel: (c) =>
+          onCancel: (c) => {
+            // vd better_opportunity: kèo cũ vẫn còn lãi, publisher chỉ thay bằng kèo tốt hơn → cứ vào tiếp
+            if (this._config?.risk.ignoreCancelReasons.includes(c.reason))
+              return;
             this._inflight
               .get(c.signalId)
-              ?.abort(`SIGNAL_CANCELLED: ${c.reason}`),
+              ?.abort(`SIGNAL_CANCELLED: ${c.reason}`);
+          },
           onState: (state, detail) => {
             if (state === 'connected') connected = true;
             if (state === 'disconnected') {
@@ -275,18 +279,14 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       return emit('skipped', 'MISSING_REF: thiếu token/conditionId polymarket');
     if (!pick)
       return emit('skipped', `NO_TIER: margin ${(s.margin * 100).toFixed(2)}%`);
-    // cùng cửa đã vào (kèo bị hủy rồi phát lại = signalId mới nhưng vẫn là cửa cũ) → không mua chồng
-    const entryKey = `entry:${profileId}:${s.room}:${s.comboId}`;
-    const entryTtl =
-      cfg.risk.reentryCooldownMs > 0
-        ? cfg.risk.reentryCooldownMs
-        : EXPOSURE_TTL_MS;
-    if (await deps.ledger.isHeld(entryKey))
+    // mỗi hạng kèo tính riêng: cùng cửa ở hạng này đã đủ số lệnh → bỏ qua (kèo phát lại = signalId mới, vẫn cửa cũ)
+    const max = cfg.risk.maxEntriesPerTier;
+    const entryKey = `entry:${profileId}:${s.room}:${s.comboId}:${pick.row.tierId}`;
+    const entered = await deps.ledger.count(entryKey);
+    if (entered >= max)
       return emit(
         'skipped',
-        cfg.risk.reentryCooldownMs > 0
-          ? `ALREADY_ENTERED: cửa này vừa vào, chờ ${Math.round(cfg.risk.reentryCooldownMs / 1000)}s mới vào lại`
-          : 'ALREADY_ENTERED: cửa này đã vào trong trận',
+        `ALREADY_ENTERED: cửa này đã vào ${entered}/${max} lệnh ở hạng ${pick.row.tierName}`,
       );
     const strategy = TRADE_STRATEGIES[cfg.strategy.id];
     if (!strategy)
@@ -364,13 +364,15 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           },
         });
 
-      // giữ cửa trước (nguyên tử) rồi mới giữ hạn mức: hai kèo trùng cửa đến cùng lúc chỉ một kèo vào
-      if (!(await deps.ledger.hold(entryKey, entryTtl)))
-        return emit('skipped', 'ALREADY_ENTERED: cửa này vừa được vào', {
-          tokenId,
-        });
+      // lấy suất của hạng trước (nguyên tử) rồi mới giữ hạn mức: kèo trùng cửa đến cùng lúc không vượt số lệnh
+      if (!(await deps.ledger.acquire(entryKey, max, EXPOSURE_TTL_MS)))
+        return emit(
+          'skipped',
+          `ALREADY_ENTERED: cửa này vừa đủ ${max} lệnh ở hạng ${pick.row.tierName}`,
+          { tokenId },
+        );
       if (!(await deps.ledger.reserve(caps, d.totalCost, EXPOSURE_TTL_MS))) {
-        await deps.ledger.release(entryKey);
+        await deps.ledger.giveBack(entryKey);
         return emit(
           'skipped',
           'CAP_REACHED: giới hạn tổng theo trận vừa bị trader khác dùng hết',

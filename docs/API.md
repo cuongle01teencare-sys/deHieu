@@ -209,7 +209,9 @@ Polymarket thật → mua các mức giá còn lãi ròng ≥ ngưỡng → gi�
   "scaleWithinTier": true,  // margin càng gần cận trên của hạng → tiền càng gần tối đa
   "overrides": { "<tierId>": { "stake": 120, "minStake": 40, "maxStake": 200 } } }  // custom bắt buộc stake
 // risk
-{ "minNetMargin": 0.01, "matchCapUsd": 0, "maxSignalAgeMs": 3000 }
+{ "minNetMargin": 0.01, "matchCapUsd": 0, "maxSignalAgeMs": 3000,
+  "maxEntriesPerTier": 1,                       // số lệnh tối đa cho MỘT cửa ở MỖI hạng (hạng khác tính riêng)
+  "ignoreCancelReasons": ["better_opportunity"] } // kèo bị hủy vì lý do này khi đang tính → vẫn vào
 ```
 
 Mọi lần xử lý kèo lưu ở bảng `trade_attempts` (cả bỏ qua/hủy/lỗi), kèm mốc thời gian `signal_issued_at` → `received_at` →

@@ -13,6 +13,7 @@ import {
   type TraderProfile,
   type TraderRuntimeConfig,
 } from '@/lib/trading-types';
+import { CANCEL_REASONS } from '@/lib/skip-reasons';
 import { cn } from '@/lib/utils';
 import { useApi } from '@/hooks/use-api';
 import { useGuard, useMutate } from '../shell/shell-context';
@@ -356,10 +357,33 @@ function ProfileForm({
           <Field label="Bỏ kèo cũ hơn (giây)" htmlFor="pf-age" help="Tính từ lúc phát; 0 = không kiểm tra.">
             <NumInput id="pf-age" value={risk.maxSignalAgeMs / 1000} onValue={(v) => v !== undefined && setRisk({ ...risk, maxSignalAgeMs: Math.round(v * 1000) })} />
           </Field>
-          <Field label="Vào lại cùng cửa sau (giây)" htmlFor="pf-reentry" help="Kèo hủy rồi phát lại vẫn là cửa cũ. 0 = mỗi cửa chỉ vào một lần mỗi trận.">
-            <NumInput id="pf-reentry" value={risk.reentryCooldownMs / 1000} onValue={(v) => v !== undefined && setRisk({ ...risk, reentryCooldownMs: Math.round(v * 1000) })} />
+          <Field label="Số lệnh mỗi cửa mỗi hạng" htmlFor="pf-entries" help="Cùng cửa ở cùng hạng vào tối đa bấy nhiêu lệnh, dù margin lên hay xuống; lên hạng khác thì tính lại từ đầu.">
+            <NumInput id="pf-entries" value={risk.maxEntriesPerTier} onValue={(v) => v !== undefined && v >= 1 && setRisk({ ...risk, maxEntriesPerTier: Math.floor(v) })} />
           </Field>
         </div>
+        <Field
+          label="Vẫn vào lệnh khi kèo bị hủy vì"
+          help="Kèo bị hủy trong lúc trader đang đọc sổ lệnh / tính lệnh: lý do được chọn thì vẫn vào tiếp, lý do khác thì dừng."
+        >
+          <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+            {Object.entries(CANCEL_REASONS).map(([k, label]) => {
+              const on = risk.ignoreCancelReasons.includes(k);
+              return (
+                <label key={k} className="flex cursor-pointer items-center gap-3 text-body">
+                  <input
+                    type="checkbox"
+                    className="size-4 accent-[var(--accent)]"
+                    checked={on}
+                    onChange={() =>
+                      setRisk({ ...risk, ignoreCancelReasons: on ? risk.ignoreCancelReasons.filter((x) => x !== k) : [...risk.ignoreCancelReasons, k] })
+                    }
+                  />
+                  <span className="text-fg">{label}</span>
+                </label>
+              );
+            })}
+          </div>
+        </Field>
         <Field label="Bật profile" htmlFor="pf-on" help="Tắt = task trader vẫn chạy nhưng bỏ qua mọi kèo (ghi lý do).">
           <Switch id="pf-on" checked={enabled} onCheckedChange={setEnabled} label="Bật profile" />
         </Field>

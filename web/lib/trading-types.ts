@@ -66,11 +66,13 @@ export interface RiskLimits {
   minNetMargin: number;
   matchCapUsd: number;
   maxSignalAgeMs: number;
-  /** Vào lại cùng cửa sau (ms); 0 = mỗi cửa chỉ vào một lần mỗi trận. */
-  reentryCooldownMs: number;
+  /** Số lệnh tối đa cho một cửa ở mỗi hạng kèo (mỗi hạng tính riêng). */
+  maxEntriesPerTier: number;
+  /** Lý do hủy kèo mà trader vẫn vào tiếp lệnh đang tính. */
+  ignoreCancelReasons: string[];
 }
 
-export const DEFAULT_RISK: RiskLimits = { minNetMargin: 0.01, matchCapUsd: 0, maxSignalAgeMs: 3_000, reentryCooldownMs: 0 };
+export const DEFAULT_RISK: RiskLimits = { minNetMargin: 0.01, matchCapUsd: 0, maxSignalAgeMs: 3_000, maxEntriesPerTier: 1, ignoreCancelReasons: ['better_opportunity'] };
 
 export interface TraderProfile {
   id: string;

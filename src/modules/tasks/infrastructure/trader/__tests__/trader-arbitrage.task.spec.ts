@@ -84,13 +84,14 @@ const config = (
     minNetMargin: 0.01,
     matchCapUsd: 0,
     maxSignalAgeMs: 0,
-    reentryCooldownMs: 0,
+    maxEntriesPerTier: 1,
+    ignoreCancelReasons: ['better_opportunity'],
   },
   matchExposureCapUsd: 0,
   ...over,
 });
 
-const signal = (id: string) => ({
+const signal = (id: string, margin = 0.06) => ({
   signalId: id,
   room: 'room:lol:alpha~beta:match-winner',
   sport: 'lol',
@@ -98,7 +99,7 @@ const signal = (id: string) => ({
   teams: ['alpha', 'beta'],
   comboId: 'sptpub>0|polymarket>1',
   phase: 'live',
-  margin: 0.06,
+  margin,
   legs: [
     {
       tenant: 'sptpub',
@@ -289,7 +290,7 @@ describe('TraderArbitrageTask (giấy)', () => {
     await t.stop();
   });
 
-  it('kèo hủy rồi phát lại (signalId mới, cùng cửa) → không vào chồng', async () => {
+  it('kèo hủy rồi phát lại (signalId mới, cùng cửa, cùng hạng) → không vào chồng', async () => {
     const t = start(new TraderArbitrageTask(), params('A'));
     await t.command('config', config('A'));
     await until(() => hub.consumers.has('trader:A'));
@@ -302,7 +303,45 @@ describe('TraderArbitrageTask (giấy)', () => {
     await t.stop();
   });
 
-  it('cho phép vào lại sau thời gian chờ', async () => {
+  it('mỗi hạng tính riêng: cùng cửa lên hạng cao hơn thì vào tiếp', async () => {
+    const vip = {
+      tierId: 'vip',
+      tierName: 'VIP',
+      minMargin: 0.05,
+      maxMargin: null,
+      stake: 25,
+      minStake: 5,
+      maxStake: 25,
+      scaleWithinTier: false,
+    };
+    const std = {
+      ...vip,
+      tierId: 'std',
+      tierName: 'Thường',
+      minMargin: 0.02,
+      maxMargin: 0.05,
+    };
+    const t = start(new TraderArbitrageTask(), params('A'));
+    await t.command('config', config('A', { stakeTable: [std, vip] }));
+    await until(() => hub.consumers.has('trader:A'));
+    const send = async (id: string, m: number, n: number) => {
+      hub.broadcast({ type: 'signal', kind: 'issued', signal: signal(id, m) });
+      await until(() => trades(t).length === n);
+    };
+    await send('m1', 0.03, 1); // Thường
+    await send('m2', 0.06, 2); // lên VIP → vào
+    await send('m3', 0.035, 3); // tụt về Thường → đã vào hạng này
+    await send('m4', 0.07, 4); // VIP lần 2 → đã vào hạng này
+    expect(trades(t).map((x) => [x.tierName, x.status])).toEqual([
+      ['Thường', 'paper_filled'],
+      ['VIP', 'paper_filled'],
+      ['Thường', 'skipped'],
+      ['VIP', 'skipped'],
+    ]);
+    await t.stop();
+  });
+
+  it('cấu hình số lệnh mỗi hạng: 2 → vào 2 lần rồi bỏ qua', async () => {
     const t = start(new TraderArbitrageTask(), params('A'));
     await t.command(
       'config',
@@ -311,20 +350,43 @@ describe('TraderArbitrageTask (giấy)', () => {
           minNetMargin: 0.01,
           matchCapUsd: 0,
           maxSignalAgeMs: 0,
-          reentryCooldownMs: 1,
+          maxEntriesPerTier: 2,
+          ignoreCancelReasons: [],
         },
       }),
     );
     await until(() => hub.consumers.has('trader:A'));
-    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('q1') });
-    await until(() => trades(t).length === 1);
-    await new Promise((r) => setTimeout(r, 20));
-    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('q2') });
-    await until(() => trades(t).length === 2);
+    for (const [i, id] of ['q1', 'q2', 'q3'].entries()) {
+      hub.broadcast({ type: 'signal', kind: 'issued', signal: signal(id) });
+      await until(() => trades(t).length === i + 1);
+    }
     expect(trades(t).map((x) => x.status)).toEqual([
       'paper_filled',
       'paper_filled',
+      'skipped',
     ]);
+    await t.stop();
+  });
+
+  it('hủy vì có kèo tốt hơn → vẫn vào tiếp lệnh đang tính', async () => {
+    let open!: () => void;
+    bookGate = new Promise<void>((r) => (open = r));
+    const t = start(new TraderArbitrageTask(), params('A'));
+    await t.command('config', config('A'));
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('b1') });
+    await new Promise((r) => setTimeout(r, 50));
+    hub.broadcast({
+      type: 'cancel',
+      signalId: 'b1',
+      room: 'x',
+      comboId: 'x',
+      reason: 'better_opportunity',
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    open();
+    await until(() => trades(t).length === 1);
+    expect(trades(t)[0]).toMatchObject({ status: 'paper_filled' });
     await t.stop();
   });
 

@@ -62,7 +62,8 @@ export function buildTraderConfig(input: {
         minNetMargin: 1,
         matchCapUsd: 0,
         maxSignalAgeMs: 0,
-        reentryCooldownMs: 0,
+        maxEntriesPerTier: 1,
+        ignoreCancelReasons: [],
       },
       matchExposureCapUsd: settings.matchExposureCapUsd,
     };
