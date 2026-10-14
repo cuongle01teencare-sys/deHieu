@@ -6,6 +6,7 @@ import type { DbExecutor } from '../../../../../../shared/infrastructure/databas
 import { DrizzleNotifyConfigRepository } from '../drizzle-notify-config.repository.js';
 import { DrizzleArbitrageSettingsStore } from '../../../settings/drizzle-arbitrage-settings.store.js';
 import { DEFAULT_ARBITRAGE_SETTINGS } from '../../../../application/arbitrage-settings.js';
+import { drizzleAppSettingsTable } from '../drizzle-app-settings.schema.js';
 
 describe('Postgres: hạng kèo, kênh thông báo, cấu hình arbitrage', () => {
   let client: PGlite;
@@ -89,14 +90,40 @@ describe('Postgres: hạng kèo, kênh thông báo, cấu hình arbitrage', () =
   it('cấu hình arbitrage: lưu rồi nạp lại ở lần khởi động sau', async () => {
     const first = new DrizzleArbitrageSettingsStore(tx);
     expect(await first.load()).toEqual(DEFAULT_ARBITRAGE_SETTINGS);
-    await first.update({ minMargin: 0.035, enabledPhases: ['prematch'] });
+    await first.update({
+      minMargin: 0.035,
+      marginStep: 0.02,
+      marginDropStep: 0.005,
+      enabledPhases: ['prematch'],
+    });
 
     const afterRestart = new DrizzleArbitrageSettingsStore(tx);
     await afterRestart.load();
     expect(await afterRestart.get()).toEqual({
       ...DEFAULT_ARBITRAGE_SETTINGS,
       minMargin: 0.035,
+      marginStep: 0.02,
+      marginDropStep: 0.005,
       enabledPhases: ['prematch'],
+    });
+  });
+
+  it('cấu hình cũ giữ bước tăng đã lưu và mặc định bước giảm là 1%', async () => {
+    await tx.executor.insert(drizzleAppSettingsTable).values({
+      key: 'arbitrage',
+      value: { minMargin: 0.03, marginStep: 0.025 },
+    });
+    const store = new DrizzleArbitrageSettingsStore(tx);
+    expect(await store.load()).toEqual({
+      ...DEFAULT_ARBITRAGE_SETTINGS,
+      minMargin: 0.03,
+      marginStep: 0.025,
+      marginDropStep: 0.01,
+    });
+    await store.update({ marginDropStep: 0.015 });
+    expect(await new DrizzleArbitrageSettingsStore(tx).load()).toMatchObject({
+      marginStep: 0.025,
+      marginDropStep: 0.015,
     });
   });
 });

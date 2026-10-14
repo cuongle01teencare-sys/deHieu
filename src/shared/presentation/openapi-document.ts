@@ -24,7 +24,8 @@ consumer → { type:"ack", deliveryId }                 (chưa ack → gửi l�
 app      → { type:"control", action:"pause"|"resume" }
 hai chiều: { type:"heartbeat", at }
 \`\`\`
-Lý do hủy: \`below_threshold\`, \`leg_suspended\`, \`leg_removed\`, \`start_time_mismatch\`, \`publisher_stopped\`, \`phase_disabled\`.
+Lý do hủy: \`below_threshold\`, \`better_opportunity\`, \`margin_decreased\`, \`leg_suspended\`, \`leg_removed\`, \`start_time_mismatch\`, \`publisher_stopped\`, \`phase_disabled\`, \`match_expired\`, \`missing_from_listing\`.
+Tăng đủ \`marginStep\` hoặc giảm đủ \`marginDropStep\` so với lần phát mới gần nhất → hủy kèo cũ rồi phát kèo mới. Hai bước mặc định 1 điểm phần trăm, cấu hình riêng và lưu bền bằng \`PATCH /arbitrage/settings\`.
 \`signal.legs[i].ref\` là ID gốc để đặt lệnh — sptpub: \`e\`, \`m\`, \`s\`, \`o0\`/\`o1\`; polymarket: \`c\`, \`slug\`, \`t0\`/\`t1\`.
 `;
 

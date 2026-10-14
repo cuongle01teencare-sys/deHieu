@@ -1,0 +1,327 @@
+import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Inject,
+  Param,
+  Post,
+  Put,
+  Query,
+} from '@nestjs/common';
+import { z } from 'zod';
+import { ApiZodBody } from '../../../shared/presentation/openapi.js';
+import { RequirePermissions } from '../../auth/presentation/auth.decorators.js';
+import { TradingAdmin } from '../application/trading-admin.js';
+import { TRADING_PERMISSIONS as P } from '../application/trading.permissions.js';
+import { TRADE_STATUSES } from '../application/trade-attempt.js';
+import { STAKE_TRENDS } from '../domain/stake-plan.js';
+import { TRADER_MODES } from '../domain/trader-profile.js';
+import { unwrap } from './http-errors.js';
+
+const money = z.number().min(0).max(1_000_000);
+
+const AccountBody = z.object({
+  label: z.string().trim().min(1).max(80),
+  enabled: z.boolean().default(true),
+  config: z.discriminatedUnion('venue', [
+    z.object({
+      venue: z.literal('csgoempire'),
+      browserProfile: z.string().trim().min(1).max(64),
+    }),
+    z.object({
+      venue: z.literal('polymarket'),
+      walletAddress: z.string().trim(),
+      funderAddress: z
+        .string()
+        .trim()
+        .nullish()
+        .transform((v) => v || null),
+    }),
+  ]),
+  /** Chỉ polymarket. Bỏ trống khi sửa = giữ key cũ. Không bao giờ được trả lại. */
+  privateKey: z.string().trim().max(200).optional(),
+});
+
+const StakePlanBody = z.object({
+  trend: z.enum(STAKE_TRENDS).default('flat'),
+  baseStake: money.default(50),
+  stepPct: z.number().min(0).max(10).default(0.5),
+  minStakeRatio: z.number().min(0).max(1).default(0.5),
+  maxStakeRatio: z.number().min(1).max(100).default(1),
+  scaleWithinTier: z.boolean().default(false),
+  overrides: z
+    .record(
+      z.string(),
+      z.object({
+        stake: money.optional(),
+        minStake: money.optional(),
+        maxStake: money.optional(),
+      }),
+    )
+    .default({}),
+});
+
+const ProfileBody = z.object({
+  name: z.string().trim().min(1).max(80),
+  enabled: z.boolean().default(true),
+  mode: z.enum(TRADER_MODES).default('paper'),
+  csgoempireAccountId: z.string().min(1),
+  polymarketAccountId: z.string().min(1),
+  stakePlan: StakePlanBody,
+  strategy: z
+    .object({
+      id: z.string().trim().min(1).max(60),
+      params: z.record(z.string(), z.unknown()).default({}),
+    })
+    .default({ id: 'arb-taker', params: {} }),
+  risk: z
+    .object({
+      minNetMargin: z.number().min(0).max(0.99).default(0.01),
+      matchCapUsd: money.default(0),
+      maxSignalAgeMs: z.number().int().min(0).max(600_000).default(3_000),
+    })
+    .default({ minNetMargin: 0.01, matchCapUsd: 0, maxSignalAgeMs: 3_000 }),
+});
+
+const SettingsBody = z.object({ matchExposureCapUsd: money });
+
+const TradesQuery = z.object({
+  profileId: z.string().optional(),
+  status: z.enum(TRADE_STATUSES).optional(),
+  before: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+});
+
+const StatsQuery = z.object({
+  profileId: z.string().optional(),
+  since: z.coerce.number().int().positive().optional(),
+});
+
+/**
+ * Auto trade: tài khoản (nhiều tài khoản mỗi nền tảng), profile trader, cấu hình chung, lệnh giấy.
+ * Task trader (kind `trader.arbitrage`, params {profileId}) tạo ở trang Publisher như task khác.
+ */
+@Controller('trading')
+@ApiTags('Auto trade')
+export class TradingController {
+  constructor(@Inject(TradingAdmin) private readonly _admin: TradingAdmin) {}
+
+  // ------------------------------------------------------------- tài khoản
+
+  @Get('accounts')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Danh sách tài khoản giao dịch',
+    description:
+      'Quyền: trading:read. Không bao giờ trả private key; hasSecret cho biết đã lưu key hay chưa.',
+  })
+  accounts() {
+    return this._admin.listAccounts();
+  }
+
+  @Post('accounts')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Thêm tài khoản',
+    description:
+      'Quyền: trading:manage. csgoempire: chỉ tên hồ sơ trình duyệt (không lưu mật khẩu). polymarket: địa chỉ ví + private key (mã hóa bằng TRADING_SECRET_KEY).',
+  })
+  @ApiZodBody(AccountBody, {
+    csgoempire: {
+      summary: 'Tài khoản csgoempire',
+      value: {
+        label: 'Empire #1',
+        config: { venue: 'csgoempire', browserProfile: 'empire-1' },
+      },
+    },
+    polymarket: {
+      summary: 'Ví polymarket',
+      value: {
+        label: 'Poly #1',
+        config: {
+          venue: 'polymarket',
+          walletAddress: '0x0000000000000000000000000000000000000001',
+        },
+        privateKey: '<64 ký tự hex>',
+      },
+    },
+  })
+  async createAccount(@Body() body: unknown) {
+    return unwrap(await this._admin.saveAccount(null, AccountBody.parse(body)));
+  }
+
+  @Put('accounts/:id')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Sửa tài khoản',
+    description:
+      'Quyền: trading:manage. Bỏ trống privateKey = giữ key cũ. Không đổi được nền tảng.',
+  })
+  @ApiZodBody(AccountBody)
+  async updateAccount(@Param('id') id: string, @Body() body: unknown) {
+    return unwrap(await this._admin.saveAccount(id, AccountBody.parse(body)));
+  }
+
+  @Delete('accounts/:id')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Xóa tài khoản',
+    description: 'Quyền: trading:manage. Đang dùng trong profile → 400.',
+  })
+  async deleteAccount(@Param('id') id: string) {
+    return unwrap(await this._admin.deleteAccount(id));
+  }
+
+  // ------------------------------------------------------------- profile
+
+  @Get('profiles')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Danh sách profile trader',
+    description: 'Quyền: trading:read',
+  })
+  profiles() {
+    return this._admin.listProfiles();
+  }
+
+  @Get('profiles/:id')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Chi tiết profile',
+    description: 'Quyền: trading:read',
+  })
+  async profile(@Param('id') id: string) {
+    return unwrap(await this._admin.getProfile(id));
+  }
+
+  @Get('profiles/:id/runtime-config')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Cấu hình worker nhận',
+    description:
+      'Quyền: trading:read. Bảng vốn đã tính theo hạng hiện tại + giới hạn; active=false kèm lý do nếu trader sẽ đứng yên.',
+  })
+  runtimeConfig(@Param('id') id: string) {
+    return this._admin.runtimeConfig(id);
+  }
+
+  @Post('profiles')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Thêm profile trader',
+    description:
+      'Quyền: trading:manage. 1 tài khoản csgoempire + 1 ví polymarket + kế hoạch vốn theo hạng kèo + chiến lược + giới hạn rủi ro.',
+  })
+  @ApiZodBody(ProfileBody)
+  async createProfile(@Body() body: unknown) {
+    return unwrap(await this._admin.saveProfile(null, ProfileBody.parse(body)));
+  }
+
+  @Put('profiles/:id')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Sửa profile trader',
+    description: 'Quyền: trading:manage',
+  })
+  @ApiZodBody(ProfileBody)
+  async updateProfile(@Param('id') id: string, @Body() body: unknown) {
+    return unwrap(await this._admin.saveProfile(id, ProfileBody.parse(body)));
+  }
+
+  @Delete('profiles/:id')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Xóa profile trader',
+    description:
+      'Quyền: trading:manage. Task trader đang chạy với profile này sẽ đứng yên (PROFILE_NOT_FOUND).',
+  })
+  async deleteProfile(@Param('id') id: string) {
+    return unwrap(await this._admin.deleteProfile(id));
+  }
+
+  @Post('stake-preview')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Xem trước bảng vốn',
+    description:
+      'Quyền: trading:read. Tính tiền / tối thiểu / tối đa cho từng hạng kèo hiện có từ kế hoạch vốn (không lưu).',
+  })
+  @ApiZodBody(StakePlanBody, {
+    up: {
+      summary: 'Tăng 50% mỗi hạng từ 50$',
+      value: { trend: 'up', baseStake: 50, stepPct: 0.5 },
+    },
+  })
+  async stakePreview(@Body() body: unknown) {
+    return unwrap(
+      await this._admin.previewStakeTable(StakePlanBody.parse(body)),
+    );
+  }
+
+  // ------------------------------------------------------------- cấu hình chung
+
+  @Get('settings')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Cấu hình auto trade',
+    description:
+      'Quyền: trading:read. matchExposureCapUsd: tổng tiền tối đa vào một trận cho mọi tài khoản (0 = tắt). secretKeyConfigured: đã đặt TRADING_SECRET_KEY chưa.',
+  })
+  async settings() {
+    return {
+      ...(await this._admin.getSettings()),
+      secretKeyConfigured: this._admin.secretKeyConfigured(),
+    };
+  }
+
+  @Put('settings')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Sửa cấu hình auto trade',
+    description: 'Quyền: trading:manage',
+  })
+  @ApiZodBody(SettingsBody, {
+    on: { summary: 'Tối đa 500$/trận', value: { matchExposureCapUsd: 500 } },
+    off: { summary: 'Tắt giới hạn', value: { matchExposureCapUsd: 0 } },
+  })
+  async saveSettings(@Body() body: unknown) {
+    return unwrap(await this._admin.saveSettings(SettingsBody.parse(body)));
+  }
+
+  // ------------------------------------------------------------- lệnh
+
+  @Get('trades')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Lệnh (giấy) gần nhất',
+    description:
+      'Quyền: trading:read. Mới nhất trước; phân trang lùi bằng before = createdAt của dòng cuối.',
+  })
+  trades(@Query() q: unknown) {
+    return this._admin.listTrades(TradesQuery.parse(q));
+  }
+
+  @Get('trades/stats')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Thống kê lệnh',
+    description:
+      'Quyền: trading:read. Số lần vào/bỏ qua/hủy, tổng tiền, lãi giả định, lý do bỏ qua.',
+  })
+  stats(@Query() q: unknown) {
+    return this._admin.tradeStats(StatsQuery.parse(q));
+  }
+
+  @Get('trades/:id')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Chi tiết một lệnh',
+    description:
+      'Quyền: trading:read. Kèm từng chân (csgoempire / polymarket): giá lúc kèo phát, giá yêu cầu, giá khớp, mốc thời gian.',
+  })
+  async trade(@Param('id') id: string) {
+    return unwrap(await this._admin.getTrade(id));
+  }
+}

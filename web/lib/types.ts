@@ -155,6 +155,7 @@ export interface IngestSnapshot {
 export interface ArbitrageSettings {
   minMargin: number;
   marginStep: number;
+  marginDropStep: number;
   signalTtlMs: number;
   maxStartDriftMs: number;
   enabledPhases: Phase[];

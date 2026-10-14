@@ -5,6 +5,7 @@ import {
   Bell,
   BookOpen,
   Bot,
+  Coins,
   GitMerge,
   History,
   LayoutDashboard,
@@ -47,6 +48,7 @@ export const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
     items: [
       { icon: Radio, label: 'Publisher & Node', href: '/publisher', short: 'Publisher' },
       { icon: Bot, label: 'Consumer', href: '/consumer' },
+      { icon: Coins, label: 'Auto trade', href: '/giao-dich' },
     ],
   },
   {

@@ -28,3 +28,21 @@ export const polymarketEnvironment = (
             }
           : {}),
       });
+
+/**
+ * URL REST cho client tự gọi (sổ lệnh, thông số market): endpoint truyền vào, mặc định theo cấu hình
+ * production của SDK (kiểu công khai của SDK không lộ url nên đọc qua dạng lỏng).
+ */
+export const polymarketRestUrls = (
+  e?: PolymarketEndpoints,
+): { readonly clobRest: string; readonly gammaRest: string } => {
+  const prod = production as unknown as {
+    clob?: { rest?: string };
+    gamma?: { rest?: string };
+  };
+  const clobRest = e?.clobRest ?? prod.clob?.rest;
+  const gammaRest = e?.gammaRest ?? prod.gamma?.rest;
+  if (!clobRest || !gammaRest)
+    throw new Error('không xác định được URL REST của polymarket (clob/gamma)');
+  return { clobRest, gammaRest };
+};

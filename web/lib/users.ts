@@ -16,7 +16,7 @@ const DEMO: UserRecord = {
   role: 'Dữ liệu mẫu',
   // thiếu `tasks:command` để thấy trạng thái nút bị khóa theo quyền
   permissions: [
-    '*:read', 'tasks:manage', 'team-aliases:*', 'arbitrage-settings:*', 'consumers:*', 'admin:incidents',
+    '*:read', 'tasks:manage', 'team-aliases:*', 'arbitrage-settings:*', 'consumers:*', 'admin:incidents', 'trading:*',
   ],
   passwordHash: '',
   apiToken: '',

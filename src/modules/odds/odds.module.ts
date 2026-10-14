@@ -496,6 +496,8 @@ const EXPIRE_INTERVAL_MS = 60_000;
     PurgeSignalHistoryHandler,
     CONSUMER_CONTROL,
     SignalHistoryRecorder,
+    // module trading đọc hạng kèo (bảng vốn theo hạng)
+    NotifyAdmin,
   ],
 })
 export class OddsModule implements OnModuleInit, OnApplicationShutdown {

@@ -20,6 +20,13 @@ export const envSchema = z.object({
   CONSUMER_WS_PORT: z.coerce.number().int().default(3002),
   CONSUMER_WS_TOKEN: z.string().min(16),
 
+  // Khóa chủ mã hóa private key các ví polymarket (một khóa cho mọi ví). Trống = không lưu được key.
+  // Tạo: openssl rand -base64 48. Đổi/mất khóa = phải nhập lại mọi private key.
+  TRADING_SECRET_KEY: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(32).optional(),
+  ),
+
   // Xác thực API: "token:principalId:role1|role2,token2:id2:role" (rỗng = không ai gọi được API)
   API_TOKENS: z.string().default(''),
   // Ghi đè/bổ sung vai trò → quyền, JSON: {"moderator":["team-aliases:*"]}

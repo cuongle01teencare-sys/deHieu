@@ -5,11 +5,13 @@ import {
   PolymarketMarketStreamParamsSchema,
   SptPubDescriptorParamsSchema,
   SptPubFeedParamsSchema,
+  TraderArbitrageParamsSchema,
 } from './task-params.schemas.js';
 import { SptPubDescriptorTask } from '../sptpub/sptpub-descriptor.task.js';
 import { SptPubFeedTask } from '../sptpub/sptpub-feed.task.js';
 import { PolymarketEventsTask } from '../polymarket/polymarket-events.task.js';
 import { PolymarketMarketStreamTask } from '../polymarket/polymarket-market-stream.task.js';
+import { TraderArbitrageTask } from '../trader/trader-arbitrage.task.js';
 
 export interface TaskCatalogEntry {
   /** Nguồn dữ liệu mà task này lấy. App tự suy tenant từ kind, không nhận từ request. */
@@ -62,6 +64,13 @@ export const TASK_CATALOG: Readonly<Record<string, TaskCatalogEntry>> = {
     tenant: 'polymarket',
     create: () => new PolymarketMarketStreamTask(),
     params: PolymarketMarketStreamParamsSchema,
+  },
+  // trader: consumer của ConsumerHub (không phải publisher). Mỗi profile một task; giấy (không đặt lệnh)
+  'trader.arbitrage': {
+    tenant: 'trader',
+    create: () => new TraderArbitrageTask(),
+    params: TraderArbitrageParamsSchema,
+    multiInstance: true,
   },
 };
 

@@ -25,6 +25,8 @@ Authorization: Bearer <token>
 | `staff`   | `tasks:read`, `team-aliases:*`, `consumers:read`, `arbitrage:read`                   |
 | `viewer`  | `*:read`                                                                             |
 
+Quyền auto trade: `trading:read`, `trading:manage` (mặc định chỉ `admin`; `viewer` có `trading:read`).
+
 Thêm/ghi đè vai trò bằng env `ROLE_PERMISSIONS` (JSON), không cần sửa code:
 
 ```
@@ -105,13 +107,16 @@ Cấu hình:
 | Trường            | Mặc định              | Ý nghĩa                                                                                                       |
 | ----------------- | --------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `minMargin`       | `0.02`                | Ngưỡng lợi nhuận tối thiểu (2%). Dưới ngưỡng = hủy kèo                                                        |
-| `marginStep`      | `0.01`                | Lời tăng thêm ≥ 1% → kèo mới ghi đè kèo cũ                                                                    |
+| `marginStep`      | `0.01`                | Bước tăng so với margin lần phát mới gần nhất; đủ bước → hủy kèo cũ (`better_opportunity`) rồi phát mới |
+| `marginDropStep`  | `0.01`                | Bước giảm riêng; đủ bước và còn đạt `minMargin` → hủy kèo cũ (`margin_decreased`) rồi phát mới |
 | `signalTtlMs`     | `30000`               | Thời hạn kèo; còn nguyên thì phát lại                                                                         |
 | `maxStartDriftMs` | `1200000`             | Hai chân chỉ ghép khi giờ bắt đầu lệch ≤ 20 phút                                                              |
 | `enabledPhases`   | `["live","prematch"]` | Kênh được tạo kèo. Tắt một kênh → kèo đang sống của kênh đó bị hủy (`phase_disabled`), odds vẫn được cập nhật |
 
 Kèo có bất kỳ chân nào live thì `phase = live`.
 Cấu hình được lưu vào Postgres (bảng `app_settings`, key `arbitrage`) và tự nạp lại khi app khởi động.
+Hai bước tăng/giảm mặc định là 1 điểm phần trăm, cấu hình độc lập bằng `PATCH /arbitrage/settings`, ví dụ `{ "marginStep": 0.02, "marginDropStep": 0.005 }` (tăng 2, giảm 0.5 điểm phần trăm). Bản cấu hình cũ thiếu `marginDropStep` dùng mặc định `0.01`, giữ nguyên bước tăng đã lưu.
+Mốc so sánh được đặt lại sau mỗi lần phát kèo mới ở cả hai chiều; refresh không đổi mốc. Nhảy qua nhiều bước chỉ phát một kèo mới tại margin hiện tại. Nếu margin xuống dưới `minMargin`, chỉ hủy (`below_threshold`), không phát kèo mới.
 
 ### Lịch sử kèo
 
@@ -144,7 +149,7 @@ giờ bắt đầu trong giới hạn, margin đạt ngưỡng và kênh đượ
 ### Kênh thông báo và hạng kèo
 
 Admin tự đặt tên hạng kèo (vd "VIP" ≥ 5%, "Super VIP" ≥ 10%) và gắn hạng cho từng kênh Discord/Telegram/Slack.
-Kênh nhận **kèo mới** (kể cả kèo ghi đè, ghi "Kèo cập nhật") và **tin hủy** của kèo nó đã nhận; không gửi lần phát lại (refreshed).
+Kênh nhận **kèo mới** theo hạng khớp margin hiện tại và **tin hủy** của kèo nó đã nhận; không gửi lần phát lại (refreshed). Khi tăng/giảm đủ bước, tin hủy được gửi tới các kênh cũ trước khi kèo mới được xếp gửi theo hạng mới, kể cả khi hai hạng không cùng kênh.
 Kênh không chọn hạng nào = nhận mọi kèo. Một kèo có thể thuộc nhiều hạng (vd 12% thuộc cả VIP và Super VIP).
 Bot giao dịch qua WebSocket không bị ảnh hưởng (vẫn nhận mọi kèo). Tất cả lưu trong Postgres, tự nạp khi khởi động.
 
@@ -167,6 +172,53 @@ Bot giao dịch qua WebSocket không bị ảnh hưởng (vẫn nhận mọi kè
   "config": { "type": "telegram", "botToken": "123456:ABC...", "chatId": "-1001234567890" } }
 { "name": "Slack", "config": { "type": "slack", "webhookUrl": "https://hooks.slack.com/services/..." } }
 ```
+
+## Auto trade (giấy)
+
+Trader là **consumer** của ConsumerHub: mỗi profile chạy một task `trader.arbitrage` (worker thread, params `{ "profileId": "..." }`)
+và nhận CÙNG một kèo như mọi consumer khác. App gửi xuống cấu hình **đã tính sẵn** (bảng tiền theo hạng kèo, giới hạn rủi ro,
+giới hạn tổng theo trận) bằng lệnh `config`; worker không đọc database. Với mỗi kèo: chọn tiền theo hạng → đọc sổ lệnh + phí taker
+Polymarket thật → mua các mức giá còn lãi ròng ≥ ngưỡng → giữ hạn mức trận (Redis, dùng chung mọi trader) → ghi kết quả.
+**Không đặt lệnh thật.** Kèo bị hủy khi đang xử lý → `cancelled`.
+
+| Method | Path                                    | Quyền            | Mô tả                                                                                          |
+| ------ | --------------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
+| GET    | `/trading/accounts`                     | `trading:read`   | Tài khoản; `hasSecret` thay cho private key (không bao giờ trả về)                             |
+| POST   | `/trading/accounts`                     | `trading:manage` | csgoempire: `browserProfile` (không lưu mật khẩu); polymarket: `walletAddress`, `privateKey`   |
+| PUT    | `/trading/accounts/:id`                 | `trading:manage` | Sửa; bỏ trống `privateKey` = giữ key cũ; không đổi được nền tảng                               |
+| DELETE | `/trading/accounts/:id`                 | `trading:manage` | Xóa; đang dùng trong profile → 400                                                             |
+| GET    | `/trading/profiles`                     | `trading:read`   | Profile trader                                                                                 |
+| POST   | `/trading/profiles`                     | `trading:manage` | 1 csgoempire + 1 polymarket + `stakePlan` + `strategy` + `risk`                                |
+| PUT    | `/trading/profiles/:id`                 | `trading:manage` | Sửa; task đang chạy nhận cấu hình mới ngay                                                     |
+| DELETE | `/trading/profiles/:id`                 | `trading:manage` | Xóa; task của profile đứng yên (`PROFILE_NOT_FOUND`)                                           |
+| GET    | `/trading/profiles/:id/runtime-config`  | `trading:read`   | Cấu hình worker nhận: `stakeTable`, `active`, `inactiveReason`                                 |
+| POST   | `/trading/stake-preview`                | `trading:read`   | Bảng tiền theo hạng kèo hiện có từ một `stakePlan` (không lưu)                                 |
+| GET    | `/trading/settings`                     | `trading:read`   | `matchExposureCapUsd` (mặc định 500, 0 = tắt), `secretKeyConfigured`                           |
+| PUT    | `/trading/settings`                     | `trading:manage` | `{ "matchExposureCapUsd": 500 }`                                                               |
+| GET    | `/trading/trades`                       | `trading:read`   | Lệnh giấy mới nhất; lọc `profileId`, `status`; phân trang `before` + `limit`                   |
+| GET    | `/trading/trades/stats`                 | `trading:read`   | Số lần vào/bỏ qua/hủy/lỗi, tổng tiền, lãi giả định, lý do bỏ qua; lọc `profileId`, `since`     |
+| GET    | `/trading/trades/:id`                   | `trading:read`   | Một lệnh kèm từng chân (`legs`) và mốc thời gian (`timing`)                                   |
+
+```jsonc
+// stakePlan: xu hướng tiền giữa các hạng (hạng = hạng kèo của kênh thông báo, sắp theo minMargin)
+{ "trend": "up",            // flat | up | down | custom
+  "baseStake": 50,          // tiền hạng thấp nhất (chân csgoempire)
+  "stepPct": 0.5,           // up: ×1.5 mỗi hạng; down: ÷1.5
+  "minStakeRatio": 0.5,     // tối thiểu = 50% tiền hạng (sổ lệnh mỏng hơn → bỏ qua)
+  "maxStakeRatio": 2,       // tối đa = 2× tiền hạng (trần khi tăng dần trong hạng)
+  "scaleWithinTier": true,  // margin càng gần cận trên của hạng → tiền càng gần tối đa
+  "overrides": { "<tierId>": { "stake": 120, "minStake": 40, "maxStake": 200 } } }  // custom bắt buộc stake
+// risk
+{ "minNetMargin": 0.01, "matchCapUsd": 0, "maxSignalAgeMs": 3000 }
+```
+
+Mọi lần xử lý kèo lưu ở bảng `trade_attempts` (cả bỏ qua/hủy/lỗi), kèm mốc thời gian `signal_issued_at` → `received_at` →
+`market_data_at` → `decided_at`. Lệnh vào có thêm từng chân ở `trade_legs` (giấy: `status = simulated`): giá/odds lúc kèo phát,
+giá yêu cầu, giá khớp, phí, tiền chi; các cột `order_ref`, `sent_at`, `acked_at`, `filled_at`, `raw` dành cho giao dịch thật để
+đo độ trễ và trượt giá so với bản giấy. Worker gửi lại / database lỗi tạm thời: thử lại, trùng id được bỏ qua.
+
+Private key ví Polymarket mã hóa AES-256-GCM bằng khóa chủ `TRADING_SECRET_KEY` (env, ≥ 32 ký tự, một khóa cho mọi ví).
+Đổi/mất khóa chủ = phải nhập lại mọi private key.
 
 ## Vận hành (admin)
 
@@ -218,6 +270,8 @@ Lý do hủy (`reason`):
 | reason                 | Ý nghĩa                                                                                              |
 | ---------------------- | ---------------------------------------------------------------------------------------------------- |
 | `below_threshold`      | Lợi nhuận tụt dưới ngưỡng tối thiểu                                                                  |
+| `better_opportunity`   | Có kèo tốt hơn: tăng đủ `marginStep`, hủy kèo cũ rồi phát kèo mới                                    |
+| `margin_decreased`     | Kèo không còn tốt nữa: giảm đủ `marginDropStep`, hủy kèo cũ rồi phát kèo mới                          |
 | `leg_suspended`        | Một chân đang bị khóa odds                                                                           |
 | `leg_removed`          | Odds của một chân bị gỡ (trận/market bị gỡ hoặc kết thúc)                                            |
 | `start_time_mismatch`  | Giờ bắt đầu giữa hai bên lệch quá `maxStartDriftMs`                                                  |

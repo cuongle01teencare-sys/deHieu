@@ -1,6 +1,8 @@
 /**
  * Vì sao một kèo bị hủy. Bot giao dịch và lịch sử kèo dùng giá trị này.
  *  - below_threshold     : lợi nhuận tụt dưới ngưỡng tối thiểu
+ *  - better_opportunity  : đã có kèo tốt hơn, phát kèo mới thay thế
+ *  - margin_decreased    : kèo không còn tốt như trước, phát kèo mới với margin thấp hơn
  *  - leg_suspended       : một chân đang bị khóa odds
  *  - leg_removed         : odds của một chân bị gỡ (trận/market bị gỡ hoặc kết thúc)
  *  - start_time_mismatch : giờ bắt đầu giữa hai bên lệch quá ngưỡng
@@ -11,6 +13,8 @@
  */
 export const CANCEL_REASONS = [
   'below_threshold',
+  'better_opportunity',
+  'margin_decreased',
   'leg_suspended',
   'leg_removed',
   'start_time_mismatch',

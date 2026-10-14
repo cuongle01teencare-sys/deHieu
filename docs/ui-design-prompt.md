@@ -111,7 +111,7 @@ Connected bots/Discord: online, paused, pending acks; pause / resume.
 Filterable tables with time range; incidents have severity, kind, opened/resolved, acknowledged by. Audit shows who / method / route / result.
 
 #### 4.11 Cài đặt & Bí danh đội
-- Arbitrage settings form: minMargin (%), marginStep (%), signalTtlMs (s), maxStartDriftMs (min), enabledPhases (live / prematch toggles). Show the effect of each field as helper text. Save with confirm + diff.
+- Arbitrage settings form: minMargin (%), marginStep (% increase), marginDropStep (% decrease), signalTtlMs (s), maxStartDriftMs (min), enabledPhases (live / prematch toggles). Save with confirm + diff.
 - Team aliases: table (alias → canonical), add, delete.
 
 #### 4.12 Đăng nhập

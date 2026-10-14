@@ -8,6 +8,7 @@ export interface ArbitrageSettings extends SignalPolicySettings {
 export const DEFAULT_ARBITRAGE_SETTINGS: ArbitrageSettings = {
   minMargin: 0.02,
   marginStep: 0.01,
+  marginDropStep: 0.01,
   signalTtlMs: 30_000,
   maxStartDriftMs: 20 * 60_000,
   enabledPhases: ['live', 'prematch'],

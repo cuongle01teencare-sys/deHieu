@@ -12,6 +12,8 @@ const SPORT: Readonly<Record<string, string>> = {
 
 const CANCEL: Readonly<Record<CancelReason, string>> = {
   below_threshold: 'lợi nhuận tụt dưới ngưỡng',
+  better_opportunity: 'có kèo tốt hơn',
+  margin_decreased: 'kèo không còn tốt nữa',
   leg_suspended: 'một bên đang khóa odds',
   leg_removed: 'một bên đã gỡ odds',
   start_time_mismatch: 'giờ bắt đầu hai bên lệch nhau',

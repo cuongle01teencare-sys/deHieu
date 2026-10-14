@@ -100,6 +100,33 @@ describe('Lịch sử kèo (recorder + DrizzleSignalHistoryRepository)', () => {
     expect(cancelled.map((e) => e.signalId)).toEqual(['s2']);
   });
 
+  it.each(['better_opportunity', 'margin_decreased'] as const)(
+    'thay kèo: lưu trạng thái cancelled và lý do %s của kèo cũ',
+    async (reason) => {
+      const old = signal('s1', reason === 'better_opportunity' ? 0.05 : 0.09);
+      const next = signal('s2', reason === 'better_opportunity' ? 0.09 : 0.05);
+      await recorder.publish([new ArbitrageSignalIssued(old)]);
+      await recorder.publish([
+        new ArbitrageSignalCancelled(
+          old.signalId,
+          old.room,
+          old.comboId,
+          reason,
+        ),
+        new ArbitrageSignalIssued(next),
+      ]);
+      await recorder.flush();
+      expect(await repo.get('s1')).toMatchObject({
+        status: 'cancelled',
+        statusReason: reason,
+      });
+      expect(await repo.get('s2')).toMatchObject({
+        status: 'active',
+        margin: next.margin,
+      });
+    },
+  );
+
   it('khởi động lại: đóng các kèo còn active', async () => {
     await recorder.publish([new ArbitrageSignalIssued(signal('s3', 0.03))]);
     await recorder.flush();

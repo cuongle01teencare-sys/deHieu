@@ -28,6 +28,7 @@ import type {
   TeamAlias,
 } from './types';
 import type { BackendResponse } from './backend';
+import { mockTrading } from './mock-trading';
 
 /**
  * Dữ liệu mẫu (ARB_MOCK=true) — đủ cho mọi màn hình, có biến động theo thời gian
@@ -53,6 +54,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 let settings: ArbitrageSettings = {
   minMargin: 0.02,
   marginStep: 0.01,
+  marginDropStep: 0.01,
   signalTtlMs: 30_000,
   maxStartDriftMs: 1_200_000,
   enabledPhases: ['live', 'prematch'],
@@ -575,6 +577,15 @@ function tasks(): TaskRecord[] {
 
 const KINDS: TaskKindInfo[] = [
   {
+    kind: 'trader.arbitrage',
+    tenant: 'trader',
+    multiInstance: true,
+    params: [
+      { name: 'profileId', type: 'string', required: true, hint: 'Id profile trader (trang Auto trade)' },
+      { name: 'sharedExposure', type: 'boolean', required: false, default: true, hint: 'Giới hạn tổng theo trận dùng chung qua Redis' },
+    ],
+  },
+  {
     kind: 'sptpub.descriptor',
     tenant: 'sptpub',
     concept: 'descriptor',
@@ -1061,6 +1072,8 @@ export async function mockRequest(
   const ok = (b: unknown, status = 200) => ({ status, body: b });
   const notFound = { status: 404, body: { message: 'Not Found' } };
   const seg = (prefix: string) => (path.startsWith(prefix) ? path.slice(prefix.length) : null);
+  const trading = mockTrading(method, path, search, body, () => tiers);
+  if (trading) return trading;
 
   if (method === 'GET') {
     if (path === 'admin/snapshot') return ok(snapshot());

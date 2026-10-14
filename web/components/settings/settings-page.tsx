@@ -29,6 +29,7 @@ function DesktopOnlyHint() {
 interface Form {
   minMargin: string; // %
   marginStep: string; // %
+  marginDropStep: string; // %
   signalTtl: string; // s
   maxDrift: string; // phút
   phases: Phase[];
@@ -37,6 +38,7 @@ interface Form {
 const toForm = (s: ArbitrageSettings): Form => ({
   minMargin: (s.minMargin * 100).toFixed(2).replace(/\.?0+$/, ''),
   marginStep: (s.marginStep * 100).toFixed(2).replace(/\.?0+$/, ''),
+  marginDropStep: (s.marginDropStep * 100).toFixed(2).replace(/\.?0+$/, ''),
   signalTtl: String(s.signalTtlMs / 1000),
   maxDrift: String(s.maxStartDriftMs / 60_000),
   phases: s.enabledPhases,
@@ -45,6 +47,7 @@ const toForm = (s: ArbitrageSettings): Form => ({
 const fromForm = (f: Form): ArbitrageSettings => ({
   minMargin: Number(f.minMargin) / 100,
   marginStep: Number(f.marginStep) / 100,
+  marginDropStep: Number(f.marginDropStep) / 100,
   signalTtlMs: Math.round(Number(f.signalTtl) * 1000),
   maxStartDriftMs: Math.round(Number(f.maxDrift) * 60_000),
   enabledPhases: f.phases,
@@ -52,7 +55,8 @@ const fromForm = (f: Form): ArbitrageSettings => ({
 
 const LABELS: Record<keyof ArbitrageSettings, { label: string; fmt: (v: never) => string }> = {
   minMargin: { label: 'Ngưỡng lợi nhuận tối thiểu', fmt: (v: number) => `${(v * 100).toFixed(2)}%` },
-  marginStep: { label: 'Bước ghi đè', fmt: (v: number) => `${(v * 100).toFixed(2)}%` },
+  marginStep: { label: 'Bước tăng lợi nhuận', fmt: (v: number) => `${(v * 100).toFixed(2)}%` },
+  marginDropStep: { label: 'Bước giảm lợi nhuận', fmt: (v: number) => `${(v * 100).toFixed(2)}%` },
   signalTtlMs: { label: 'Thời hạn kèo', fmt: (v: number) => `${v / 1000}s` },
   maxStartDriftMs: { label: 'Lệch giờ bắt đầu tối đa', fmt: (v: number) => `${v / 60_000} phút` },
   enabledPhases: { label: 'Kênh tạo kèo', fmt: (v: Phase[]) => (v.length ? v.join(', ') : 'không kênh nào') },
@@ -81,6 +85,7 @@ export function SettingsPage() {
     !next ||
     !(next.minMargin >= 0 && next.minMargin <= 1) ||
     !(next.marginStep > 0 && next.marginStep <= 1) ||
+    !(next.marginDropStep > 0 && next.marginDropStep <= 1) ||
     !(next.signalTtlMs > 0) ||
     !(next.maxStartDriftMs >= 0);
 
@@ -104,9 +109,14 @@ export function SettingsPage() {
               <Input id="min" inputMode="decimal" className="num" value={form.minMargin} disabled={readOnly} onChange={(e) => setForm({ ...form, minMargin: e.target.value })} />
             </Unit>
           </Field>
-          <Field label="Bước ghi đè" htmlFor="step" help="Lợi nhuận tăng thêm ít nhất bước này → kèo mới ghi đè kèo cũ của cùng tổ hợp.">
+          <Field label="Bước tăng lợi nhuận" htmlFor="step">
             <Unit unit="%">
               <Input id="step" inputMode="decimal" className="num" value={form.marginStep} disabled={readOnly} onChange={(e) => setForm({ ...form, marginStep: e.target.value })} />
+            </Unit>
+          </Field>
+          <Field label="Bước giảm lợi nhuận" htmlFor="drop-step">
+            <Unit unit="%">
+              <Input id="drop-step" inputMode="decimal" className="num" value={form.marginDropStep} disabled={readOnly} onChange={(e) => setForm({ ...form, marginDropStep: e.target.value })} />
             </Unit>
           </Field>
           <Field label="Thời hạn kèo" htmlFor="ttl" help="Kèo còn nguyên sau thời hạn này thì được phát lại (refreshed).">

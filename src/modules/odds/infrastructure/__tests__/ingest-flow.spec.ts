@@ -147,7 +147,7 @@ describe('luồng ingest → room → kèo (adapter in-memory)', () => {
     expect(events.map((e) => e.name)).toContain('arbitrage.signal.cancelled');
   });
 
-  it('kèo tăng >= 1% → phát kèo mới ghi đè kèo cũ, không gửi hủy', async () => {
+  it('kèo tăng >= 1% → hủy kèo cũ vì có kèo tốt hơn rồi phát mới', async () => {
     const { ingest, events } = await setup();
     await ingest.execute(
       msg('sptpub', 'sptpub.live', sptpubSnapshot('1.35', '2.95')),
@@ -166,10 +166,21 @@ describe('luồng ingest → room → kèo (adapter in-memory)', () => {
       supersedes: string | null;
     }[];
     expect(issued).toHaveLength(2);
-    expect(issued[1].supersedes).toBe(issued[0].signal.signalId);
-    expect(events.map((e) => e.name)).not.toContain(
+    expect(issued[1].supersedes).toBeNull();
+    const cancelled = events.filter(
+      (e) => e.name === 'arbitrage.signal.cancelled',
+    ) as unknown as { signalId: string; reason: string }[];
+    expect(cancelled).toEqual([
+      expect.objectContaining({
+        signalId: issued[0].signal.signalId,
+        reason: 'better_opportunity',
+      }),
+    ]);
+    expect(events.map((e) => e.name)).toEqual([
+      'arbitrage.signal.issued',
       'arbitrage.signal.cancelled',
-    );
+      'arbitrage.signal.issued',
+    ]);
   });
 
   it('publisher chết hẳn → gỡ odds của nó và hủy kèo dùng chân đó', async () => {

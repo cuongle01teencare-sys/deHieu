@@ -11,6 +11,7 @@ import { AuthModule } from './modules/auth/auth.module.js';
 import { TasksModule } from './modules/tasks/tasks.module.js';
 import { OddsModule } from './modules/odds/odds.module.js';
 import { AdminModule } from './modules/admin/admin.module.js';
+import { TradingModule } from './modules/trading/trading.module.js';
 import { OpsEventsModule } from './shared/infrastructure/ops/ops-events.module.js';
 import { ZodErrorFilter } from './shared/presentation/zod-error.filter.js';
 
@@ -32,6 +33,8 @@ const BACKGROUND_CLASSES = new Set([
   'AdminWsHub',
   'OddsTransitionRecorder',
   'SignalHistoryRecorder',
+  'TraderConfigSync',
+  'TraderDataHandler',
 ]);
 
 export const { ObserveModule, ObserveInstrument } = createObserveModule({
@@ -78,6 +81,7 @@ export const observeEnabled = Boolean(
     TasksModule, // quản lý publisher (worker thread + microservice)
     OddsModule, // ACL → room → kèo arbitrage → consumer
     AdminModule, // sự cố + cảnh báo, stream dashboard, audit
+    TradingModule, // auto trade: tài khoản, profile, cấu hình worker trader, lệnh giấy
   ],
   controllers: [AppController],
   providers: [

@@ -132,15 +132,17 @@ margin = 1 / (1 / oddsA + 1 / oddsB) - 1
 | Tình huống                                             | App làm gì?                                                |
 | ------------------------------------------------------ | ---------------------------------------------------------- |
 | Chưa có tín hiệu; margin đạt ngưỡng; phase được bật    | Phát mới: `issued`, tạo `signalId`                         |
-| Margin tăng đến mốc cao nhất đã phát cộng `marginStep` | Phát tín hiệu mới, thay tín hiệu cũ bằng `supersedes`      |
+| Margin tăng đủ `marginStep` so với lần phát mới gần nhất | Hủy tín hiệu cũ (`better_opportunity`), rồi phát mới |
+| Margin giảm đủ `marginDropStep`, vẫn đạt ngưỡng | Hủy tín hiệu cũ (`margin_decreased`), rồi phát mới |
 | Vẫn đạt ngưỡng và đã đến thời hạn làm mới              | `refreshed`, giữ `signalId`, cập nhật odds và hạn hiệu lực |
-| Margin giảm nhưng vẫn đạt ngưỡng, chưa đến hạn làm mới | Không nhất thiết gửi thông báo mới                         |
+| Thay đổi chưa đủ bước, chưa đến hạn làm mới | Không gửi tín hiệu mới |
 | Margin xuống dưới ngưỡng                               | Hủy: `below_threshold`                                     |
 | Một chân tạm khóa hoặc bị gỡ                           | Hủy: `leg_suspended` hoặc lý do gỡ tương ứng               |
 | Giờ bắt đầu lệch quá giới hạn                          | Hủy: `start_time_mismatch`                                 |
 | Phase của tổ hợp bị tắt                                | Hủy: `phase_disabled`                                      |
 
 Một tổ hợp có tối đa một tín hiệu hiệu lực trong trạng thái của evaluator. Một room có thể có nhiều tổ hợp và nhiều tín hiệu. Nếu bất kỳ chân nào live, phase của tổ hợp là live.
+Mỗi lần phát mới đặt lại mốc margin cho cả hai chiều; refresh không đổi mốc. Một lần nhảy nhiều bước chỉ phát một tín hiệu mới tại margin hiện tại. Kênh đã nhận tín hiệu cũ nhận tin hủy; tín hiệu mới được gửi theo hạng khớp margin mới.
 
 ## Đọc các chỉ số trên web
 
@@ -377,7 +379,8 @@ Backend phát hiện và giao tín hiệu. Việc thông báo ra ngoài hoặc �
 | Trường            | Ý nghĩa                                                          | Mặc định                  |
 | ----------------- | ---------------------------------------------------------------- | ------------------------- |
 | `minMargin`       | Lợi nhuận tối thiểu để phát tín hiệu                             | `0.02` = 2%               |
-| `marginStep`      | Mức tăng so với mốc cao nhất đã phát để tạo tín hiệu thay thế    | `0.01` = 1 điểm phần trăm |
+| `marginStep`      | Bước tăng so với margin lần phát mới gần nhất để hủy cũ và phát mới | `0.01` = 1 điểm phần trăm |
+| `marginDropStep`  | Bước giảm riêng để hủy cũ và phát mới nếu còn đạt ngưỡng | `0.01` = 1 điểm phần trăm |
 | `signalTtlMs`     | Khoảng hiệu lực của tín hiệu và mốc làm mới khi còn đủ điều kiện | `30000` = 30 giây         |
 | `maxStartDriftMs` | Độ lệch giờ bắt đầu tối đa giữa hai nguồn                        | `1200000` = 20 phút       |
 | `enabledPhases`   | Phase được phép phát tín hiệu                                    | `live`, `prematch`        |

@@ -127,14 +127,13 @@ export class ArbitrageEvaluator {
         );
         next.set(d.opportunity.comboId, {
           comboId: d.opportunity.comboId,
-          highWaterMargin: d.opportunity.margin,
+          issuedMargin: d.opportunity.margin,
           lastIssuedAt: now,
-          signalId: signal.signalId, // ghi đè kèo cũ
+          signalId: signal.signalId,
         });
-        if (d.supersedes) await this._signals.removeSignals([d.supersedes]);
         await this._signals.putSignal(signal);
         this._stats.issued++;
-        events.push(new ArbitrageSignalIssued(signal, d.supersedes ?? null));
+        events.push(new ArbitrageSignalIssued(signal));
       } else {
         const signal = this._toSignal(
           d.signalId,

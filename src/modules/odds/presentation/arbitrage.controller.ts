@@ -36,6 +36,7 @@ const SettingsBody = z
   .object({
     minMargin: z.number().min(0).max(1),
     marginStep: z.number().positive().max(1),
+    marginDropStep: z.number().positive().max(1),
     signalTtlMs: z.number().int().positive(),
     maxStartDriftMs: z.number().int().nonnegative(),
     enabledPhases: z.array(z.enum(PHASES)).max(PHASES.length),

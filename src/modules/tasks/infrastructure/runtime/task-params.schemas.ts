@@ -60,3 +60,24 @@ export const PolymarketMarketStreamParamsSchema = z.strictObject({
   resubscribeDebounceMs: z.number().int().nonnegative().optional(),
   endpoints: polymarketEndpoints,
 });
+
+export const TraderArbitrageParamsSchema = z.strictObject({
+  profileId: z
+    .string()
+    .min(1)
+    .describe(
+      'Id profile trader (trang Auto trade). Cấu hình còn lại app gửi xuống',
+    ),
+  hubUrl: z
+    .string()
+    .regex(/^wss?:\/\//, 'hubUrl: ws:// hoặc wss://')
+    .optional()
+    .describe('WS ConsumerHub; bỏ trống = ws://127.0.0.1:CONSUMER_WS_PORT'),
+  sharedExposure: z
+    .boolean()
+    .default(true)
+    .describe(
+      'Bật = giới hạn tổng theo trận dùng chung mọi trader qua Redis (REDIS_URL). Tắt = chỉ tính trong task này',
+    ),
+  endpoints: polymarketEndpoints,
+});

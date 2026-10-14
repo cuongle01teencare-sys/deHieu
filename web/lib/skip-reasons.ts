@@ -23,6 +23,8 @@ export const SKIP_ORDER = Object.keys(SKIP_REASONS) as SkipReason[];
 /** Lý do hủy kèo. */
 export const CANCEL_REASONS: Record<string, string> = {
   below_threshold: 'Lợi nhuận dưới ngưỡng',
+  better_opportunity: 'Có kèo tốt hơn',
+  margin_decreased: 'Kèo không còn tốt nữa',
   leg_suspended: 'Một chân bị khóa odds',
   leg_removed: 'Một chân bị gỡ',
   start_time_mismatch: 'Lệch giờ bắt đầu',

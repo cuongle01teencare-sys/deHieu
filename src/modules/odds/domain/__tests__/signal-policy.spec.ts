@@ -13,6 +13,7 @@ const key = MatchKey.of({
 const settings = {
   minMargin: 0.02,
   marginStep: 0.01,
+  marginDropStep: 0.01,
   signalTtlMs: 30_000,
   enabledPhases: ['live', 'prematch'] as Phase[],
 };
@@ -89,13 +90,13 @@ describe('decideSignals', () => {
     room(line('sptpub', a, 1.01, { phase }), line('poly', 1.01, b))
       .combinations(0)
       .filter((c) => c.comboId === 'sptpub>0|poly>1');
-  const state = (hw: number, at = 0): Map<string, ComboSignalState> =>
+  const state = (margin: number, at = 0): Map<string, ComboSignalState> =>
     new Map([
       [
         'sptpub>0|poly>1',
         {
           comboId: 'sptpub>0|poly>1',
-          highWaterMargin: hw,
+          issuedMargin: margin,
           lastIssuedAt: at,
           signalId: 's1',
         },
@@ -115,7 +116,7 @@ describe('decideSignals', () => {
     ).toEqual([]);
   });
 
-  it('tăng thêm >= 1% → kèo mới ghi đè kèo cũ, không gửi hủy', () => {
+  it('tăng thêm >= 1% → hủy kèo cũ vì có kèo tốt hơn rồi phát mới', () => {
     const d = decideSignals(
       state(0.03),
       combo(2.1, 2.1),
@@ -124,14 +125,68 @@ describe('decideSignals', () => {
       noExplain,
     );
     expect(d).toEqual([
-      expect.objectContaining({ type: 'issue', supersedes: 's1' }),
+      expect.objectContaining({
+        type: 'cancel',
+        signalId: 's1',
+        reason: 'better_opportunity',
+      }),
+      expect.objectContaining({ type: 'issue' }),
     ]);
   });
 
-  it('giảm nhưng vẫn >= ngưỡng → không gửi gì', () => {
+  it('giảm chưa đủ bước → không gửi gì', () => {
     expect(
-      decideSignals(state(0.05), combo(2.06, 2.06), 1_000, settings, noExplain),
+      decideSignals(state(0.05), combo(2.09, 2.09), 1_000, settings, noExplain),
     ).toEqual([]);
+  });
+
+  it.each([
+    [0.05, 0.09, 'better_opportunity'],
+    [0.09, 0.05, 'margin_decreased'],
+    [0.09, 0.08, 'margin_decreased'],
+    [0.08, 0.09, 'better_opportunity'],
+  ])('margin %s → %s: hủy trước, phát một kèo mới (%s)', (from, to, reason) => {
+    const odds = 2 * (1 + to);
+    const d = decideSignals(
+      state(from),
+      combo(odds, odds),
+      1_000,
+      settings,
+      noExplain,
+    );
+    expect(d).toHaveLength(2);
+    expect(d[0]).toMatchObject({ type: 'cancel', signalId: 's1', reason });
+    expect(d[1]).toMatchObject({ type: 'issue' });
+    if (d[1].type === 'issue')
+      expect(d[1].opportunity.margin).toBeCloseTo(to, 12);
+  });
+
+  it('bước tăng và bước giảm được cấu hình độc lập', () => {
+    const separate = { ...settings, marginStep: 0.02, marginDropStep: 0.005 };
+    expect(
+      decideSignals(state(0.09), combo(2.2, 2.2), 1_000, separate, noExplain),
+    ).toEqual([]);
+    expect(
+      decideSignals(state(0.09), combo(2.17, 2.17), 1_000, separate, noExplain),
+    ).toEqual([
+      expect.objectContaining({ type: 'cancel', reason: 'margin_decreased' }),
+      expect.objectContaining({ type: 'issue' }),
+    ]);
+  });
+
+  it('thay đổi đủ bước được ưu tiên hơn refresh', () => {
+    expect(
+      decideSignals(
+        state(0.09),
+        combo(2.16, 2.16),
+        30_000,
+        settings,
+        noExplain,
+      ),
+    ).toEqual([
+      expect.objectContaining({ type: 'cancel', reason: 'margin_decreased' }),
+      expect.objectContaining({ type: 'issue' }),
+    ]);
   });
 
   it('tụt dưới ngưỡng → hủy (below_threshold)', () => {
