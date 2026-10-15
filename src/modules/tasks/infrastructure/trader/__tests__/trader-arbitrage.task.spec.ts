@@ -511,6 +511,45 @@ describe('TraderArbitrageTask (giấy)', () => {
     await t.stop();
   });
 
+  it('hạng chồng nhau: chỉ chọn trong hạng được tick (VIP không tick, VIP-auto tick → vào VIP-auto)', async () => {
+    const row = {
+      minStake: 5,
+      maxStake: 25,
+      stake: 25,
+      scaleWithinTier: false,
+      maxMargin: null,
+    };
+    const t = start(new TraderArbitrageTask(), params('A'));
+    await t.command(
+      'config',
+      config('A', {
+        stakeTable: [
+          // VIP cận dưới cao hơn nhưng không tick → không được chọn
+          {
+            ...row,
+            tierId: 'vip',
+            tierName: 'VIP',
+            minMargin: 0.03,
+            enabled: false,
+          },
+          {
+            ...row,
+            tierId: 'auto',
+            tierName: 'VIP auto',
+            minMargin: 0.02,
+            enabled: true,
+          },
+        ],
+      }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('s8') });
+    await until(() => trades(t).length === 1);
+    expect(trades(t)[0]).toMatchObject({ tierName: 'VIP auto' });
+    expect(trades(t)[0]?.reason ?? '').not.toMatch(/TIER_NOT_SELECTED/);
+    await t.stop();
+  });
+
   it('profile tắt → ghi bỏ qua kèm lý do', async () => {
     const t = start(new TraderArbitrageTask(), params('A'));
     await t.command(

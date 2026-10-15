@@ -192,7 +192,14 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
 
     const book = s.legs.find((l) => l.tenant === 'sptpub');
     const poly = s.legs.find((l) => l.tenant === 'polymarket');
-    const pick = targetStake(cfg.stakeTable, s.margin);
+    // chỉ chọn trong các hạng profile được vào: hạng không tick bị loại TRƯỚC khi chọn,
+    // nên kèo khớp cả hạng tick lẫn hạng không tick (khoảng chồng nhau) vẫn vào theo hạng tick
+    const pick = targetStake(
+      cfg.stakeTable.filter((r) => r.enabled),
+      s.margin,
+    );
+    // chỉ để ghi lý do: không có hạng tick nào khớp thì kèo thuộc hạng nào (nếu có)
+    const other = pick ? null : targetStake(cfg.stakeTable, s.margin);
     const base = {
       id: `${profileId}:${s.signalId}`,
       profileId,
@@ -205,7 +212,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       phase: s.phase,
       comboId: s.comboId,
       signalMargin: s.margin,
-      tierName: pick?.row.tierName ?? null,
+      tierName: pick?.row.tierName ?? other?.row.tierName ?? null,
     };
     let marketDataAt: number | null = null;
     const emit = (
@@ -300,11 +307,11 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     if (!tokenId || !conditionId)
       return emit('skipped', 'MISSING_REF: thiếu token/conditionId polymarket');
     if (!pick)
-      return emit('skipped', `NO_TIER: margin ${(s.margin * 100).toFixed(2)}%`);
-    if (!pick.row.enabled)
       return emit(
         'skipped',
-        `TIER_NOT_SELECTED: hạng ${pick.row.tierName} không nằm trong các hạng profile được vào`,
+        other
+          ? `TIER_NOT_SELECTED: margin ${(s.margin * 100).toFixed(2)}% chỉ khớp hạng không được chọn (${other.row.tierName})`
+          : `NO_TIER: margin ${(s.margin * 100).toFixed(2)}%`,
       );
     // mỗi hạng kèo tính riêng: cùng cửa ở hạng này đã đủ số lệnh → bỏ qua (kèo phát lại = signalId mới, vẫn cửa cũ)
     const max = cfg.risk.maxEntriesPerTier;

@@ -423,7 +423,7 @@ Cột **Tiền mục tiêu**, **Tiền mục tiêu tối thiểu**, **Tiền m�
 
 ### Chọn hạng profile sẽ vào
 
-Ô tick đầu mỗi dòng của bảng chọn hạng profile được vào; lựa chọn lưu trong profile nên task trader khởi động lại vẫn chạy đúng như vậy. Profile mới chưa chọn hạng nào và đứng yên (`NO_TIER_SELECTED`) cho tới khi chọn. Kèo thuộc hạng không được chọn bị bỏ qua với lý do `TIER_NOT_SELECTED`. Hạng mới admin thêm sau không tự được chọn. Profile tạo trước khi có tính năng này vẫn vào mọi hạng cho tới khi sửa lựa chọn.
+Ô tick đầu mỗi dòng của bảng chọn hạng profile được vào; lựa chọn lưu trong profile nên task trader khởi động lại vẫn chạy đúng như vậy. Profile mới chưa chọn hạng nào và đứng yên (`NO_TIER_SELECTED`) cho tới khi chọn. Kèo không khớp hạng được chọn nào bị bỏ qua với lý do `TIER_NOT_SELECTED` (kèm tên hạng không tick mà kèo khớp). Hạng mới admin thêm sau không tự được chọn. Profile tạo trước khi có tính năng này vẫn vào mọi hạng cho tới khi sửa lựa chọn.
 
 ### Chọn market profile sẽ vào
 
@@ -462,7 +462,7 @@ Mỗi 0,1% margin tăng thêm `(Tối đa − Tiền mục tiêu) ÷ (độ rộ
 
 Bảng xem trước ghi sẵn mức tăng này dưới tên mỗi hạng. Hạng không có cận trên luôn dùng Tiền mục tiêu. Đừng nhầm với **Bước mỗi hạng**: bước là chênh lệch tiền GIỮA các hạng, tăng dần trong hạng là chênh lệch BÊN TRONG một hạng.
 
-Nhiều hạng cùng khớp một margin (khoảng chồng nhau) → dùng hạng có **cận dưới cao nhất**.
+Hạng không được tick trong profile bị **loại trước**; trong các hạng được tick, nhiều hạng cùng khớp một margin (khoảng chồng nhau) → dùng hạng có **cận dưới cao nhất**. Ví dụ VIP 3–6% (không tick) và VIP cho giao dịch tự động 2–8% (tick): kèo 4,9% vào theo VIP cho giao dịch tự động.
 
 ### Worker quyết định một lệnh như thế nào (chiến lược taker)
 

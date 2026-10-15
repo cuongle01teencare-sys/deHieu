@@ -259,7 +259,7 @@ function Mechanism() {
       <div className="mt-3 space-y-3 text-caption text-muted-fg">
         <ol className="list-decimal space-y-1.5 pl-5">
           <li>
-            {b('Chọn hạng.')} Kèo đến → xếp vào hạng theo margin (nhiều hạng khớp thì lấy hạng có cận dưới cao nhất). Hạng không được tick → bỏ qua (Hạng không được chọn).
+            {b('Chọn hạng.')} Hạng không được tick bị loại trước. Kèo đến → xếp vào một hạng ĐƯỢC TICK theo margin (nhiều hạng tick cùng khớp thì lấy hạng có cận dưới cao nhất). Không khớp hạng tick nào → bỏ qua (Hạng không được chọn), kể cả khi kèo khớp một hạng không tick chồng khoảng.
           </li>
           <li>
             {b('Tính số share cần mua.')} Hệ thống luôn lấy {b('Tiền mục tiêu')} của hạng: share cần mua bên Polymarket = tiền mục tiêu × odds csgoempire. Ví dụ 50$ @ 2.0 → 100 share. Mỗi share trả 1$ nếu thắng nên hai chân nhận về bằng nhau.
