@@ -409,6 +409,86 @@ API chưa có lệnh restart task riêng. Thao tác Tạo lại trên web là x�
 
 Web yêu cầu đăng nhập và chuyển tiếp các thao tác backend qua BFF bằng token cấu hình phía server. Quyền API quyết định thao tác nào được phép. Khi dùng `ARB_MOCK=true`, dữ liệu và kết quả thao tác là dữ liệu mẫu, không chứng minh pipeline thật đang chạy.
 
+## Auto trade: bảng tiền theo hạng và cách vào lệnh
+
+Mỗi profile trader có một **bảng tiền theo hạng**: kèo thuộc hạng nào thì vào bao nhiêu tiền. Hạng (tên, khoảng margin) dùng chung với hạng kèo của kênh thông báo; profile chỉ quyết định tiền.
+
+### Mọi số tiền là USD cược bên csgoempire
+
+Cột **Tiền mục tiêu**, **Tối thiểu**, **Tối đa** đều là **USD cược ở chân csgoempire** cho một kèo, không phải số share Polymarket. Số share do worker tự tính:
+
+- Cược `S` USD ở odds `O` bên csgoempire → thắng nhận `S × O`.
+- Mua `N` share cửa ngược lại bên Polymarket → thắng nhận `N` USD (mỗi share 1$).
+- Cân hai chân: `N = S × O`, nên cửa nào thắng cũng nhận về như nhau.
+
+### Bảng được tính từ đâu
+
+| Trường | Ý nghĩa |
+|---|---|
+| Tiền hạng thấp nhất | Tiền của hạng có margin thấp nhất; các hạng khác tính từ số này theo xu hướng |
+| Xu hướng + Bước mỗi hạng | Ngang: mọi hạng bằng nhau. Tăng dần: mỗi hạng × (1 + bước). Giảm dần: ÷ (1 + bước). Tùy chỉnh: tự nhập từng hạng |
+| Tối thiểu (% tiền hạng) | Mức tối thiểu của mọi hạng = tiền hạng × %. Vào được ít hơn → bỏ qua. 0% = vào được bao nhiêu cũng vào |
+| Tối đa (× tiền hạng) | Chỉ dùng khi bật **Tăng dần trong hạng**. ×1 = không tăng |
+| Ô trong bảng | Ghi đè cho riêng hạng đó (để trống = tự tính theo các trường trên) |
+
+**Tiền mục tiêu và Tối thiểu cùng đơn vị** (USD cược csgoempire), chỉ khác vai trò: mục tiêu là mức muốn vào (và không vượt), tối thiểu là mức thấp nhất còn chấp nhận. Ví dụ mục tiêu 50$, tối thiểu 35$, odds 2.0 → cần 100 share Polymarket:
+
+| Share còn lãi trên sổ (cộng mọi người bán) | Chân csgoempire | Kết quả |
+|---|---|---|
+| ≥ 100 | 50$ | vào đủ mục tiêu |
+| 80 | 80 ÷ 2.0 = 40$ | 40$ ≥ 35$ → vào 40$ |
+| 60 | 30$ | 30$ < 35$ → bỏ qua cả hai chân |
+
+Tiền chi bên Polymarket là số share × giá (cộng phí), một con số khác với tiền csgoempire.
+
+**Tăng dần trong hạng**: chỉ thay đổi tiền mục tiêu, bên trong CÙNG một hạng. Tăng đều (tuyến tính, không theo bậc) từ cột Tiền mục tiêu ở cận dưới lên cột Tối đa ở cận trên:
+
+`mục tiêu = Tiền mục tiêu + (Tối đa − Tiền mục tiêu) × (margin − cận dưới) ÷ (cận trên − cận dưới)`
+
+Mỗi 0,1% margin tăng thêm `(Tối đa − Tiền mục tiêu) ÷ (độ rộng hạng tính bằng %) × 0,1`. Ví dụ hạng 1,5–3% (rộng 1,5%), mục tiêu 50$, tối đa 100$ → +3,33$ mỗi 0,1%:
+
+| Margin | 1,5% | 2% | 2,5% | 2,9% |
+|---|---|---|---|---|
+| Tiền mục tiêu | 50$ | 66,67$ | 83,33$ | 96,67$ |
+| Tối thiểu | không đổi | không đổi | không đổi | không đổi |
+
+Bảng xem trước ghi sẵn mức tăng này dưới tên mỗi hạng. Hạng không có cận trên luôn dùng Tiền mục tiêu. Đừng nhầm với **Bước mỗi hạng**: bước là chênh lệch tiền GIỮA các hạng, tăng dần trong hạng là chênh lệch BÊN TRONG một hạng.
+
+Nhiều hạng cùng khớp một margin (khoảng chồng nhau) → dùng hạng có **cận dưới cao nhất**.
+
+### Worker quyết định một lệnh như thế nào (chiến lược taker)
+
+1. **Chọn hạng** theo margin kèo → tiền mục tiêu `S`. Không khớp hạng nào → bỏ qua (`NO_TIER`).
+2. **Kiểm tra giới hạn**: số lệnh tối đa mỗi cửa ở hạng này, hạn mức tổng theo trận (chung và của profile).
+3. **Đọc sổ lệnh** Polymarket thật của cửa cần mua, cần `S × O` share.
+4. **Ăn lệnh bán từ giá rẻ nhất lên**: mua hết mức giá rẻ nhất, chưa đủ thì sang mức rẻ thứ hai… Dừng khi:
+   - đủ số share cần;
+   - tới mức giá mà lãi ròng của cặp lệnh (đã trừ phí taker) **dưới ngưỡng lãi tối thiểu** của profile, các mức sau chỉ đắt hơn nên không ăn tiếp;
+   - hết hạn mức theo trận.
+5. **Cân lại chân csgoempire** theo số share mua được: `tiền csgoempire = share ÷ O`. Sổ mỏng thì cả hai chân cùng nhỏ lại, không bao giờ cược csgoempire nhiều hơn phần Polymarket cân được.
+6. **Đối chiếu mức tối thiểu** (tính trên tiền csgoempire sau khi cân):
+   - Tối thiểu so với **tổng** đã mua ở mọi mức giá cộng lại, không phải với từng người bán. Tối thiểu 40$: mức rẻ nhất cân được 20$, mức thứ hai 10$, mức thứ ba 15$ → tổng 45$ ≥ 40$ nên vào; nếu chỉ có hai mức đầu (30$) thì bỏ qua;
+   - nhỏ hơn Tối thiểu của hạng → bỏ qua (`INSUFFICIENT_DEPTH`, hoặc `BUDGET_EXHAUSTED` nếu do hạn mức);
+   - ít hơn số share tối thiểu một lệnh của market → bỏ qua (`BELOW_MIN_ORDER`);
+   - ngay mức giá rẻ nhất đã không đủ lãi → bỏ qua (`NO_EDGE`).
+7. Đạt hết → ghi lệnh **Vào (giấy)** với giá trung bình, phí, tổng tiền và lãi giả định.
+
+Bỏ qua là bỏ cả hai chân: không có trường hợp vào csgoempire mà thiếu chân Polymarket.
+
+### Ví dụ
+
+Kèo margin 3%, hạng Thường: tiền 50$, tối thiểu 50% = 25$. Odds csgoempire 2.0 → cần 100 share. Ngưỡng lãi tối thiểu 1%, market không thu phí. Sổ lệnh bán:
+
+| Giá | Share | Lãi ròng nếu ăn ở giá này | Ăn? |
+|---|---|---|---|
+| 0.45 | 60 | 5,26% | 60 |
+| 0.47 | 30 | 3,09% | 30 |
+| 0.52 | 100 | −1,96% | không (dưới 1%) |
+
+Mua được 90 share (27$ + 14,1$ = 41,1$) → chân csgoempire = 90 ÷ 2.0 = **45$**. 45$ ≥ 25$ nên vào: tổng chi 86,1$, nhận về 90$, lãi 3,9$ (4,53%). Nếu Tối thiểu là 100% (50$) thì lệnh này bị bỏ qua vì chỉ vào được 45$.
+
+Mở chi tiết một lệnh ở trang Auto trade → Lệnh giấy để xem từng mức giá đã ăn, độ sâu sổ lệnh và lý do bỏ qua.
+
 ## Khi thấy số liệu khác kỳ vọng
 
 | Hiện tượng                                   | Kiểm tra đầu tiên                                                                                |
