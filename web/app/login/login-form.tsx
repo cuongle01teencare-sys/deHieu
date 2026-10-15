@@ -8,11 +8,12 @@ import { Input } from '@/components/ui/controls';
 import { Wordmark } from '@/components/shell/wordmark';
 
 /** Đăng nhập tối giản: wordmark, tên đăng nhập, mật khẩu, một nút. */
-export function LoginForm({ mockHint }: { mockHint: boolean }) {
+export function LoginForm({ mockHint, next = '/' }: { mockHint: boolean; next?: string }) {
   const [state, action, pending] = useActionState<LoginState, FormData>(login, { error: null, username: '' });
   return (
     <main className="grid min-h-dvh place-items-center bg-bg px-4 pb-safe pt-safe">
       <form action={action} className="flex w-full max-w-[320px] flex-col animate-fade-in">
+        <input type="hidden" name="next" value={next} />
         <Wordmark className="mb-12 self-center [&_svg]:size-8 [&>span]:text-[17px]" />
         <label className="mb-4 flex flex-col gap-2 text-body font-medium text-fg">
           Tên đăng nhập

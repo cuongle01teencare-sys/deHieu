@@ -21,6 +21,7 @@ import { BottomTabs, MoreSheet } from './mobile-nav';
 import { CommandPalette } from './command-palette';
 import { NotificationList, NotificationsProvider, useNotifications } from './notifications';
 import { ConnectionBanner, PushPromptManager, ServiceWorkerManager } from './pwa';
+import { openPushSetup, PushSetupManager } from './push-setup';
 
 interface Props {
   user: WebUser;
@@ -145,6 +146,7 @@ function Shell({ user, envLabel, children }: Props) {
       <MobileNotificationCenter open={bellOpen} onOpenChange={setBellOpen} />
       <CommandPalette open={commandOpen} onOpenChange={setCommandOpen} tasks={snapshot?.tasks ?? []} onToggleTheme={toggleTheme} />
       <PushPromptManager />
+      <PushSetupManager />
       <ServiceWorkerManager />
       <Toaster
         position="bottom-right"
@@ -194,6 +196,16 @@ function MobileNotificationCenter({ open, onOpenChange }: { open: boolean; onOpe
           </div>
           <Drawer.Description className="sr-only">Danh sách thông báo</Drawer.Description>
           <div className="flex-1 overflow-y-auto px-4 pb-safe">
+            <button
+              type="button"
+              onClick={() => {
+                onOpenChange(false);
+                openPushSetup();
+              }}
+              className="mb-2 flex h-11 w-full items-center justify-center gap-2 rounded-[8px] bg-accent-soft text-body font-medium text-accent-text"
+            >
+              Bật thông báo trên điện thoại này
+            </button>
             <NotificationList onOpen={() => onOpenChange(false)} />
             <Link href="/thong-bao" onClick={() => onOpenChange(false)} className="mb-6 mt-2 flex h-11 items-center justify-center text-caption text-muted-fg">
               Tùy chọn thông báo

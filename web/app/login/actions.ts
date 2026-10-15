@@ -10,6 +10,12 @@ export interface LoginState {
   username: string;
 }
 
+/** Chỉ cho quay về đường dẫn nội bộ (chặn open redirect kiểu //evil.com). */
+export async function safeNext(v: unknown): Promise<string> {
+  const s = typeof v === 'string' ? v : '';
+  return s.startsWith('/') && !s.startsWith('//') && !s.startsWith('/\\') ? s : '/';
+}
+
 export async function login(_prev: LoginState, form: FormData): Promise<LoginState> {
   const username = String(form.get('username') ?? '').trim();
   const password = String(form.get('password') ?? '');
@@ -19,7 +25,7 @@ export async function login(_prev: LoginState, form: FormData): Promise<LoginSta
   const session = await getSession();
   session.username = user.username;
   await session.save();
-  redirect('/');
+  redirect(await safeNext(form.get('next')));
 }
 
 export async function logout(): Promise<void> {

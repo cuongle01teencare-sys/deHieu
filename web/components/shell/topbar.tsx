@@ -11,6 +11,7 @@ import { useNow } from '@/hooks/use-now';
 import type { StreamStatus } from '../console-data';
 import { Hint } from '../ui/tooltip';
 import { Menu, MenuItem, MenuLabel, MenuSeparator, Popover } from '../ui/menu';
+import { openPushSetup } from './push-setup';
 import { StatusDot, type Tone } from '../ui/status';
 import { NotificationList, useNotifications } from './notifications';
 import { logout } from '@/app/login/actions';
@@ -157,9 +158,21 @@ export function Topbar({
           <div className="max-h-[60vh] overflow-y-auto px-1">
             <NotificationList onOpen={() => setBellOpen(false)} max={12} />
           </div>
-          <Link href="/thong-bao" onClick={() => setBellOpen(false)} className="flex items-center gap-2 border-t border-line px-4 py-3 text-caption text-muted-fg hover:text-fg">
-            <Settings2 className="size-3.5 stroke-[1.5]" /> Tùy chọn thông báo
-          </Link>
+          <div className="flex items-center justify-between border-t border-line px-4 py-3 text-caption">
+            <Link href="/thong-bao" onClick={() => setBellOpen(false)} className="flex items-center gap-2 text-muted-fg hover:text-fg">
+              <Settings2 className="size-3.5 stroke-[1.5]" /> Tùy chọn thông báo
+            </Link>
+            <button
+              type="button"
+              className="flex items-center gap-1.5 text-accent-text hover:underline"
+              onClick={() => {
+                setBellOpen(false);
+                openPushSetup();
+              }}
+            >
+              <Bell className="size-3.5 stroke-[1.5]" /> Bật trên thiết bị này
+            </button>
+          </div>
         </Popover>
 
         <Menu

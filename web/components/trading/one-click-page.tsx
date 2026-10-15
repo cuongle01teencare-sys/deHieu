@@ -17,6 +17,7 @@ import { Empty, ErrorState, SkeletonRows } from '../ui/states';
 import { Table, TD, TH, THead, TR } from '../ui/table';
 import { OneClickHistory } from './one-click-history';
 import { SourceBreakdown } from './trade-sources';
+import { PushSetupButton } from '../shell/push-setup';
 import { REASON_LABEL, TradeDetailPanel } from './trade-detail';
 import { NumInput } from './stake-plan-editor';
 import { previewSizing, type SizingPreview } from '@/lib/one-click-sizing';
@@ -76,6 +77,7 @@ export function OneClickPage() {
         title="On click"
         description="Kèo có lãi nhưng giá bán thấp nhất trên Polymarket từ ngưỡng của profile trở lên (mặc định 0.50): bot không tự vào mà để ở đây. Nhập tiền mục tiêu cho từng kèo (mặc định tiền của hạng): trang tính lại ngay theo cơ chế taker như bot — mức giá sau hết lãi thì dừng, vào ít hơn. Bấm Vào lệnh (giấy) thì trader đọc lại sổ lệnh thật và vào (lãi tối thiểu, số lệnh mỗi hạng, hạn mức trận vẫn áp), ghi kèm người vào."
         meta={<Pill tone="warn">Chế độ giấy</Pill>}
+        actions={<PushSetupButton label="Nhận thông báo kèo" />}
       />
 
       <div className="mb-8 grid max-w-xl grid-cols-1 gap-4 md:grid-cols-2">

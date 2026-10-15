@@ -12,6 +12,7 @@ import { Pill } from '../ui/status';
 import { IosInstallSheet, PushPromptSheet, useInstallState } from '../shell/pwa';
 import { NotificationList } from '../shell/notifications';
 import { ServerPushTest } from './server-push-test';
+import { PushSetupButton } from '../shell/push-setup';
 
 /** Tùy chọn thông báo đẩy (OneSignal) cho thiết bị này + danh sách thiết bị + gửi thử. */
 export function NotifyPage() {
@@ -68,7 +69,11 @@ export function NotifyPage() {
 
   return (
     <div className="max-w-2xl">
-      <PageHeader title="Thông báo" description="Thông báo đẩy qua OneSignal tới điện thoại và trình duyệt đã cài Arb Ops." />
+      <PageHeader
+        title="Thông báo"
+        description="Thông báo đẩy qua OneSignal tới điện thoại và trình duyệt đã cài Arb Ops. Mỗi thiết bị bật một lần; nhiều người / nhiều máy dùng chung tài khoản đều nhận được."
+        actions={<PushSetupButton label="Cài đặt trên thiết bị này" variant="primary" />}
+      />
 
       {/* trạng thái thiết bị này — tiêu điểm */}
       <div className="mb-12 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
