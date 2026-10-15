@@ -51,6 +51,11 @@ class FakeGateway implements TraderTaskGateway {
     this.pushed.push({ taskId, config });
     return Promise.resolve(true);
   };
+  commands: { taskId: string; name: string }[] = [];
+  command = (taskId: string, name: string) => {
+    this.commands.push({ taskId, name });
+    return Promise.resolve(true);
+  };
 }
 
 describe('TradingAdmin: xóa lệnh', () => {
@@ -73,7 +78,12 @@ describe('TradingAdmin: xóa lệnh', () => {
     {} as TradingSettingsStore,
     { listTiers: () => Promise.resolve(TIERS) },
     fakeCipher(true),
-    {} as TraderConfigSync,
+    {
+      resetSeen: (profileId?: string) => {
+        calls.push({ op: 'resetSeen', f: profileId ?? null });
+        return Promise.resolve(1);
+      },
+    } as unknown as TraderConfigSync,
   );
   beforeEach(() => (calls.length = 0));
 
@@ -99,9 +109,40 @@ describe('TradingAdmin: xóa lệnh', () => {
       op: 'purge',
       f: { statuses: ['skipped', 'error'], profileId: 'p1' },
     });
+    expect(calls.some((c) => c.op === 'resetSeen')).toBe(false);
     calls.length = 0;
-    await admin.purgeTrades({ all: true });
+    // xóa toàn bộ → báo trader xét lại kèo còn sống
+    expect(await admin.purgeTrades({ all: true })).toEqual({
+      status: 'SUCEED',
+      data: { matched: 5, deleted: 5, resetTasks: 1 },
+    });
     expect(calls[1]).toEqual({ op: 'purge', f: {} });
+    expect(calls[2]).toEqual({ op: 'resetSeen', f: null });
+    calls.length = 0;
+    await admin.purgeTrades({ all: true, profileId: 'p1' });
+    expect(calls[2]).toEqual({ op: 'resetSeen', f: 'p1' });
+    // toàn bộ nhưng có mốc thời gian → không phải "toàn bộ", không xét lại
+    calls.length = 0;
+    await admin.purgeTrades({ all: true, before: 1 });
+    expect(calls.some((c) => c.op === 'resetSeen')).toBe(false);
+  });
+
+  it('TraderConfigSync.resetSeen: chỉ gửi tới task của profile', async () => {
+    const gw = new FakeGateway();
+    gw.running = [
+      { taskId: 't-a', profileId: 'a' },
+      { taskId: 't-b', profileId: 'b' },
+    ];
+    const sync = new TraderConfigSync(
+      new MemRepo<TradingAccount>(),
+      new MemRepo<TraderProfile>(),
+      {} as TradingSettingsStore,
+      { listTiers: () => Promise.resolve(TIERS) },
+      gw,
+    );
+    expect(await sync.resetSeen('b')).toBe(1);
+    expect(gw.commands).toEqual([{ taskId: 't-b', name: 'reset_seen' }]);
+    expect(await sync.resetSeen()).toBe(2);
   });
 
   it('dryRun chỉ đếm', async () => {

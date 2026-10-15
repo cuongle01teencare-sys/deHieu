@@ -550,6 +550,64 @@ describe('TraderArbitrageTask (giấy)', () => {
     await t.stop();
   });
 
+  it('đổi cấu hình → kèo còn sống bị bỏ qua vì cấu hình được xét lại một lần (id mới)', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    const base = config('A');
+    await t.command(
+      'config',
+      config('A', { risk: { ...base.risk, markets: ['map-handicap-p1.5'] } }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('s9') });
+    await until(() => trades(t).length === 1);
+    expect(trades(t)[0]?.reason).toMatch(/^MARKET_NOT_SELECTED/);
+
+    // đổi phần cấu hình KHÔNG liên quan → không xét lại
+    await t.command(
+      'config',
+      config('A', {
+        risk: {
+          ...base.risk,
+          markets: ['map-handicap-p1.5'],
+          maxSignalAgeMs: 1,
+        },
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 80));
+    expect(trades(t)).toHaveLength(1);
+
+    // mở market → xét lại ngay, không cần kèo phát mới
+    await t.command('config', config('A'));
+    await until(() => trades(t).length === 2);
+    expect(trades(t)[1]).toMatchObject({
+      id: 'A:s9:2',
+      status: 'paper_filled',
+    });
+    // cấu hình gửi lại y hệt → không xét lại nữa
+    await t.command('config', config('A'));
+    await new Promise((r) => setTimeout(r, 80));
+    expect(trades(t)).toHaveLength(2);
+    await t.stop();
+  });
+
+  it('reset_seen (app xóa toàn bộ lệnh) → xét lại mọi kèo còn sống', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    await t.command('config', config('A'));
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('s10') });
+    await until(() => trades(t).length === 1);
+    // hub gửi lại cùng kèo → vẫn chỉ xử lý một lần
+    hub.broadcast({ type: 'signal', kind: 'refreshed', signal: signal('s10') });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(trades(t)).toHaveLength(1);
+    await t.command('reset_seen', {});
+    await until(() => trades(t).length === 2);
+    // đã vào ở hạng này rồi → lần xét lại báo cửa đã vào, không vào trùng
+    expect(trades(t)[1]).toMatchObject({ id: 'A:s10:2', status: 'skipped' });
+    expect(String(trades(t)[1]?.reason)).toMatch(/^ALREADY_ENTERED/);
+    await t.stop();
+  });
+
   it('profile tắt → ghi bỏ qua kèm lý do', async () => {
     const t = start(new TraderArbitrageTask(), params('A'));
     await t.command(

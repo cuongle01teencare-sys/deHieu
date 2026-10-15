@@ -44,6 +44,25 @@ export class TraderConfigSync {
     await this._push(taskId, await this.configFor(profileId), true);
   }
 
+  /**
+   * Task trader quên dấu "đã xử lý" và xét lại mọi kèo còn sống (sau khi xóa toàn bộ lệnh).
+   * Không truyền profileId = mọi task. Trả số task đã nhận lệnh.
+   */
+  async resetSeen(profileId?: string): Promise<number> {
+    const running = (await this._gateway.listRunning()).filter(
+      (r) => !profileId || r.profileId === profileId,
+    );
+    let n = 0;
+    for (const r of running) {
+      try {
+        if (await this._gateway.command(r.taskId, 'reset_seen')) n++;
+      } catch (e) {
+        this._onError(e);
+      }
+    }
+    return n;
+  }
+
   /** Gửi cho mọi task đang chạy; `force` = gửi cả khi không đổi. Trả số task đã nhận bản mới. */
   async pushAll(force = false): Promise<number> {
     const running = await this._gateway.listRunning();

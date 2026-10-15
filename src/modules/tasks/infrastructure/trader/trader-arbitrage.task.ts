@@ -48,6 +48,42 @@ const EXPOSURE_TTL_MS = 12 * 3_600_000;
 
 type Status = 'paper_filled' | 'skipped' | 'cancelled' | 'error';
 
+/**
+ * Lý do bỏ qua phụ thuộc cấu hình profile → phần cấu hình quyết định lý do đó. Khi phần này đổi,
+ * kèo còn sống từng bị bỏ qua vì lý do đó được xét lại MỘT lần (không chờ kèo phát mới).
+ */
+const CONFIG_SKIPS: Readonly<Record<string, (c: TraderConfig) => unknown>> = {
+  INACTIVE: (c) => [c.active, c.inactiveReason],
+  MARKET_NOT_SELECTED: (c) => c.risk.markets,
+  TIER_NOT_SELECTED: (c) => c.stakeTable,
+  NO_TIER: (c) => c.stakeTable,
+  UNKNOWN_STRATEGY: (c) => c.strategy.id,
+};
+const reasonCode = (r: string | null) => (r ?? '').split(':')[0].trim();
+const configKey = (reason: string | null, c: TraderConfig): string | null => {
+  const f = CONFIG_SKIPS[reasonCode(reason)];
+  return f ? JSON.stringify(f(c)) : null;
+};
+
+/** Kèo còn sống đã nhận từ hub (bản mới nhất) + kết quả lần xử lý gần nhất trong phiên task này. */
+interface LiveSignal {
+  signal: HubSignal;
+  /** Số lần đã xử lý (để đặt id lệnh khác nhau khi xét lại). */
+  attempts: number;
+  last: {
+    status: Status;
+    reason: string | null;
+    configKey: string | null;
+  } | null;
+}
+
+interface RunDeps {
+  readonly ctx: TaskContext<TraderArbitrageParams>;
+  readonly market: PolymarketMarketData;
+  readonly ledger: ExposureLedger;
+  readonly hub: ConsumerHubClient;
+}
+
 /** `room:cs2:a~b:game-winner` → `cs2:a~b` (giới hạn theo TRẬN, gộp mọi market). */
 export const matchOf = (room: string): string => {
   const parts = room.replace(/^room:/, '').split(':');
@@ -78,6 +114,10 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
   private readonly _inflight = new Map<string, AbortController>();
   /** Lệnh hủy nhận được khi kèo đang tính (kể cả lý do được bỏ qua) → ghi vào lệnh. */
   private readonly _cancels = new Map<string, HubCancel>();
+  private readonly _live = new Map<string, LiveSignal>();
+  /** Kèo đang được xử lý (bất kỳ bước nào) — không xét lại chồng. */
+  private readonly _handling = new Set<string>();
+  private _run: RunDeps | null = null;
 
   /** Thay được sổ phơi nhiễm (vd test nhiều trader dùng chung một sổ). */
   constructor(
@@ -104,12 +144,23 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
 
     const configured = new AbortController();
     ctx.onCommand((name, data) => {
+      // app đã xóa toàn bộ lệnh của profile → quên dấu "đã xử lý", xét lại mọi kèo còn sống
+      if (name === 'reset_seen') {
+        this._reevaluate(() => true);
+        return;
+      }
       if (name !== 'config') throw new Error(`UNKNOWN_COMMAND: ${name}`);
       const cfg = TraderConfigSchema.parse(data);
       if (cfg.profileId !== p.profileId)
         throw new Error(`PROFILE_MISMATCH: ${cfg.profileId}`);
       this._config = cfg;
       configured.abort(); // đánh thức vòng chờ cấu hình
+      // kèo bị bỏ qua vì cấu hình mà phần cấu hình đó vừa đổi → xét lại ngay
+      this._reevaluate(
+        (l) =>
+          l.last?.configKey != null &&
+          l.last.configKey !== configKey(l.last.reason, cfg),
+      );
     });
 
     try {
@@ -139,11 +190,14 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       const hub = new ConsumerHubClient(
         { url: hubUrl, token, consumerId: `trader:${p.profileId}` },
         {
-          onSignal: (s) =>
+          onSignal: (s) => {
+            this._remember(s);
             void this._handle(ctx, s, { market, ledger, hub }).catch((e) =>
               ctx.warn(e),
-            ),
+            );
+          },
           onCancel: (c) => {
+            this._live.delete(c.signalId);
             if (this._inflight.has(c.signalId))
               this._cancels.set(c.signalId, c);
             // vd better_opportunity: kèo cũ vẫn còn lãi, publisher chỉ thay bằng kèo tốt hơn → cứ vào tiếp
@@ -162,15 +216,47 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           },
         },
       );
+      this._run = { ctx, market, ledger, hub };
       try {
         await hub.run(ctx.signal);
       } finally {
+        this._run = null;
         clearInterval(status);
       }
     } finally {
       for (const ac of this._inflight.values()) ac.abort('TASK_STOPPED');
       await ledger.close();
     }
+  }
+
+  /** Ghi bản mới nhất của kèo còn sống; bỏ kèo đã hết hạn. */
+  private _remember(s: HubSignal) {
+    const now = Date.now();
+    for (const [id, l] of this._live)
+      if (l.signal.expiresAt <= now) this._live.delete(id);
+    const cur = this._live.get(s.signalId);
+    if (cur) cur.signal = s;
+    else this._live.set(s.signalId, { signal: s, attempts: 0, last: null });
+  }
+
+  /** Xét lại (bỏ qua dấu "đã xử lý") các kèo còn sống khớp điều kiện. Trả số kèo được xét lại. */
+  private _reevaluate(pick: (l: LiveSignal) => boolean): number {
+    const run = this._run;
+    if (!run) return 0;
+    const now = Date.now();
+    let n = 0;
+    for (const [id, l] of this._live) {
+      if (l.signal.expiresAt <= now) {
+        this._live.delete(id);
+        continue;
+      }
+      if (this._handling.has(id) || !pick(l)) continue;
+      n++;
+      void this._handle(run.ctx, l.signal, run, true).catch((e) =>
+        run.ctx.warn(e),
+      );
+    }
+    return n;
   }
 
   private async _handle(
@@ -181,14 +267,44 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       ledger: ExposureLedger;
       hub: ConsumerHubClient;
     },
+    /** Xét lại kèo đã xử lý (đổi cấu hình / xóa lệnh): bỏ qua dấu "đã xử lý". */
+    redo = false,
   ): Promise<void> {
     const startedAt = Date.now();
     const cfg = this._config;
     if (!cfg) return;
     const profileId = ctx.params.profileId;
+    const live = this._live.get(s.signalId);
+    if (this._handling.has(s.signalId)) return;
     // hub giao "ít nhất một lần" và gửi lại kèo còn hiệu lực khi nối lại → mỗi kèo xử lý MỘT lần
     const ttl = Math.max(0, s.expiresAt - startedAt) + 3_600_000;
-    if (!(await deps.ledger.claim(profileId, s.signalId, ttl))) return;
+    if (!redo && !(await deps.ledger.claim(profileId, s.signalId, ttl))) {
+      // đã xử lý trước đó (vd trước khi task khởi động lại) → lần xét lại sau phải dùng id khác
+      if (live) live.attempts = Math.max(live.attempts, 1);
+      return;
+    }
+    this._handling.add(s.signalId);
+    try {
+      await this._decide(ctx, s, deps, cfg, startedAt, live);
+    } finally {
+      this._handling.delete(s.signalId);
+    }
+  }
+
+  private async _decide(
+    ctx: TaskContext<TraderArbitrageParams>,
+    s: HubSignal,
+    deps: {
+      market: PolymarketMarketData;
+      ledger: ExposureLedger;
+      hub: ConsumerHubClient;
+    },
+    cfg: TraderConfig,
+    startedAt: number,
+    live: LiveSignal | undefined,
+  ): Promise<void> {
+    const profileId = ctx.params.profileId;
+    const attempt = live ? ++live.attempts : 1;
 
     const book = s.legs.find((l) => l.tenant === 'sptpub');
     const poly = s.legs.find((l) => l.tenant === 'polymarket');
@@ -201,7 +317,11 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     // chỉ để ghi lý do: không có hạng tick nào khớp thì kèo thuộc hạng nào (nếu có)
     const other = pick ? null : targetStake(cfg.stakeTable, s.margin);
     const base = {
-      id: `${profileId}:${s.signalId}`,
+      // lần đầu giữ id cũ; xét lại → hậu tố số lần (id trùng sẽ bị DB bỏ qua)
+      id:
+        attempt > 1
+          ? `${profileId}:${s.signalId}:${attempt}`
+          : `${profileId}:${s.signalId}`,
       profileId,
       mode: cfg.mode,
       signalId: s.signalId,
@@ -233,6 +353,8 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         detail: Record<string, unknown>;
       }> = {},
     ) => {
+      if (live)
+        live.last = { status, reason, configKey: configKey(reason, cfg) };
       const c = this._cancels.get(s.signalId);
       // kèo bị hủy khi đang tính: lý do + giờ bắt đầu từng chân lúc hủy (ignored = vẫn vào tiếp)
       const cancel = c

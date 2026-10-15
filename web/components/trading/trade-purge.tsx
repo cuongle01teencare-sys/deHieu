@@ -12,6 +12,8 @@ import { TRADE_STATUS } from './trade-detail';
 export interface TradePurgeResult {
   matched: number;
   deleted: number;
+  /** Xóa toàn bộ: số task trader được báo xét lại kèo còn sống. */
+  resetTasks?: number;
 }
 
 const STATUSES = Object.keys(TRADE_STATUS) as TradeStatus[];
@@ -92,7 +94,9 @@ export function PurgeTradesDialog({
         const r = await mutate<TradePurgeResult>('trading/trades/purge', { method: 'POST', body }, undefined);
         setBusy(false);
         if (r) {
-          toast.success(`Đã xóa ${r.deleted} lệnh`);
+          toast.success(`Đã xóa ${r.deleted} lệnh`, {
+            description: r.resetTasks ? `${r.resetTasks} trader đang chạy sẽ xét lại các kèo còn sống.` : undefined,
+          });
           onOpenChange(false);
           onDone();
         }
@@ -131,6 +135,11 @@ export function PurgeTradesDialog({
             </>
           )}
         </p>
+        {all ? (
+          <p className="text-caption text-muted-fg">
+            Xóa toàn bộ: trader đang chạy của {profileName ? 'profile này' : 'mọi profile'} quên dấu &quot;đã xử lý&quot; và xét lại ngay các kèo còn sống. Số lệnh mỗi hạng và hạn mức trận vẫn giữ nên không vào trùng (cửa đã vào sẽ hiện &quot;Cửa này đã vào&quot;).
+          </p>
+        ) : null}
         {risky && matched ? (
           <p className="text-caption text-critical">
             Có cả lệnh đã vào: lãi giả định và tiền vào của các lệnh này sẽ mất khỏi thống kê. Hạn mức theo trận đã giữ không được trả lại ngay (tự hết hạn).

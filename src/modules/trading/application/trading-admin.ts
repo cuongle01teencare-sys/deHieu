@@ -338,6 +338,12 @@ export class TradingAdmin {
     if (input.dryRun || !matched)
       return { status: 'SUCEED', data: { matched, deleted: 0 } };
     const deleted = await this._trades.purge(filter);
+    // xóa TOÀN BỘ (mọi trạng thái, không giới hạn thời điểm) → trader quên dấu "đã xử lý"
+    // để xét lại kèo còn sống; số lệnh mỗi hạng / hạn mức trận vẫn giữ nên không vào trùng
+    if (input.all && !input.before) {
+      const resetTasks = await this._sync.resetSeen(input.profileId);
+      return { status: 'SUCEED', data: { matched, deleted, resetTasks } };
+    }
     return { status: 'SUCEED', data: { matched, deleted } };
   }
 

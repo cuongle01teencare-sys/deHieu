@@ -497,6 +497,15 @@ Mua được 90 share (27$ + 14,1$ = 41,1$) → chân csgoempire = 90 ÷ 2.0 = *
 
 Mở chi tiết một lệnh ở trang Auto trade → Lệnh giấy để xem từng mức giá đã ăn, độ sâu sổ lệnh và lý do bỏ qua.
 
+### Mỗi kèo xử lý một lần, khi nào được xét lại
+
+Trader xử lý mỗi kèo **một lần theo mã kèo**; kèo làm mới định kỳ giữ nguyên mã nên không bị xử lý lặp. Dấu "đã xử lý" lưu ở Redis, còn tới khi kèo hết hạn + 1 giờ. Kèo còn sống được **xét lại ngay** trong hai trường hợp:
+
+- **Đổi cấu hình profile**: kèo từng bị bỏ qua vì cấu hình (Market không được chọn, Hạng không được chọn, Không thuộc hạng nào, Profile đứng yên, Chiến lược không có) mà đúng phần cấu hình đó vừa đổi → xét lại một lần. Đổi phần khác hoặc lưu lại y hệt thì không. Kèo bị bỏ qua vì lý do khác (sổ lệnh mỏng, hết lãi…) không xét lại.
+- **Xóa toàn bộ lệnh giấy** (Xóa lệnh… → Toàn bộ, không giới hạn thời điểm) của một profile hoặc mọi profile → trader quên dấu "đã xử lý" và xét lại mọi kèo còn sống.
+
+Lần xét lại ghi lệnh mới với id có hậu tố (`profile:signal:2`). Số lệnh mỗi cửa mỗi hạng và hạn mức theo trận vẫn giữ, nên cửa đã vào sẽ hiện "Cửa này đã vào" thay vì vào trùng. Task khởi động lại chỉ nhớ kết quả từ lúc khởi động, nên đổi cấu hình chỉ xét lại các kèo đã xử lý trong phiên đó.
+
 ### Kèo bị hủy vì lệch giờ bắt đầu
 
 Giờ bắt đầu không cố định: mỗi bản tin của sàn mang giờ bắt đầu mới nhất (trận bị dời, giờ dự kiến → giờ thực tế, sàn sửa dữ liệu). Hệ thống kiểm tra lại mỗi khi có bản tin; hai bên lệch quá **Lệch giờ bắt đầu tối đa** (Cài đặt arbitrage, mặc định 20 phút) thì kèo bị hủy với lý do `start_time_mismatch`.

@@ -155,6 +155,8 @@ export interface TradePurgeResult {
   readonly matched: number;
   /** Số lệnh đã xóa (0 khi dryRun). */
   readonly deleted: number;
+  /** Xóa toàn bộ: số task trader đã được báo xét lại kèo còn sống. */
+  readonly resetTasks?: number;
 }
 
 export interface TradeStats {

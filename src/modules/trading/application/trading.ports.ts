@@ -72,5 +72,7 @@ export interface TraderTaskGateway {
   listRunning(): Promise<RunningTrader[]>;
   /** Gửi cấu hình đã tính sẵn cho task. false = task không nhận (đã dừng, timeout...). */
   push(taskId: string, config: TraderRuntimeConfig): Promise<boolean>;
+  /** Lệnh điều khiển khác (vd 'reset_seen'). false = task không nhận. */
+  command(taskId: string, name: string, data?: unknown): Promise<boolean>;
 }
 export const TRADER_TASK_GATEWAY = Symbol('TRADER_TASK_GATEWAY');

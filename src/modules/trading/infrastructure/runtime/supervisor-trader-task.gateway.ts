@@ -25,4 +25,13 @@ export class SupervisorTraderTaskGateway implements TraderTaskGateway {
     const r = await this._supervisor.command(taskId, 'config', config);
     return r.status === 'SUCEED';
   }
+
+  async command(
+    taskId: string,
+    name: string,
+    data?: unknown,
+  ): Promise<boolean> {
+    const r = await this._supervisor.command(taskId, name, data ?? {});
+    return r.status === 'SUCEED';
+  }
 }
