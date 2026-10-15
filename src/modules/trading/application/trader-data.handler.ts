@@ -2,6 +2,7 @@ import type { TradeAttemptRepository } from './trading.ports.js';
 import { TradeAttemptSchema } from './trade-attempt.js';
 import type { TraderConfigSync } from './trader-config.sync.js';
 import type { OneClickHistoryRecorder } from './one-click-history.js';
+import type { OneClickNotifier } from './one-click-notifier.js';
 import type { OneClickBoard } from './one-click-board.js';
 
 /** Kind của task trader (khai báo ở danh mục task). */
@@ -37,6 +38,8 @@ export class TraderDataHandler {
     },
     private readonly _board: OneClickBoard | null = null,
     private readonly _history: OneClickHistoryRecorder | null = null,
+    private readonly _notifier: OneClickNotifier | null = null,
+    private readonly _onNotifyError: (e: unknown) => void = () => undefined,
   ) {}
 
   async execute(msg: TraderDataMessage): Promise<void> {
@@ -50,7 +53,10 @@ export class TraderDataHandler {
     }
     if (msg.channel === 'oneclick') {
       const ev = this._board?.apply(msg.payload);
-      if (ev && this._history) await this._history.record(ev);
+      if (!ev || !this._history) return;
+      // kèo vừa lên bảng → báo về điện thoại (không chặn luồng dữ liệu, lỗi chỉ ghi log)
+      if ((await this._history.record(ev)) && ev.type === 'upsert')
+        this._notifier?.entered(ev.candidate).catch(this._onNotifyError);
       return;
     }
     if (msg.channel === 'trade') {

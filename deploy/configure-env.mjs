@@ -100,6 +100,10 @@ export function buildEnv({ apiHost, username, passwordHash, databaseUrl }) {
     'RESET_ROOMS_ON_START=true',
     'MATCH_MAX_DURATION_HOURS=8',
     'DISCORD_ALERT_WEBHOOK_URL=',
+    // OneSignal: báo kèo On click về điện thoại (điền tay; trống = tắt)
+    'ONESIGNAL_APP_ID=',
+    'ONESIGNAL_REST_API_KEY=',
+    'WEB_APP_URL=',
     '',
   ].join('\n');
   // Vercel dashboard values are raw strings, not Next.js .env interpolations.

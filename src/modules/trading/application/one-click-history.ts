@@ -60,8 +60,11 @@ export interface OneClickHistoryQuery {
 
 /** Port: lịch sử On click (Postgres) — mỗi profile × kèo một dòng. */
 export interface OneClickHistoryRepository {
-  /** Lên bảng / cập nhật phân tích; kèo đã rời bảng mà quay lại thì mở lại. */
-  upsert(c: OneClickCandidate): Promise<void>;
+  /**
+   * Lên bảng / cập nhật phân tích; kèo đã rời bảng mà quay lại thì mở lại.
+   * Trả trạng thái TRƯỚC khi ghi: chưa có dòng / đang mở / đã rời bảng (kèm lý do).
+   */
+  upsert(c: OneClickCandidate): Promise<OneClickPrior>;
   /** Rời bảng (chỉ dòng đang mở). */
   end(
     profileId: string,
@@ -77,6 +80,15 @@ export interface OneClickHistoryRepository {
   ): Promise<{ total: number; items: OneClickHistoryEntry[] }>;
 }
 
+export type OneClickPrior =
+  | { readonly state: 'none' }
+  | { readonly state: 'open' }
+  | { readonly state: 'ended'; readonly reason: string | null };
+
+/** Kèo vừa lên bảng (để báo về điện thoại): lần đầu, hoặc quay lại sau khi rời bảng (trừ do app khởi động lại). */
+export const isNewOnBoard = (p: OneClickPrior): boolean =>
+  p.state === 'none' || (p.state === 'ended' && p.reason !== 'app_restart');
+
 export const ONE_CLICK_HISTORY_REPOSITORY = Symbol(
   'ONE_CLICK_HISTORY_REPOSITORY',
 );
@@ -85,15 +97,18 @@ export const ONE_CLICK_HISTORY_REPOSITORY = Symbol(
 export class OneClickHistoryRecorder {
   constructor(private readonly _repo: OneClickHistoryRepository) {}
 
-  async record(e: OneClickEvent): Promise<void> {
-    if (e.type === 'upsert') return this._repo.upsert(e.candidate);
-    return this._repo.end(
+  /** Trả true khi kèo vừa lên bảng (mới / quay lại), false khi chỉ cập nhật hoặc rời bảng. */
+  async record(e: OneClickEvent): Promise<boolean> {
+    if (e.type === 'upsert')
+      return isNewOnBoard(await this._repo.upsert(e.candidate));
+    await this._repo.end(
       e.profileId,
       e.signalId,
       e.reason,
       e.by,
       new Date(e.at),
     );
+    return false;
   }
 
   list(q: OneClickHistoryQuery) {

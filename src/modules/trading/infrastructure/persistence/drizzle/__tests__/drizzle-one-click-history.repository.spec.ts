@@ -66,8 +66,12 @@ describe('Postgres: lịch sử On click', () => {
   });
 
   it('lên bảng, cập nhật, rời bảng; lọc theo kết quả / mã kèo / tên đội; mở lại khi quay lại bảng', async () => {
-    await repo.upsert(cand('0af4d189-1', 1_000));
-    await repo.upsert(cand('0af4d189-1', 2_000)); // làm mới
+    expect(await repo.upsert(cand('0af4d189-1', 1_000))).toEqual({
+      state: 'none',
+    });
+    expect(await repo.upsert(cand('0af4d189-1', 2_000))).toEqual({
+      state: 'open',
+    }); // làm mới
     await repo.upsert(cand('s-2', 3_000, ['navi', 'faze']));
     await repo.upsert(cand('s-3', 4_000));
     await repo.end(
@@ -115,7 +119,10 @@ describe('Postgres: lịch sử On click', () => {
     // app khởi động lại → đóng dòng đang mở; trader gửi lại → mở lại
     expect(await repo.endAllOpen('app_restart', new Date(7_000))).toBe(1);
     expect(await ids({ outcome: 'other' })).toEqual(['s-3']);
-    await repo.upsert(cand('s-3', 8_000));
+    expect(await repo.upsert(cand('s-3', 8_000))).toEqual({
+      state: 'ended',
+      reason: 'app_restart',
+    });
     expect(await ids({ outcome: 'open' })).toEqual(['s-3']);
     // đã rời bảng thì end lần nữa không ghi đè
     await repo.end('p1', 's-2', 'expired', null, new Date(9_000));

@@ -39,6 +39,21 @@ export const envSchema = z.object({
     (v) => (v === '' ? undefined : v),
     z.url().optional(),
   ),
+  // OneSignal: báo về điện thoại khi có kèo mới ở On click. Trống = tắt.
+  // App ID (công khai, giống NEXT_PUBLIC_ONESIGNAL_APP_ID của web) + REST API Key (BÍ MẬT).
+  ONESIGNAL_APP_ID: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  ONESIGNAL_REST_API_KEY: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().min(1).optional(),
+  ),
+  // Gốc web Arb Ops (vd https://arbops.vercel.app): bấm thông báo mở trang On click. Trống = không gắn link.
+  WEB_APP_URL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.url().optional(),
+  ),
   // Số ngày giữ lịch sử chuyển trạng thái odds
   ODDS_TRANSITION_RETENTION_DAYS: z.coerce.number().int().min(1).default(7),
   // Số ngày giữ: lịch sử kèo đã kết thúc / sự cố đã đóng / audit

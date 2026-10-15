@@ -31,8 +31,8 @@ export function NotifyPage() {
     { key: 'warning', title: 'Sự cố cảnh báo', desc: 'Publisher khởi động lại liên tục, consumer tồn kèo, làn xử lý tồn.' },
     {
       key: 'signals',
-      title: 'Kèo vượt ngưỡng',
-      desc: 'Khi margin của kèo mới đạt ngưỡng bạn đặt.',
+      title: 'Kèo vượt ngưỡng · kèo On click',
+      desc: 'Khi margin của kèo mới đạt ngưỡng bạn đặt. Mỗi kèo mới lên trang On click (chờ người vào lệnh) cũng báo về đây, không phụ thuộc ngưỡng; tắt mục này là tắt cả hai.',
       extra: (
         <Select
           value={String(prefs.signalThreshold)}

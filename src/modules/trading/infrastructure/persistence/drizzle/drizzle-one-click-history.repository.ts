@@ -18,6 +18,7 @@ import type {
   OneClickHistoryEntry,
   OneClickHistoryQuery,
   OneClickHistoryRepository,
+  OneClickPrior,
 } from '../../../application/one-click-history.js';
 import type { TradeAttempt } from '../../../application/trade-attempt.js';
 import { drizzleOneClickHistoryTable as t } from './drizzle-trading.schema.js';
@@ -53,7 +54,11 @@ const toEntry = (r: Row): OneClickHistoryEntry => ({
 export class DrizzleOneClickHistoryRepository implements OneClickHistoryRepository {
   constructor(private readonly _tx: TransactionContext) {}
 
-  async upsert(c: OneClickCandidate): Promise<void> {
+  async upsert(c: OneClickCandidate): Promise<OneClickPrior> {
+    const [prev] = await this._tx.executor
+      .select({ endedAt: t.endedAt, endReason: t.endReason })
+      .from(t)
+      .where(and(eq(t.profileId, c.profileId), eq(t.signalId, c.signalId)));
     const a = c.analysis;
     const at = new Date(c.updatedAt);
     const v = {
@@ -91,6 +96,10 @@ export class DrizzleOneClickHistoryRepository implements OneClickHistoryReposito
           enteredBy: null,
         },
       });
+    if (!prev) return { state: 'none' };
+    return prev.endedAt
+      ? { state: 'ended', reason: prev.endReason }
+      : { state: 'open' };
   }
 
   async end(

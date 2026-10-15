@@ -53,6 +53,12 @@ import {
 } from './application/one-click-history.js';
 import { DrizzleOneClickHistoryRepository } from './infrastructure/persistence/drizzle/drizzle-one-click-history.repository.js';
 import {
+  OneClickNotifier,
+  PUSH_SENDER,
+  type PushSender,
+} from './application/one-click-notifier.js';
+import { OneSignalPushSender } from './infrastructure/push/onesignal-push.sender.js';
+import {
   EXPOSURE_LEDGER_READER,
   type ExposureLedgerReader,
 } from './application/exposure.ports.js';
@@ -189,6 +195,31 @@ const ONE_CLICK_SWEEP_MS = 10_000;
         new DrizzleOneClickHistoryRepository(tx),
     },
     {
+      provide: PUSH_SENDER,
+      inject: [ConfigService],
+      useFactory: (cfg: ConfigService<Env, true>): PushSender | null => {
+        const appId = cfg.get('ONESIGNAL_APP_ID', { infer: true });
+        const apiKey = cfg.get('ONESIGNAL_REST_API_KEY', { infer: true });
+        return appId && apiKey
+          ? new OneSignalPushSender({ appId, apiKey })
+          : null;
+      },
+    },
+    {
+      provide: OneClickNotifier,
+      inject: [PUSH_SENDER, TRADER_PROFILE_REPOSITORY, ConfigService],
+      useFactory: (
+        sender: PushSender | null,
+        profiles: TraderProfileRepository,
+        cfg: ConfigService<Env, true>,
+      ) =>
+        new OneClickNotifier(
+          sender,
+          async (id) => (await profiles.get(id))?.name ?? null,
+          cfg.get('WEB_APP_URL', { infer: true }) ?? null,
+        ),
+    },
+    {
       provide: OneClickHistoryRecorder,
       inject: [ONE_CLICK_HISTORY_REPOSITORY],
       useFactory: (r: OneClickHistoryRepository) =>
@@ -207,13 +238,24 @@ const ONE_CLICK_SWEEP_MS = 10_000;
         TraderConfigSync,
         OneClickBoard,
         OneClickHistoryRecorder,
+        OneClickNotifier,
       ],
       useFactory: (
         r: TradeAttemptRepository,
         s: TraderConfigSync,
         b: OneClickBoard,
         h: OneClickHistoryRecorder,
-      ) => new TraderDataHandler(r, s, undefined, b, h),
+        n: OneClickNotifier,
+      ) => {
+        const log = new Logger('OneClickPush');
+        if (!n.enabled)
+          log.log(
+            'chưa đặt ONESIGNAL_APP_ID / ONESIGNAL_REST_API_KEY: không báo kèo On click về điện thoại',
+          );
+        return new TraderDataHandler(r, s, undefined, b, h, n, (e) =>
+          log.warn(`gửi thông báo On click lỗi: ${String(e)}`),
+        );
+      },
     },
   ],
 })
