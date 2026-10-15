@@ -33,6 +33,7 @@ import type {
   TradePurgeResult,
   TradeStats,
   TradeStatus,
+  TradeStatsQuery,
 } from './trade-attempt.js';
 import type { TraderConfigSync } from './trader-config.sync.js';
 import type { TraderRuntimeConfig } from './trader-config.js';
@@ -322,7 +323,7 @@ export class TradingAdmin {
     return t ? { status: 'SUCEED', data: t } : { status: 'NOT_FOUND' };
   }
 
-  tradeStats(q: { profileId?: string; since?: number }): Promise<TradeStats> {
+  tradeStats(q: TradeStatsQuery): Promise<TradeStats> {
     return this._trades.stats(q);
   }
 

@@ -33,6 +33,8 @@ import {
 import type {
   TradeAttempt,
   TradeAttemptQuery,
+  TradeSource,
+  TradeStatsQuery,
   TradeLeg,
   TradeLegStatus,
   TradePurgeFilter,
@@ -257,6 +259,12 @@ const toTrade = (r: TradeRow, legRows: readonly LegRow[]): TradeAttempt => ({
   legs: legRows.map(toLeg),
 });
 
+/** Lệnh người vào tay ở On click mang detail.manual; còn lại là bot. */
+const sourceIs = (s: TradeSource): SQL =>
+  s === 'manual'
+    ? sql`(${trades.detail} -> 'manual') is not null`
+    : sql`(${trades.detail} -> 'manual') is null`;
+
 export class DrizzleTradeAttemptRepository implements TradeAttemptRepository {
   constructor(private readonly _tx: TransactionContext) {}
 
@@ -325,6 +333,7 @@ export class DrizzleTradeAttemptRepository implements TradeAttemptRepository {
     const where: SQL[] = [];
     if (q.profileId) where.push(eq(trades.profileId, q.profileId));
     if (q.status) where.push(eq(trades.status, q.status));
+    if (q.source) where.push(sourceIs(q.source));
     if (q.before) where.push(lt(trades.createdAt, new Date(q.before)));
     const rows = await this._tx.executor
       .select()
@@ -335,9 +344,10 @@ export class DrizzleTradeAttemptRepository implements TradeAttemptRepository {
     return this._withLegs(rows);
   }
 
-  async stats(q: { profileId?: string; since?: number }): Promise<TradeStats> {
+  async stats(q: TradeStatsQuery): Promise<TradeStats> {
     const where: SQL[] = [];
     if (q.profileId) where.push(eq(trades.profileId, q.profileId));
+    if (q.source) where.push(sourceIs(q.source));
     if (q.since) where.push(gte(trades.createdAt, new Date(q.since)));
     const rows = await this._tx.executor
       .select({

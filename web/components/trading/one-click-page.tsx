@@ -16,6 +16,7 @@ import { Pill } from '../ui/status';
 import { Empty, ErrorState, SkeletonRows } from '../ui/states';
 import { Table, TD, TH, THead, TR } from '../ui/table';
 import { OneClickHistory } from './one-click-history';
+import { SourceBreakdown } from './trade-sources';
 import { REASON_LABEL, TradeDetailPanel } from './trade-detail';
 import { NumInput } from './stake-plan-editor';
 import { previewSizing, type SizingPreview } from '@/lib/one-click-sizing';
@@ -66,6 +67,8 @@ export function OneClickPage() {
   };
 
   const threshold = profile?.risk.oneClickMinPrice ?? 0;
+  // mốc 7 ngày làm tròn theo phút để URL không đổi mỗi giây
+  const since7d = Math.floor((now - 7 * 86_400_000) / 60_000) * 60_000;
 
   return (
     <div>
@@ -98,6 +101,13 @@ export function OneClickPage() {
           ) : null}
         </div>
       </div>
+
+      {profileId ? (
+        <div className="mb-8">
+          <div className="mb-2 text-caption text-muted-fg">Lãi giả định 7 ngày của profile này (Auto trade · On click · tổng)</div>
+          <SourceBreakdown profileId={profileId} since={since7d} active="manual" />
+        </div>
+      ) : null}
 
       <div className="mb-8">
         <Segmented<'live' | 'history'>

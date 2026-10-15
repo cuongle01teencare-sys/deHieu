@@ -166,7 +166,12 @@ export function mockTrading(method: string, path: string, search: string, body: 
     const filtered = () =>
       trades
         .filter((t) => !q.get('profileId') || t.profileId === q.get('profileId'))
-        .filter((t) => !q.get('status') || t.status === q.get('status'));
+        .filter((t) => !q.get('status') || t.status === q.get('status'))
+        .filter((t) => {
+          const src = q.get('source');
+          const manual = !!(t.detail as { manual?: unknown }).manual;
+          return !src || (src === 'manual' ? manual : !manual);
+        });
     if (p === 'trades') {
       const before = Number(q.get('before') ?? Infinity);
       return ok(filtered().filter((t) => t.createdAt < before).slice(0, Number(q.get('limit') ?? 100)));

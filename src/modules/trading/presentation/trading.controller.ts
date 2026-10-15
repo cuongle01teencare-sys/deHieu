@@ -29,7 +29,7 @@ import {
   OneClickHistoryRecorder,
 } from '../application/one-click-history.js';
 import { TRADING_PERMISSIONS as P } from '../application/trading.permissions.js';
-import { TRADE_STATUSES } from '../application/trade-attempt.js';
+import { TRADE_SOURCES, TRADE_STATUSES } from '../application/trade-attempt.js';
 import { STAKE_TRENDS } from '../domain/stake-plan.js';
 import { TRADER_MODES } from '../domain/trader-profile.js';
 import { unwrap } from './http-errors.js';
@@ -131,6 +131,8 @@ const SettingsBody = z.object({ matchExposureCapUsd: money });
 const TradesQuery = z.object({
   profileId: z.string().optional(),
   status: z.enum(TRADE_STATUSES).optional(),
+  /** bot = Auto trade, manual = người vào tay ở On click; bỏ trống = cả hai. */
+  source: z.enum(TRADE_SOURCES).optional(),
   before: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
@@ -182,6 +184,7 @@ const OneClickEnterBody = z.object({
 const StatsQuery = z.object({
   profileId: z.string().optional(),
   since: z.coerce.number().int().positive().optional(),
+  source: z.enum(TRADE_SOURCES).optional(),
 });
 
 /**
@@ -411,7 +414,7 @@ export class TradingController {
   @ApiOperation({
     summary: 'Thống kê lệnh',
     description:
-      'Quyền: trading:read. Số lần vào/bỏ qua/hủy, tổng tiền, lãi giả định, lý do bỏ qua.',
+      'Quyền: trading:read. Số lần vào/bỏ qua/hủy, tổng tiền, lãi giả định, lý do bỏ qua. source = bot (Auto trade) | manual (người vào tay ở On click); bỏ trống = gộp cả hai.',
   })
   stats(@Query() q: unknown) {
     return this._admin.tradeStats(StatsQuery.parse(q));

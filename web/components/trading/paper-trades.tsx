@@ -20,6 +20,7 @@ import { Pill } from '../ui/status';
 import { ListRow, Table, TD, TH, THead, TR } from '../ui/table';
 import { Hint } from '../ui/tooltip';
 import { REASON_LABEL, reasonText, TRADE_STATUS, TradeDetailPanel } from './trade-detail';
+import { SOURCE_LABEL, SourceBreakdown, type TradeSource } from './trade-sources';
 import { PurgeTradesDialog } from './trade-purge';
 
 const STATUS = TRADE_STATUS;
@@ -36,6 +37,7 @@ export function PaperTrades() {
   const [profileId, setProfileId] = useState('');
   const [period, setPeriod] = useState<Period>('24h');
   const [status, setStatus] = useState<TradeStatus | ''>('');
+  const [source, setSource] = useState<TradeSource>('');
   const now = useNow(30_000);
   const mobile = useIsMobile();
 
@@ -45,8 +47,8 @@ export function PaperTrades() {
     new URLSearchParams(
       Object.entries({ ...(profileId ? { profileId } : {}), ...extra }).map(([k, v]) => [k, String(v)]),
     ).toString();
-  const stats = useApi<TradeStats>(`trading/trades/stats?${q(since ? { since } : {})}`, 15_000);
-  const page = useApi<TradeAttempt[]>(`trading/trades?${q({ limit: PAGE, ...(status ? { status } : {}) })}`, 10_000);
+  const stats = useApi<TradeStats>(`trading/trades/stats?${q({ ...(since ? { since } : {}), ...(source ? { source } : {}) })}`, 15_000);
+  const page = useApi<TradeAttempt[]>(`trading/trades?${q({ limit: PAGE, ...(status ? { status } : {}), ...(source ? { source } : {}) })}`, 10_000);
   const [older, setOlder] = useState<TradeAttempt[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState<TradeAttempt | null>(null);
@@ -55,7 +57,7 @@ export function PaperTrades() {
   const [busy, setBusy] = useState(false);
   const manage = useGuard('trading:manage');
   const mutate = useMutate();
-  useEffect(() => setOlder([]), [profileId, status]);
+  useEffect(() => setOlder([]), [profileId, status, source]);
 
   const refresh = () => {
     setOlder([]);
@@ -74,7 +76,7 @@ export function PaperTrades() {
     if (!last) return;
     setLoadingMore(true);
     try {
-      const more = await api<TradeAttempt[]>(`trading/trades?${q({ limit: PAGE, before: last.createdAt, ...(status ? { status } : {}) })}`);
+      const more = await api<TradeAttempt[]>(`trading/trades?${q({ limit: PAGE, before: last.createdAt, ...(status ? { status } : {}), ...(source ? { source } : {}) })}`);
       setOlder((o) => [...o, ...more]);
     } finally {
       setLoadingMore(false);
@@ -97,6 +99,15 @@ export function PaperTrades() {
             { value: 'all', label: 'Tất cả' },
           ]}
         />
+        <Segmented<TradeSource>
+          value={source}
+          onChange={setSource}
+          options={[
+            { value: '', label: 'Tất cả' },
+            { value: 'bot', label: 'Auto trade' },
+            { value: 'manual', label: 'On click' },
+          ]}
+        />
         <Select value={profileId} onChange={(e) => setProfileId(e.target.value)} className="w-48" aria-label="Profile">
           <option value="">Mọi profile</option>
           {profiles.data?.map((p) => (
@@ -106,6 +117,11 @@ export function PaperTrades() {
           ))}
         </Select>
       </div>
+
+      <SourceBreakdown className="mb-8" profileId={profileId || undefined} since={since || undefined} active={source} />
+      <p className="-mt-5 mb-6 text-caption text-faint">
+        Lãi giả định theo nguồn trong khoảng đã chọn. Bên dưới: thống kê chi tiết của nguồn đang chọn ({SOURCE_LABEL[source]}).
+      </p>
 
       <StatStrip className="mb-10">
         <Stat label="Lãi giả định" value={s ? usd(s.profit) : '—'} tone={s && s.profit > 0 ? 'ok' : s && s.profit < 0 ? 'critical' : undefined} sub={roi !== null ? fmtMargin(roi) : undefined} />

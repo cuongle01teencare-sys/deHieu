@@ -7,6 +7,7 @@ import type {
   TradeAttemptQuery,
   TradePurgeFilter,
   TradeStats,
+  TradeStatsQuery,
 } from './trade-attempt.js';
 import type { TraderRuntimeConfig } from './trader-config.js';
 
@@ -31,7 +32,7 @@ export interface TradeAttemptRepository {
   record(t: TradeAttempt): Promise<void>;
   get(id: string): Promise<TradeAttempt | null>;
   list(q: TradeAttemptQuery): Promise<TradeAttempt[]>;
-  stats(q: { profileId?: string; since?: number }): Promise<TradeStats>;
+  stats(q: TradeStatsQuery): Promise<TradeStats>;
   /** Số lệnh khớp phạm vi xóa. */
   count(f: TradePurgeFilter): Promise<number>;
   /** Xóa lệnh (kèm các chân) khớp phạm vi; trả số lệnh đã xóa. */

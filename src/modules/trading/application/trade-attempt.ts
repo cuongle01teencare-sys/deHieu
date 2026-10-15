@@ -136,9 +136,21 @@ export const TradeAttemptSchema = z.object({
 });
 export type TradeAttempt = z.infer<typeof TradeAttemptSchema>;
 
+/** Nguồn lệnh: bot (Auto trade) hoặc người vào tay ở On click (detail.manual). */
+export const TRADE_SOURCES = ['bot', 'manual'] as const;
+export type TradeSource = (typeof TRADE_SOURCES)[number];
+
+export interface TradeStatsQuery {
+  readonly profileId?: string;
+  readonly since?: number;
+  /** Bỏ trống = gộp cả hai. */
+  readonly source?: TradeSource;
+}
+
 export interface TradeAttemptQuery {
   readonly profileId?: string;
   readonly status?: TradeStatus;
+  readonly source?: TradeSource;
   /** createdAt < before (phân trang lùi). */
   readonly before?: number;
   readonly limit: number;

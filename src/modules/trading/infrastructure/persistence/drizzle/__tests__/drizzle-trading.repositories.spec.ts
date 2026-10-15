@@ -173,6 +173,44 @@ describe('Postgres: auto trade', () => {
     });
   });
 
+  it('lọc / thống kê theo nguồn: Auto trade (bot), On click (vào tay), gộp', async () => {
+    const r = new DrizzleTradeAttemptRepository(tx);
+    await r.record(trade('b1', { profit: 4 }));
+    await r.record(
+      trade('b2', {
+        status: 'skipped',
+        reason: 'NO_EDGE: x',
+        profit: 0,
+        totalCost: 0,
+      }),
+    );
+    await r.record(
+      trade('m1', {
+        profit: 2,
+        totalCost: 40,
+        detail: { manual: { by: 'alice' } },
+      }),
+    );
+    const ids = async (source?: 'bot' | 'manual') =>
+      (await r.list({ limit: 10, ...(source ? { source } : {}) }))
+        .map((t) => t.id)
+        .sort();
+    expect(await ids('manual')).toEqual(['m1']);
+    expect(await ids('bot')).toEqual(['b1', 'b2']);
+    expect(await ids()).toEqual(['b1', 'b2', 'm1']);
+    expect(await r.stats({ source: 'manual' })).toMatchObject({
+      filled: 1,
+      profit: 2,
+      totalCost: 40,
+    });
+    expect(await r.stats({ source: 'bot' })).toMatchObject({
+      filled: 1,
+      skipped: 1,
+      profit: 4,
+    });
+    expect(await r.stats({})).toMatchObject({ filled: 2, profit: 6 });
+  });
+
   it('xóa lệnh: theo nhiều trạng thái, profile, mốc thời gian, một lệnh, toàn bộ (kèm chân)', async () => {
     const r = new DrizzleTradeAttemptRepository(tx);
     const t0 = Date.now() - 10_000;
