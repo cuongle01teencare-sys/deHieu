@@ -225,6 +225,7 @@ export function mockTrading(method: string, path: string, search: string, body: 
     return ok(true);
   }
 
+  if (method === 'POST' && /^profiles\/[^/]+\/reevaluate$/.test(p)) return ok({ tasks: 1 });
   const profileId = /^profiles\/([^/]+)$/.exec(p)?.[1];
   if ((method === 'POST' && p === 'profiles') || (method === 'PUT' && profileId)) {
     const old = profiles.find((x) => x.id === profileId);

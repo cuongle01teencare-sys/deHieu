@@ -504,7 +504,13 @@ Trader xử lý mỗi kèo **một lần theo mã kèo**; kèo làm mới địn
 - **Đổi cấu hình profile**: kèo từng bị bỏ qua vì cấu hình (Market không được chọn, Hạng không được chọn, Không thuộc hạng nào, Profile đứng yên, Chiến lược không có) mà đúng phần cấu hình đó vừa đổi → xét lại một lần. Đổi phần khác hoặc lưu lại y hệt thì không. Kèo bị bỏ qua vì lý do khác (sổ lệnh mỏng, hết lãi…) không xét lại.
 - **Xóa toàn bộ lệnh giấy** (Xóa lệnh… → Toàn bộ, không giới hạn thời điểm) của một profile hoặc mọi profile → trader quên dấu "đã xử lý" và xét lại mọi kèo còn sống.
 
-Lần xét lại ghi lệnh mới với id có hậu tố (`profile:signal:2`). Số lệnh mỗi cửa mỗi hạng và hạn mức theo trận vẫn giữ, nên cửa đã vào sẽ hiện "Cửa này đã vào" thay vì vào trùng. Task khởi động lại chỉ nhớ kết quả từ lúc khởi động, nên đổi cấu hình chỉ xét lại các kèo đã xử lý trong phiên đó.
+- **Bấm "Xét lại kèo đang sống"** (menu ⋯ của profile): xét lại mọi kèo còn sống, không xóa lệnh.
+
+Kết quả mỗi lần xử lý được lưu kèm dấu "đã xử lý" trong Redis, nên task khởi động lại (deploy, restart) vẫn biết kèo nào bị bỏ qua vì cấu hình. Khi logic quyết định đổi (phiên bản trong code tăng), các kèo bị bỏ qua vì cấu hình được xét lại một lần sau deploy. Dấu do bản cũ ghi (chưa có kết quả) được xét lại một lần.
+
+Lần xét lại ghi lệnh mới với id có hậu tố (`profile:signal:2`). Số lệnh mỗi cửa mỗi hạng và hạn mức theo trận vẫn giữ, nên cửa đã vào sẽ hiện "Cửa này đã vào" thay vì vào trùng.
+
+Nhiều dòng giống hệt nhau trong cùng một phút thường là **nhiều kèo khác mã** của cùng một cửa: odds bị khóa ↔ mở lại liên tục làm kèo bị hủy rồi phát lại với mã mới; mỗi mã được xử lý một lần.
 
 ### Kèo bị hủy vì lệch giờ bắt đầu
 

@@ -268,6 +268,18 @@ export class TradingController {
     return unwrap(await this._admin.saveProfile(id, ProfileBody.parse(body)));
   }
 
+  @Post('profiles/:id/reevaluate')
+  @HttpCode(200)
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Xét lại kèo đang sống',
+    description:
+      'Quyền: trading:manage. Task trader đang chạy của profile bỏ dấu "đã xử lý" và xét lại ngay mọi kèo còn sống (không xóa lệnh). Cửa đã vào vẫn bị chặn bởi số lệnh mỗi hạng. Trả { tasks } = số task đã nhận lệnh.',
+  })
+  async reevaluateProfile(@Param('id') id: string) {
+    return unwrap(await this._admin.reevaluateProfile(id));
+  }
+
   @Delete('profiles/:id')
   @RequirePermissions(P.MANAGE)
   @ApiOperation({

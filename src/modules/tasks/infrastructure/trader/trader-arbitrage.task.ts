@@ -60,10 +60,40 @@ const CONFIG_SKIPS: Readonly<Record<string, (c: TraderConfig) => unknown>> = {
   UNKNOWN_STRATEGY: (c) => c.strategy.id,
 };
 const reasonCode = (r: string | null) => (r ?? '').split(':')[0].trim();
+/**
+ * Phiên bản cách quyết định. Tăng khi đổi logic làm kết quả "bỏ qua vì cấu hình" có thể khác
+ * (vd 2 = loại hạng không tick TRƯỚC khi chọn hạng) → kèo còn sống được xét lại một lần sau deploy.
+ */
+const DECISION_VERSION = 2;
 const configKey = (reason: string | null, c: TraderConfig): string | null => {
   const f = CONFIG_SKIPS[reasonCode(reason)];
-  return f ? JSON.stringify(f(c)) : null;
+  return f ? JSON.stringify([DECISION_VERSION, f(c)]) : null;
 };
+/** Dấu cũ ('1', chưa lưu kết quả) → coi như bỏ qua vì cấu hình chưa rõ → xét lại một lần. */
+const LEGACY_KEY = 'legacy';
+
+/** Kết quả lưu kèm dấu "đã xử lý" trong sổ (Redis) → task khởi động lại vẫn biết. */
+const parseNote = (v: string | null): LiveSignal['last'] & { n: number } => {
+  if (v === null || v === '1')
+    return { status: 'skipped', reason: null, configKey: LEGACY_KEY, n: 1 };
+  try {
+    const o = JSON.parse(v) as {
+      s: Status;
+      r: string | null;
+      k: string | null;
+      n: number;
+    };
+    return { status: o.s, reason: o.r, configKey: o.k, n: o.n || 1 };
+  } catch {
+    return { status: 'skipped', reason: null, configKey: LEGACY_KEY, n: 1 };
+  }
+};
+
+/** Kết quả lần trước là "bỏ qua vì cấu hình" mà phần cấu hình đó (hoặc logic) đã đổi. */
+const needsRedo = (last: LiveSignal['last'], c: TraderConfig): boolean =>
+  !!last &&
+  last.configKey !== null &&
+  last.configKey !== configKey(last.reason, c);
 
 /** Kèo còn sống đã nhận từ hub (bản mới nhất) + kết quả lần xử lý gần nhất trong phiên task này. */
 interface LiveSignal {
@@ -146,7 +176,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     ctx.onCommand((name, data) => {
       // app đã xóa toàn bộ lệnh của profile → quên dấu "đã xử lý", xét lại mọi kèo còn sống
       if (name === 'reset_seen') {
-        this._reevaluate(() => true);
+        this._reevaluate(true);
         return;
       }
       if (name !== 'config') throw new Error(`UNKNOWN_COMMAND: ${name}`);
@@ -156,11 +186,8 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       this._config = cfg;
       configured.abort(); // đánh thức vòng chờ cấu hình
       // kèo bị bỏ qua vì cấu hình mà phần cấu hình đó vừa đổi → xét lại ngay
-      this._reevaluate(
-        (l) =>
-          l.last?.configKey != null &&
-          l.last.configKey !== configKey(l.last.reason, cfg),
-      );
+      // (kết quả lần trước đọc từ sổ nếu task mới khởi động lại)
+      this._reevaluate(false);
     });
 
     try {
@@ -239,8 +266,11 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     else this._live.set(s.signalId, { signal: s, attempts: 0, last: null });
   }
 
-  /** Xét lại (bỏ qua dấu "đã xử lý") các kèo còn sống khớp điều kiện. Trả số kèo được xét lại. */
-  private _reevaluate(pick: (l: LiveSignal) => boolean): number {
+  /**
+   * Xét lại các kèo còn sống. force = bỏ hẳn dấu "đã xử lý" (sau khi xóa toàn bộ lệnh);
+   * không force = chỉ kèo bị bỏ qua vì cấu hình mà cấu hình/logic đã đổi (xem needsRedo).
+   */
+  private _reevaluate(force: boolean): number {
     const run = this._run;
     if (!run) return 0;
     const now = Date.now();
@@ -250,9 +280,9 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         this._live.delete(id);
         continue;
       }
-      if (this._handling.has(id) || !pick(l)) continue;
+      if (this._handling.has(id)) continue;
       n++;
-      void this._handle(run.ctx, l.signal, run, true).catch((e) =>
+      void this._handle(run.ctx, l.signal, run, force).catch((e) =>
         run.ctx.warn(e),
       );
     }
@@ -279,13 +309,20 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     // hub giao "ít nhất một lần" và gửi lại kèo còn hiệu lực khi nối lại → mỗi kèo xử lý MỘT lần
     const ttl = Math.max(0, s.expiresAt - startedAt) + 3_600_000;
     if (!redo && !(await deps.ledger.claim(profileId, s.signalId, ttl))) {
-      // đã xử lý trước đó (vd trước khi task khởi động lại) → lần xét lại sau phải dùng id khác
-      if (live) live.attempts = Math.max(live.attempts, 1);
-      return;
+      // đã xử lý trước đó (có thể trước khi task khởi động lại): đọc kết quả lần trước từ sổ;
+      // bị bỏ qua vì cấu hình mà cấu hình/logic đã đổi → xét lại, không thì thôi
+      if (!live) return;
+      if (!live.last) {
+        const prev = parseNote(await deps.ledger.recall(profileId, s.signalId));
+        live.last = prev;
+        live.attempts = Math.max(live.attempts, prev.n);
+      }
+      live.attempts = Math.max(live.attempts, 1);
+      if (!needsRedo(live.last, cfg) || this._handling.has(s.signalId)) return;
     }
     this._handling.add(s.signalId);
     try {
-      await this._decide(ctx, s, deps, cfg, startedAt, live);
+      await this._decide(ctx, s, deps, cfg, startedAt, live, ttl);
     } finally {
       this._handling.delete(s.signalId);
     }
@@ -302,6 +339,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     cfg: TraderConfig,
     startedAt: number,
     live: LiveSignal | undefined,
+    ttl: number,
   ): Promise<void> {
     const profileId = ctx.params.profileId;
     const attempt = live ? ++live.attempts : 1;
@@ -353,8 +391,22 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         detail: Record<string, unknown>;
       }> = {},
     ) => {
-      if (live)
-        live.last = { status, reason, configKey: configKey(reason, cfg) };
+      const last = { status, reason, configKey: configKey(reason, cfg) };
+      if (live) live.last = last;
+      // lưu kết quả vào sổ: task khởi động lại vẫn biết kèo này bị bỏ qua vì cấu hình hay không
+      void deps.ledger
+        .note(
+          profileId,
+          s.signalId,
+          JSON.stringify({
+            s: status,
+            r: reason,
+            k: last.configKey,
+            n: attempt,
+          }),
+          ttl,
+        )
+        .catch((e: unknown) => ctx.warn(e));
       const c = this._cancels.get(s.signalId);
       // kèo bị hủy khi đang tính: lý do + giờ bắt đầu từng chân lúc hủy (ignored = vẫn vào tiếp)
       const cancel = c

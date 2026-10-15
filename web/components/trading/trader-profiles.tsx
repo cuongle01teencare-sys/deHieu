@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { MoreHorizontal, Pencil, Play, Plus, Square, Trash2, Users } from 'lucide-react';
+import { toast } from 'sonner';
+import { MoreHorizontal, Pencil, Play, Plus, RefreshCw, Square, Trash2, Users } from 'lucide-react';
 import type { TaskRecord } from '@/lib/types';
 import {
   DEFAULT_RISK,
@@ -89,6 +90,11 @@ export function TraderProfiles() {
         );
     if (r !== null) void tasks.reload();
   };
+  // trader bỏ dấu "đã xử lý", xét lại ngay mọi kèo còn sống (không xóa lệnh)
+  const reevaluate = async (p: TraderProfile) => {
+    const r = await mutate<{ tasks: number }>(`trading/profiles/${encodeURIComponent(p.id)}/reevaluate`, { method: 'POST' });
+    if (r) toast.success(r.tasks ? `${p.name}: đang xét lại các kèo còn sống` : `${p.name}: không có task trader nào đang chạy`);
+  };
   const stop = async (t: TaskRecord) => {
     const r = await mutate(`tasks/${encodeURIComponent(t.spec.taskId)}/stop`, { method: 'POST' }, `Đã dừng ${t.spec.taskId}`);
     if (r !== null) void tasks.reload();
@@ -165,6 +171,13 @@ export function TraderProfiles() {
                   >
                     <MenuItem icon={<Pencil />} disabledReason={manage} onSelect={() => setEditing(p)}>
                       Sửa
+                    </MenuItem>
+                    <MenuItem
+                      icon={<RefreshCw />}
+                      disabledReason={manage ?? (running ? null : 'Task trader chưa chạy')}
+                      onSelect={() => void reevaluate(p)}
+                    >
+                      Xét lại kèo đang sống
                     </MenuItem>
                     <MenuSeparator />
                     <MenuItem icon={<Trash2 />} danger disabledReason={manage} onSelect={() => setRemoving(p)}>

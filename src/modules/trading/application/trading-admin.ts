@@ -252,6 +252,20 @@ export class TradingAdmin {
     return { status: 'SUCEED', data: clean };
   }
 
+  /**
+   * Buộc task trader đang chạy của profile xét lại mọi kèo còn sống (bỏ dấu "đã xử lý"), không xóa lệnh.
+   * Số lệnh mỗi hạng / hạn mức trận vẫn giữ nên không vào trùng. Trả số task đã nhận lệnh.
+   */
+  async reevaluateProfile(
+    id: string,
+  ): Promise<OperationStatus<{ tasks: number }>> {
+    if (!(await this._profiles.get(id))) return { status: 'NOT_FOUND' };
+    return {
+      status: 'SUCEED',
+      data: { tasks: await this._sync.resetSeen(id) },
+    };
+  }
+
   async deleteProfile(id: string): Promise<OperationStatus<true>> {
     if (!(await this._profiles.delete(id))) return { status: 'NOT_FOUND' };
     await this._sync.pushAll();
