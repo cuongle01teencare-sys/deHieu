@@ -911,6 +911,8 @@ function snapshot(): AdminSnapshot {
 }
 
 // ============================================================ lịch sử kèo, audit, odds transitions
+/** Kèo đã xóa tay khỏi lịch sử (mẫu). */
+const removedHistory = new Set<string>();
 function history(search: string): ListResult<SignalHistoryItem> {
   const q = new URLSearchParams(search);
   const reasons = ['below_threshold', 'leg_suspended', 'leg_removed', 'below_threshold', 'start_time_mismatch', 'match_expired'];
@@ -961,6 +963,7 @@ function history(search: string): ListResult<SignalHistoryItem> {
   const from = Number(q.get('from') ?? 0);
   const to = Number(q.get('to') ?? 0) || Infinity;
   const items = [...active, ...past]
+    .filter((s) => !removedHistory.has(s.signalId))
     .filter((s) => !q.get('status') || s.status === q.get('status'))
     .filter((s) => !q.get('phase') || s.phase === q.get('phase'))
     .filter((s) => !q.get('room') || s.room === q.get('room'))
@@ -1122,6 +1125,22 @@ export async function mockRequest(
     if (t) return ok(tasks().find((x) => x.spec.taskId === t) ?? null);
   }
 
+  if (method === 'POST' && path === 'arbitrage/history/purge') {
+    const b = (body ?? {}) as { statuses?: string[]; olderThanDays?: number; all?: boolean; dryRun?: boolean };
+    if (!b.all && !b.olderThanDays) return { status: 400, body: { message: 'PURGE_SCOPE_REQUIRED' } };
+    const before = b.all ? Date.now() + 1 : Date.now() - (b.olderThanDays ?? 0) * 86_400_000;
+    const hit = history('limit=100000').items.filter((s) => s.status !== 'active' && s.issuedAt < before && (!b.statuses?.length || b.statuses.includes(s.status)));
+    if (!b.dryRun) for (const s of hit) removedHistory.add(s.signalId);
+    return ok({ before, matched: hit.length, deleted: b.dryRun ? 0 : hit.length });
+  }
+  if (method === 'DELETE' && path.startsWith('arbitrage/history/')) {
+    const id = decodeURIComponent(path.slice('arbitrage/history/'.length));
+    const s = history('limit=100000').items.find((x) => x.signalId === id);
+    if (!s) return { status: 404, body: { message: 'Not Found' } };
+    if (s.status === 'active') return { status: 400, body: { message: 'SIGNAL_ACTIVE: kèo đang sống, chưa xóa được' } };
+    removedHistory.add(id);
+    return ok({ deleted: true });
+  }
   if (method === 'POST') {
     // mẫu: dữ liệu sinh lại mỗi lần nên chỉ trả số đếm giả định, không thật sự xóa
     const purge = /^admin\/(audit|odds-transitions)\/purge$/.exec(path);

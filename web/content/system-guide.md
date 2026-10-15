@@ -397,7 +397,7 @@ Cài đặt arbitrage, hạng kèo, kênh thông báo và task có bật **Lưu 
 | [Luồng dữ liệu](/ingest)       | Nhận, bỏ qua, lỗi, cập nhật báo giá và các làn xử lý                         |
 | [Trận đấu](/tran-dau)          | Các market của một trận và báo giá từng tenant                               |
 | [Ghép trượt](/ghep-truot)      | Cặp trận có thể bị tách do tên đội lệch; ẩn cặp là lựa chọn trên trình duyệt |
-| [Kèo](/keo)                    | Tín hiệu active và lịch sử tín hiệu                                          |
+| [Kèo](/keo)                    | Tín hiệu active và lịch sử tín hiệu; xóa lịch sử theo trạng thái/thời gian hoặc từng kèo |
 | [Publisher & Node](/publisher) | Task, node, bắt đầu, dừng, xóa task đã dừng hoặc lỗi; lệnh tùy kind          |
 | [Consumer](/consumer)          | Kết nối, pause/resume và số thông báo chờ ACK                                |
 | [On click](/on-click)          | Kèo giá bán Polymarket cao chờ người bấm vào lệnh (giấy) theo profile         |

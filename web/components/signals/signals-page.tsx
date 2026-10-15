@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Zap, History } from 'lucide-react';
+import { Zap, History, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { ArbitrageSignal, ListResult, SignalCloseDetail, SignalHistoryItem, SignalStatus } from '@/lib/types';
 import { fmtAge, fmtClock, fmtStamp, timeLeft } from '@/lib/format';
@@ -26,6 +26,9 @@ import { Table, TD, TH, THead, TR } from '../ui/table';
 import { LiveStamp, Margin } from '../ui/values';
 import { JsonBlock, Mono } from '../ui/code';
 import { Button } from '../ui/button';
+import { useGuard, useMutate } from '../shell/shell-context';
+import { Confirm } from '../ui/panel';
+import { SignalHistoryPurgeButton } from './signal-history-purge';
 
 type FeedItem = ArbitrageSignal & { gone?: { at: number; reason: string | null; detail?: SignalCloseDetail | null } };
 
@@ -205,6 +208,10 @@ function HistoryTab() {
   const [range, setRange] = useState<keyof typeof RANGES>('24h');
   const [limit, setLimit] = useState(50);
   const [open, setOpen] = useState<SignalHistoryItem | null>(null);
+  const [removing, setRemoving] = useState<SignalHistoryItem | null>(null);
+  const [busy, setBusy] = useState(false);
+  const purgeGuard = useGuard('admin:purge');
+  const mutate = useMutate();
   const from = useMemo(() => Date.now() - RANGES[range], [range]);
   const qs = new URLSearchParams({ limit: String(limit), from: String(from) });
   if (status) qs.set('status', status);
@@ -229,6 +236,7 @@ function HistoryTab() {
         </Select>
         <Segmented value={range} onChange={setRange} options={Object.keys(RANGES).map((k) => ({ value: k as keyof typeof RANGES, label: k }))} />
         <span className="num ml-auto text-caption text-faint">{data ? `${data.total} kèo` : ''}</span>
+        <SignalHistoryPurgeButton onDone={() => void reload()} />
       </div>
 
       {error && !data ? <ErrorState message={error} onRetry={reload} /> : null}
@@ -297,7 +305,19 @@ function HistoryTab() {
         </div>
       ) : null}
 
-      <Panel open={!!open} onOpenChange={(v) => !v && setOpen(null)} eyebrow={open ? <Mono copy>{open.signalId}</Mono> : null} title={open ? <Teams teams={open.teams} strong={false} /> : ''}>
+      <Panel
+        open={!!open}
+        onOpenChange={(v) => !v && setOpen(null)}
+        eyebrow={open ? <Mono copy>{open.signalId}</Mono> : null}
+        title={open ? <Teams teams={open.teams} strong={false} /> : ''}
+        footer={
+          open ? (
+            <Button variant="danger-ghost" size="sm" disabledReason={open.status === 'active' ? 'Kèo đang sống, chưa xóa được' : purgeGuard} onClick={() => setRemoving(open)}>
+              <Trash2 aria-hidden /> Xóa kèo này khỏi lịch sử
+            </Button>
+          ) : undefined
+        }
+      >
         {open ? (
           <div>
             <div className="mb-6 flex items-center gap-4">
@@ -330,6 +350,26 @@ function HistoryTab() {
           </div>
         ) : null}
       </Panel>
+      <Confirm
+        open={!!removing}
+        onOpenChange={(v) => !v && setRemoving(null)}
+        tone="danger"
+        title="Xóa kèo khỏi lịch sử"
+        description={removing ? `${removing.teams[0]} vs ${removing.teams[1]} · ${marketLabel(removing.market)}. Xóa vĩnh viễn, không ảnh hưởng lệnh giấy.` : ''}
+        confirmLabel="Xóa"
+        loading={busy}
+        onConfirm={async () => {
+          if (!removing) return;
+          setBusy(true);
+          const r = await mutate(`arbitrage/history/${encodeURIComponent(removing.signalId)}`, { method: 'DELETE' }, 'Đã xóa kèo khỏi lịch sử');
+          setBusy(false);
+          if (r !== null) {
+            setRemoving(null);
+            setOpen(null);
+            void reload();
+          }
+        }}
+      />
     </div>
   );
 }

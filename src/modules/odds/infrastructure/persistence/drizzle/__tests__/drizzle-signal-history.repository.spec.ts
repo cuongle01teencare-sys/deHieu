@@ -170,6 +170,28 @@ describe('Lịch sử kèo (recorder + DrizzleSignalHistoryRepository)', () => {
     expect(await repo.get('live')).toMatchObject({ status: 'active' });
   });
 
+  it('xóa tay: theo trạng thái, không bao giờ xóa kèo đang sống; xóa từng kèo', async () => {
+    for (const id of ['p-live', 'p-c', 'p-s', 'p-a'])
+      await recorder.publish([new ArbitrageSignalIssued(signal(id, 0.03))]);
+    await recorder.flush();
+    await repo.close('p-c', 'cancelled', 'below_threshold', new Date(2_000));
+    await repo.close('p-s', 'superseded', null, new Date(2_000), 'p-live');
+    await repo.close('p-a', 'abandoned', 'app_restart', new Date(2_000));
+    const before = new Date(Date.now() + 1);
+    expect(await repo.countPurgeable({ before })).toBe(3);
+    expect(await repo.countPurgeable({ before, statuses: ['cancelled'] })).toBe(
+      1,
+    );
+    expect(
+      await repo.purge({ before, statuses: ['cancelled', 'superseded'] }, 10),
+    ).toBe(2);
+    expect(await repo.get('p-a')).toMatchObject({ status: 'abandoned' });
+    expect(await repo.deleteOne('p-live')).toBe('ACTIVE');
+    expect(await repo.deleteOne('p-a')).toBe('DELETED');
+    expect(await repo.deleteOne('p-a')).toBe('NOT_FOUND');
+    expect(await repo.get('p-live')).toMatchObject({ status: 'active' });
+  });
+
   it('đếm theo bộ lọc (cho phân trang)', async () => {
     await recorder.publish([new ArbitrageSignalIssued(signal('c1', 0.03))]);
     await recorder.publish([new ArbitrageSignalIssued(signal('c2', 0.03))]);

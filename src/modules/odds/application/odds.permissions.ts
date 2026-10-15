@@ -9,4 +9,6 @@ export const ODDS_PERMISSIONS = {
   CONSUMERS_CONTROL: 'consumers:control',
   /** Thêm/sửa/xóa kênh thông báo (Discord, Telegram, Slack) và hạng kèo. */
   CONSUMERS_MANAGE: 'consumers:manage',
+  /** Xóa tay lịch sử (dùng chung quyền xóa audit / lịch sử odds). */
+  HISTORY_PURGE: 'admin:purge',
 } as const;

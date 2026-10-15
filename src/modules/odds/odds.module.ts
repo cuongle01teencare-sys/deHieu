@@ -103,6 +103,7 @@ import { ListSignalHistoryHandler } from './application/queries/list-signal-hist
 import { GetSignalHistoryHandler } from './application/queries/get-signal-history.query.js';
 import { AbandonActiveSignalsHandler } from './application/commands/abandon-active-signals.command.js';
 import { PurgeSignalHistoryHandler } from './application/commands/purge-signal-history.command.js';
+import { DeleteSignalHistoryHandler } from './application/commands/delete-signal-history.command.js';
 // presentation
 import { TeamAliasesController } from './presentation/team-aliases.controller.js';
 import { ConsumersController } from './presentation/consumers.controller.js';
@@ -234,6 +235,12 @@ const EXPIRE_INTERVAL_MS = 60_000;
       inject: [SIGNAL_HISTORY_REPOSITORY],
       useFactory: (r: SignalHistoryRepository) =>
         new GetSignalHistoryHandler(r),
+    },
+    {
+      provide: DeleteSignalHistoryHandler,
+      inject: [SIGNAL_HISTORY_REPOSITORY],
+      useFactory: (r: SignalHistoryRepository) =>
+        new DeleteSignalHistoryHandler(r),
     },
     {
       provide: AbandonActiveSignalsHandler,

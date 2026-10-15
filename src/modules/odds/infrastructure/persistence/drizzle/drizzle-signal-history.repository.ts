@@ -1,5 +1,6 @@
 import {
   and,
+  count,
   desc,
   eq,
   gte,
@@ -12,6 +13,7 @@ import {
 } from 'drizzle-orm';
 import type { TransactionContext } from '../../../../../shared/infrastructure/database/transaction-context.js';
 import type {
+  SignalHistoryPurgeFilter,
   SignalHistoryQuery,
   SignalHistoryRepository,
 } from '../../../application/signal-history.repository.js';
@@ -143,5 +145,51 @@ export class DrizzleSignalHistoryRepository implements SignalHistoryRepository {
       .where(inArray(t.signalId, ids))
       .returning({ id: t.signalId });
     return rows.length;
+  }
+
+  private _purgeWhere(f: SignalHistoryPurgeFilter) {
+    return and(
+      ne(t.status, 'active'),
+      lt(t.issuedAt, f.before),
+      f.statuses?.length ? inArray(t.status, [...f.statuses]) : undefined,
+    );
+  }
+
+  async countPurgeable(f: SignalHistoryPurgeFilter): Promise<number> {
+    const [r] = await this._tx.executor
+      .select({ n: count() })
+      .from(t)
+      .where(this._purgeWhere(f));
+    return Number(r?.n ?? 0);
+  }
+
+  async purge(f: SignalHistoryPurgeFilter, limit: number): Promise<number> {
+    const db = this._tx.executor;
+    const ids = db
+      .select({ id: t.signalId })
+      .from(t)
+      .where(this._purgeWhere(f))
+      .limit(limit);
+    const rows = await db
+      .delete(t)
+      .where(inArray(t.signalId, ids))
+      .returning({ id: t.signalId });
+    return rows.length;
+  }
+
+  async deleteOne(
+    signalId: string,
+  ): Promise<'DELETED' | 'NOT_FOUND' | 'ACTIVE'> {
+    const db = this._tx.executor;
+    const rows = await db
+      .delete(t)
+      .where(and(eq(t.signalId, signalId), ne(t.status, 'active')))
+      .returning({ id: t.signalId });
+    if (rows.length) return 'DELETED';
+    const [left] = await db
+      .select({ id: t.signalId })
+      .from(t)
+      .where(eq(t.signalId, signalId));
+    return left ? 'ACTIVE' : 'NOT_FOUND';
   }
 }

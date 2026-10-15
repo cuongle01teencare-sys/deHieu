@@ -15,6 +15,14 @@ export interface SignalHistoryQuery {
   readonly offset: number;
 }
 
+/** Lọc khi xóa tay: chỉ kèo đã kết thúc. */
+export interface SignalHistoryPurgeFilter {
+  /** Trạng thái được xóa; bỏ trống = mọi trạng thái đã kết thúc. */
+  readonly statuses?: readonly Exclude<SignalStatus, 'active'>[];
+  /** Kèo phát trước thời điểm này. */
+  readonly before: Date;
+}
+
 /** Port: lưu lịch sử kèo (Postgres). */
 export interface SignalHistoryRepository {
   insert(entry: SignalHistoryEntry): Promise<void>;
@@ -38,6 +46,12 @@ export interface SignalHistoryRepository {
    * gọi lặp tới khi < limit để không khóa bảng lâu.
    */
   purgeOlderThan(before: Date, limit: number): Promise<number>;
+  /** Đếm kèo sẽ bị xóa tay (đã kết thúc, khớp lọc). */
+  countPurgeable(f: SignalHistoryPurgeFilter): Promise<number>;
+  /** Xóa tay tối đa `limit` kèo đã kết thúc khớp lọc; gọi lặp tới khi < limit. */
+  purge(f: SignalHistoryPurgeFilter, limit: number): Promise<number>;
+  /** Xóa một kèo. ACTIVE = kèo còn sống, không xóa. */
+  deleteOne(signalId: string): Promise<'DELETED' | 'NOT_FOUND' | 'ACTIVE'>;
 }
 
 export const SIGNAL_HISTORY_REPOSITORY = Symbol('SIGNAL_HISTORY_REPOSITORY');

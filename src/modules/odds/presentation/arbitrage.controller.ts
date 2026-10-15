@@ -6,13 +6,18 @@ import {
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Inject,
   NotFoundException,
   Param,
   Patch,
+  Post,
   Query,
 } from '@nestjs/common';
+import { DeleteSignalHistoryHandler } from '../application/commands/delete-signal-history.command.js';
+import { unwrap } from './http-errors.js';
 import { z } from 'zod';
 import { queryDate } from '../../../shared/presentation/query-date.js';
 import { GetRoomHandler } from '../application/queries/get-room.query.js';
@@ -85,6 +90,16 @@ const HistoryQuery = z.object({
   offset: z.coerce.number().int().min(0).default(0),
 });
 
+const HistoryPurgeBody = z.object({
+  statuses: z
+    .array(z.enum(['superseded', 'cancelled', 'abandoned']))
+    .max(3)
+    .optional(),
+  olderThanDays: z.number().int().min(1).max(3650).optional(),
+  all: z.boolean().optional(),
+  dryRun: z.boolean().optional(),
+});
+
 /** Kèo, room, lịch sử và cấu hình arbitrage. */
 @Controller('arbitrage')
 @ApiTags('Arbitrage')
@@ -109,6 +124,8 @@ export class ArbitrageController {
     private readonly _getSettings: GetArbitrageSettingsHandler,
     @Inject(UpdateArbitrageSettingsHandler)
     private readonly _updateSettings: UpdateArbitrageSettingsHandler,
+    @Inject(DeleteSignalHistoryHandler)
+    private readonly _deleteHistory: DeleteSignalHistoryHandler,
   ) {}
 
   @Get('signals')
@@ -207,6 +224,32 @@ export class ArbitrageController {
   @ApiZodQuery(HistoryQuery)
   history(@Query() query: unknown) {
     return this._history.execute(HistoryQuery.parse(query));
+  }
+
+  @Post('history/purge')
+  @HttpCode(200)
+  @RequirePermissions(P.HISTORY_PURGE)
+  @ApiOperation({
+    summary: 'Xóa tay lịch sử kèo',
+    description:
+      'Quyền: admin:purge. statuses (superseded | cancelled | abandoned; bỏ trống = mọi trạng thái đã kết thúc) + olderThanDays (cũ hơn N ngày, theo lúc phát) hoặc all = true. Kèo đang sống không bao giờ bị xóa. dryRun = true chỉ đếm. Trả { before, matched, deleted }.',
+  })
+  @ApiZodBody(HistoryPurgeBody)
+  async purgeHistory(@Body() body: unknown) {
+    return unwrap(
+      await this._deleteHistory.purge(HistoryPurgeBody.parse(body)),
+    );
+  }
+
+  @Delete('history/:signalId')
+  @RequirePermissions(P.HISTORY_PURGE)
+  @ApiOperation({
+    summary: 'Xóa một kèo khỏi lịch sử',
+    description:
+      'Quyền: admin:purge. 404 = không có; 400 SIGNAL_ACTIVE = kèo đang sống.',
+  })
+  async deleteHistory(@Param('signalId') signalId: string) {
+    return unwrap(await this._deleteHistory.deleteOne(signalId));
   }
 
   @Get('history/:signalId')
