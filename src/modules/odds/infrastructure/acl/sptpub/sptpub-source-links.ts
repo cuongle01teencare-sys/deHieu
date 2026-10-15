@@ -37,6 +37,11 @@ export class SptPubSourceLinks {
     }
   }
 
+  /** Slug giải (tên đọc được) theo mã giải của feed. */
+  tournamentSlug(tournamentId: string): string | null {
+    return this._tournaments.get(tournamentId) ?? null;
+  }
+
   eventUrl(eventId: string, description: unknown): string | null {
     const result = EventPath.safeParse(description);
     if (!result.success) return null;

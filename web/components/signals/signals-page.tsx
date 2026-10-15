@@ -6,7 +6,7 @@ import { Zap, History, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { ArbitrageSignal, ListResult, SignalCloseDetail, SignalHistoryItem, SignalStatus } from '@/lib/types';
 import { fmtAge, fmtClock, fmtStamp, timeLeft } from '@/lib/format';
-import { marketLabel } from '@/lib/markets';
+import { MARKET_TYPES, marketLabel, SPORT_LABEL } from '@/lib/markets';
 import { CANCEL_REASONS } from '@/lib/skip-reasons';
 import { cn } from '@/lib/utils';
 import { useApi } from '@/hooks/use-api';
@@ -17,7 +17,7 @@ import { RoomDrawer, DrawerSection } from '../room-drawer';
 import { SignalLegs } from '../signal-legs';
 import { driftSummary, StartTimeDetail } from '../start-time-detail';
 import { PhasePill, Teams } from '../domain';
-import { Segmented, Select } from '../ui/controls';
+import { Input, Segmented, Select } from '../ui/controls';
 import { KV, PageHeader } from '../ui/layout';
 import { Panel } from '../ui/panel';
 import { Empty, ErrorState, SkeletonRows } from '../ui/states';
@@ -199,28 +199,69 @@ const STATUS: Record<SignalStatus, { label: string; tone: Tone }> = {
   abandoned: { label: 'Bỏ dở', tone: 'warn' },
 };
 
-const RANGES = { '1h': 3_600_000, '6h': 6 * 3_600_000, '24h': 86_400_000, '7d': 7 * 86_400_000 } as const;
+const RANGES = { '1h': 3_600_000, '6h': 6 * 3_600_000, '24h': 86_400_000, '7d': 7 * 86_400_000, all: null } as const;
+const RANGE_LABEL: Record<keyof typeof RANGES, string> = { '1h': '1h', '6h': '6h', '24h': '24h', '7d': '7d', all: 'Tất cả' };
 
 function HistoryTab() {
   const mobile = useIsMobile();
+  // ?q= (vd từ chi tiết lệnh giấy): tìm theo mã kèo, xem mọi thời gian
+  const urlQ = useSearchParams().get('q') ?? '';
+  const [text, setText] = useState(urlQ);
+  const [q, setQ] = useState(urlQ);
+  const [range, setRange] = useState<keyof typeof RANGES>(urlQ ? 'all' : '24h');
+  useEffect(() => {
+    if (!urlQ) return;
+    setText(urlQ);
+    setQ(urlQ);
+    setRange('all');
+  }, [urlQ]);
+  useEffect(() => {
+    const t = setTimeout(() => setQ(text.trim()), 300);
+    return () => clearTimeout(t);
+  }, [text]);
   const [status, setStatus] = useState<'' | SignalStatus>('');
   const [phase, setPhase] = useState('');
-  const [range, setRange] = useState<keyof typeof RANGES>('24h');
+  const [sport, setSport] = useState('');
+  const [market, setMarket] = useState('');
   const [limit, setLimit] = useState(50);
   const [open, setOpen] = useState<SignalHistoryItem | null>(null);
   const [removing, setRemoving] = useState<SignalHistoryItem | null>(null);
   const [busy, setBusy] = useState(false);
   const purgeGuard = useGuard('admin:purge');
   const mutate = useMutate();
-  const from = useMemo(() => Date.now() - RANGES[range], [range]);
-  const qs = new URLSearchParams({ limit: String(limit), from: String(from) });
+  const from = useMemo(() => {
+    const span = RANGES[range];
+    return span === null ? null : Date.now() - span;
+  }, [range]);
+  const qs = new URLSearchParams({ limit: String(limit) });
+  if (from !== null) qs.set('from', String(from));
   if (status) qs.set('status', status);
   if (phase) qs.set('phase', phase);
+  if (q) qs.set('q', q);
+  if (sport) qs.set('sport', sport);
+  if (market) qs.set('market', market);
   const { data, error, reload } = useApi<ListResult<SignalHistoryItem>>(`arbitrage/history?${qs}`, 15_000);
 
   return (
     <div>
       <div className="mb-6 flex flex-wrap items-center gap-3">
+        <Input value={text} onChange={(e) => setText(e.target.value)} placeholder="Mã kèo hoặc tên đội…" className="h-8 w-64" aria-label="Tìm kèo" type="search" />
+        <Select value={sport} onChange={(e) => setSport(e.target.value)} className="w-32" aria-label="Môn">
+          <option value="">Mọi môn</option>
+          {Object.entries(SPORT_LABEL).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v}
+            </option>
+          ))}
+        </Select>
+        <Select value={market} onChange={(e) => setMarket(e.target.value)} className="w-44" aria-label="Market">
+          <option value="">Mọi market</option>
+          {MARKET_TYPES.map((m) => (
+            <option key={m} value={m}>
+              {marketLabel(m)}
+            </option>
+          ))}
+        </Select>
         <Select value={status} onChange={(e) => setStatus(e.target.value as SignalStatus)} className="w-40" aria-label="Trạng thái">
           <option value="">Mọi trạng thái</option>
           {Object.entries(STATUS).map(([k, v]) => (
@@ -234,14 +275,14 @@ function HistoryTab() {
           <option value="live">Live</option>
           <option value="prematch">Trước trận</option>
         </Select>
-        <Segmented value={range} onChange={setRange} options={Object.keys(RANGES).map((k) => ({ value: k as keyof typeof RANGES, label: k }))} />
+        <Segmented value={range} onChange={setRange} options={(Object.keys(RANGES) as (keyof typeof RANGES)[]).map((k) => ({ value: k, label: RANGE_LABEL[k] }))} />
         <span className="num ml-auto text-caption text-faint">{data ? `${data.total} kèo` : ''}</span>
         <SignalHistoryPurgeButton onDone={() => void reload()} />
       </div>
 
       {error && !data ? <ErrorState message={error} onRetry={reload} /> : null}
       {!data && !error ? <SkeletonRows rows={8} cols={[8, 30, 10, 12, 30]} /> : null}
-      {data && !data.items.length ? <Empty icon={History}>Không có kèo nào trong khoảng thời gian này.</Empty> : null}
+      {data && !data.items.length ? <Empty icon={History}>{q || sport || market ? 'Không có kèo nào khớp bộ lọc.' : 'Không có kèo nào trong khoảng thời gian này.'}</Empty> : null}
 
       {data?.items.length ? (
         mobile ? (

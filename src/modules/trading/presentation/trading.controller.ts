@@ -12,7 +12,11 @@ import {
   Query,
 } from '@nestjs/common';
 import { z } from 'zod';
-import { ApiZodBody } from '../../../shared/presentation/openapi.js';
+import {
+  ApiZodBody,
+  ApiZodQuery,
+} from '../../../shared/presentation/openapi.js';
+import { queryDate } from '../../../shared/presentation/query-date.js';
 import {
   CurrentPrincipal,
   RequirePermissions,
@@ -20,6 +24,10 @@ import {
 import { TradingAdmin } from '../application/trading-admin.js';
 import { ExposureAdmin } from '../application/exposure-admin.js';
 import { OneClickAdmin } from '../application/one-click-admin.js';
+import {
+  ONE_CLICK_OUTCOMES,
+  OneClickHistoryRecorder,
+} from '../application/one-click-history.js';
 import { TRADING_PERMISSIONS as P } from '../application/trading.permissions.js';
 import { TRADE_STATUSES } from '../application/trade-attempt.js';
 import { STAKE_TRENDS } from '../domain/stake-plan.js';
@@ -155,9 +163,20 @@ const ExposureResetBody = z.union([
 ]);
 
 const OneClickQuery = z.object({ profileId: z.string().min(1) });
+const OneClickHistoryQuery = z.object({
+  profileId: z.string().min(1).optional(),
+  q: z.string().trim().max(200).optional(),
+  outcome: z.enum(ONE_CLICK_OUTCOMES).optional(),
+  from: queryDate(),
+  to: queryDate(),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
 const OneClickEnterBody = z.object({
   profileId: z.string().min(1),
   signalId: z.string().min(1),
+  /** Tiền mục tiêu chân csgoempire người nhập; bỏ trống = theo hạng của profile. */
+  targetStake: z.number().positive().max(1_000_000).optional(),
 });
 
 const StatsQuery = z.object({
@@ -176,6 +195,8 @@ export class TradingController {
     @Inject(TradingAdmin) private readonly _admin: TradingAdmin,
     @Inject(ExposureAdmin) private readonly _exposure: ExposureAdmin,
     @Inject(OneClickAdmin) private readonly _oneClick: OneClickAdmin,
+    @Inject(OneClickHistoryRecorder)
+    private readonly _ocHistory: OneClickHistoryRecorder,
   ) {}
 
   // ------------------------------------------------------------- tài khoản
@@ -409,13 +430,25 @@ export class TradingController {
     return this._oneClick.list(OneClickQuery.parse(q).profileId);
   }
 
+  @Get('oneclick/history')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Lịch sử On click',
+    description:
+      'Quyền: trading:read. Mỗi profile × kèo một dòng: lên bảng lúc, số lần cập nhật, phân tích gần nhất, rời bảng lúc / vì sao (endReason: manual:<kết quả> | cancelled:<lý do hủy> | expired | result:<kết quả> | app_restart). outcome lọc: open | manual | cancelled | expired | auto | other. q = mã kèo (phần đầu) hoặc tên đội / room. Trả { total, items }.',
+  })
+  @ApiZodQuery(OneClickHistoryQuery)
+  oneClickHistory(@Query() q: unknown) {
+    return this._ocHistory.list(OneClickHistoryQuery.parse(q));
+  }
+
   @Post('oneclick/enter')
   @HttpCode(200)
   @RequirePermissions(P.MANAGE)
   @ApiOperation({
     summary: 'Người vào lệnh (giấy) một kèo On click',
     description:
-      'Quyền: trading:manage. Task trader của profile đọc lại sổ lệnh và vào lệnh như bot (bảng tiền, số lệnh mỗi hạng, hạn mức trận), ghi kèm người vào (detail.manual.by). Kết quả hiện ở Lệnh giấy. 404 = kèo không còn trên bảng.',
+      'Quyền: trading:manage. Task trader của profile đọc lại sổ lệnh và vào lệnh như bot (bảng tiền, số lệnh mỗi hạng, hạn mức trận), ghi kèm người vào (detail.manual.by). targetStake = tiền mục tiêu người nhập thay tiền của hạng; vẫn taker như bot (mức giá hết lãi thì dừng, vào ít hơn). Kết quả hiện ở Lệnh giấy. 404 = kèo không còn trên bảng.',
   })
   @ApiZodBody(OneClickEnterBody)
   async oneClickEnter(
@@ -428,6 +461,7 @@ export class TradingController {
         b.profileId,
         b.signalId,
         principal?.id ?? 'unknown',
+        b.targetStake,
       ),
     );
   }

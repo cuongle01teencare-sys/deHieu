@@ -7,6 +7,10 @@ const OneClickMessageSchema = z.union([
     profileId: z.string().min(1),
     signalId: z.string().min(1),
     removed: z.literal(true),
+    /** Vì sao rời bảng: cancelled:<lý do hủy> | manual:<kết quả> | result:<kết quả>. */
+    reason: z.string().max(300).optional(),
+    /** Người bấm vào lệnh (manual). */
+    by: z.string().max(200).optional(),
   }),
   z.object({
     profileId: z.string().min(1),
@@ -26,6 +30,18 @@ export interface OneClickCandidate {
   readonly analysis: TradeAttempt;
 }
 
+/** Thay đổi trên bảng, để ghi lịch sử On click. */
+export type OneClickEvent =
+  | { readonly type: 'upsert'; readonly candidate: OneClickCandidate }
+  | {
+      readonly type: 'end';
+      readonly profileId: string;
+      readonly signalId: string;
+      readonly reason: string;
+      readonly by: string | null;
+      readonly at: number;
+    };
+
 /**
  * Bảng On click (trong bộ nhớ app): kèo trader của từng profile KHÔNG tự vào vì giá bán thấp nhất
  * Polymarket ≥ ngưỡng, chờ người bấm vào lệnh. Trader gửi lại mỗi lần kèo được làm mới; gỡ khi kèo
@@ -39,24 +55,53 @@ export class OneClickBoard {
 
   constructor(private readonly _now: () => number = Date.now) {}
 
-  apply(payload: unknown): void {
+  apply(payload: unknown): OneClickEvent {
     const m = OneClickMessageSchema.parse(payload);
     if ('removed' in m) {
       this._byProfile.get(m.profileId)?.delete(m.signalId);
-      return;
+      return {
+        type: 'end',
+        profileId: m.profileId,
+        signalId: m.signalId,
+        reason: m.reason ?? 'removed',
+        by: m.by ?? null,
+        at: this._now(),
+      };
     }
     let p = this._byProfile.get(m.profileId);
     if (!p) {
       p = new Map<string, OneClickCandidate>();
       this._byProfile.set(m.profileId, p);
     }
-    p.set(m.signalId, {
+    const candidate: OneClickCandidate = {
       profileId: m.profileId,
       signalId: m.signalId,
       expiresAt: m.expiresAt,
       updatedAt: this._now(),
       analysis: m.candidate,
-    });
+    };
+    p.set(m.signalId, candidate);
+    return { type: 'upsert', candidate };
+  }
+
+  /** Gỡ kèo đã hết hạn (không được làm mới); trả về để ghi lịch sử. */
+  sweep(): OneClickEvent[] {
+    const now = this._now();
+    const out: OneClickEvent[] = [];
+    for (const p of this._byProfile.values())
+      for (const [id, c] of p)
+        if (c.expiresAt <= now) {
+          p.delete(id);
+          out.push({
+            type: 'end',
+            profileId: c.profileId,
+            signalId: id,
+            reason: 'expired',
+            by: null,
+            at: now,
+          });
+        }
+    return out;
   }
 
   /** Kèo còn hiệu lực, mới cập nhật trước. */
@@ -64,8 +109,9 @@ export class OneClickBoard {
     const p = this._byProfile.get(profileId);
     if (!p) return [];
     const now = this._now();
-    for (const [id, c] of p) if (c.expiresAt <= now) p.delete(id);
-    return [...p.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...p.values()]
+      .filter((c) => c.expiresAt > now)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   get(profileId: string, signalId: string): OneClickCandidate | null {

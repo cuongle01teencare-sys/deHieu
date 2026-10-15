@@ -88,6 +88,34 @@ export interface RiskLimits {
 
 export const DEFAULT_RISK: RiskLimits = { minNetMargin: 0.01, matchCapUsd: 0, maxSignalAgeMs: 3_000, maxEntriesPerTier: 1, ignoreCancelReasons: ['better_opportunity'], markets: null, oneClickMinPrice: 0.5 };
 
+/** Kết quả của kèo On click (lọc lịch sử). */
+export type OneClickOutcome = 'open' | 'manual' | 'cancelled' | 'expired' | 'auto' | 'other';
+
+/** GET /trading/oneclick/history — mỗi profile × kèo một dòng. */
+export interface OneClickHistoryEntry {
+  profileId: string;
+  signalId: string;
+  room: string;
+  sport: string;
+  market: string;
+  phase: string;
+  comboId: string;
+  teams: [string, string];
+  signalMargin: number;
+  tierName: string | null;
+  minAsk: number | null;
+  threshold: number | null;
+  analysis: TradeAttempt;
+  updates: number;
+  firstAt: number;
+  lastAt: number;
+  expiresAt: number;
+  endedAt: number | null;
+  /** manual:<kết quả> | cancelled:<lý do hủy> | expired | result:<kết quả> | app_restart */
+  endReason: string | null;
+  enteredBy: string | null;
+}
+
 /** GET /trading/oneclick?profileId= — kèo chờ người vào lệnh. */
 export interface OneClickCandidate {
   profileId: string;
@@ -135,6 +163,8 @@ export interface TradeLeg {
   url?: string | null;
   /** Giờ bắt đầu trận theo sàn này lúc kèo phát (ms). */
   startsAt?: number | null;
+  /** Trận thứ `no` / `of` trận trong giải `name` theo sàn này (trong các trận sàn đang liệt kê). */
+  tournament?: { name: string | null; no: number; of: number } | null;
 }
 
 /** Một mức giá của sổ lệnh Polymarket lúc quyết định. */

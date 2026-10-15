@@ -1,6 +1,7 @@
 import type { TradeAttemptRepository } from './trading.ports.js';
 import { TradeAttemptSchema } from './trade-attempt.js';
 import type { TraderConfigSync } from './trader-config.sync.js';
+import type { OneClickHistoryRecorder } from './one-click-history.js';
 import type { OneClickBoard } from './one-click-board.js';
 
 /** Kind của task trader (khai báo ở danh mục task). */
@@ -35,6 +36,7 @@ export class TraderDataHandler {
       sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     },
     private readonly _board: OneClickBoard | null = null,
+    private readonly _history: OneClickHistoryRecorder | null = null,
   ) {}
 
   async execute(msg: TraderDataMessage): Promise<void> {
@@ -47,7 +49,8 @@ export class TraderDataHandler {
       return;
     }
     if (msg.channel === 'oneclick') {
-      this._board?.apply(msg.payload);
+      const ev = this._board?.apply(msg.payload);
+      if (ev && this._history) await this._history.record(ev);
       return;
     }
     if (msg.channel === 'trade') {

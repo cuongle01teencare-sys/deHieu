@@ -122,6 +122,12 @@ const EXPOSURE_SKIPS = new Set([
   'ALREADY_ENTERED',
 ]);
 
+/** Người vào lệnh ở On click: ai bấm, tiền mục tiêu người nhập (bỏ trống = theo hạng của profile). */
+interface ManualEntry {
+  readonly by: string;
+  readonly targetStake?: number;
+}
+
 /** Nguồn của một lần xử lý kèo. */
 type Source =
   | 'hub'
@@ -211,8 +217,16 @@ const bare = (l: HubLeg | undefined) =>
         // link trang trận trên sàn (để admin mở kiểm tra)
         url: l.ref.url ?? null,
         startsAt: typeof l.startsAt === 'number' ? l.startsAt : null,
+        tournament: tournamentOf(l),
       }
     : null;
+
+/** Thứ tự trận trong giải theo sàn của chân (ref tour/tno/tof do ACL gắn lúc nhận dữ liệu). */
+const tournamentOf = (l: HubLeg) => {
+  const no = Number(l.ref.tno);
+  const of = Number(l.ref.tof);
+  return no > 0 && of > 0 ? { name: l.ref.tour ?? null, no, of } : null;
+};
 
 /**
  * Trader arbitrage (giấy): consumer của ConsumerHub. Mỗi profile một task, mọi task nhận CÙNG một
@@ -272,10 +286,20 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       }
       // người bấm "Vào lệnh" ở On click: đọc lại sổ lệnh rồi vào như bot (bỏ cổng giá On click)
       if (name === 'manual_enter') {
-        const { signalId, by } = (data ?? {}) as {
+        const { signalId, by, targetStake } = (data ?? {}) as {
           signalId?: unknown;
           by?: unknown;
+          targetStake?: unknown;
         };
+        if (
+          targetStake !== undefined &&
+          !(
+            typeof targetStake === 'number' &&
+            targetStake > 0 &&
+            targetStake <= 1e6
+          )
+        )
+          throw new Error('TARGET_STAKE_INVALID: tiền mục tiêu phải > 0');
         const l =
           typeof signalId === 'string' ? this._live.get(signalId) : undefined;
         const run = this._run;
@@ -285,6 +309,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           throw new Error('SIGNAL_BUSY: kèo đang được xử lý, thử lại');
         void this._handle(run.ctx, l.signal, run, 'force', {
           by: typeof by === 'string' ? by : 'unknown',
+          ...(typeof targetStake === 'number' ? { targetStake } : {}),
         }).catch((e) => run.ctx.warn(e));
         return;
       }
@@ -339,7 +364,12 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           onCancel: (c) => {
             if (this._live.get(c.signalId)?.oneClick)
               ctx.emit(
-                { profileId: p.profileId, signalId: c.signalId, removed: true },
+                {
+                  profileId: p.profileId,
+                  signalId: c.signalId,
+                  removed: true,
+                  reason: `cancelled:${c.reason}`,
+                },
                 CH_ONECLICK,
               );
             this._live.delete(c.signalId);
@@ -433,7 +463,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
      */
     source: Source = 'hub',
     /** Người vào lệnh từ On click (không phải bot). */
-    manual: { readonly by: string } | null = null,
+    manual: ManualEntry | null = null,
   ): Promise<void> {
     const startedAt = Date.now();
     const cfg = this._config;
@@ -490,7 +520,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     cfg: TraderConfig,
     startedAt: number,
     live: LiveSignal | undefined,
-    manual: { readonly by: string } | null,
+    manual: ManualEntry | null,
     source: Source = 'hub',
   ): Promise<void> {
     const profileId = ctx.params.profileId;
@@ -504,10 +534,24 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     const poly = s.legs.find((l) => l.tenant === 'polymarket');
     // chỉ chọn trong các hạng profile được vào: hạng không tick bị loại TRƯỚC khi chọn,
     // nên kèo khớp cả hạng tick lẫn hạng không tick (khoảng chồng nhau) vẫn vào theo hạng tick
-    const pick = targetStake(
+    const tierPick = targetStake(
       cfg.stakeTable.filter((r) => r.enabled),
       s.margin,
     );
+    // người nhập tiền mục tiêu ở On click: thay tiền của hạng; vẫn taker như bot (mức giá hết lãi thì
+    // dừng → vào ít hơn). Tiền tối thiểu không vượt tiền người nhập.
+    const manualStake = manual?.targetStake;
+    const pick =
+      tierPick && manualStake
+        ? {
+            ...tierPick,
+            stake: manualStake,
+            row: {
+              ...tierPick.row,
+              minStake: Math.min(tierPick.row.minStake, manualStake),
+            },
+          }
+        : tierPick;
     // chỉ để ghi lý do: không có hạng tick nào khớp thì kèo thuộc hạng nào (nếu có)
     const other = pick ? null : targetStake(cfg.stakeTable, s.margin);
     const base = {
@@ -531,11 +575,24 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       tierName: pick?.row.tierName ?? other?.row.tierName ?? null,
     };
     let marketDataAt: number | null = null;
-    /** Gỡ kèo khỏi bảng On click (kết quả mới không còn là "chờ người vào"). */
-    const leaveOneClick = () => {
+    /**
+     * Gỡ kèo khỏi bảng On click (kết quả mới không còn là "chờ người vào"), kèm lý do cho lịch sử:
+     * `manual:<status>[:<mã>]` = người bấm vào lệnh, `result:<status>[:<mã>]` = bot xét lại ra kết quả khác.
+     */
+    const leaveOneClick = (status: Status, reason: string | null) => {
       if (!live?.oneClick) return;
       live.oneClick = false;
-      ctx.emit({ profileId, signalId: s.signalId, removed: true }, CH_ONECLICK);
+      const code = reasonCode(reason);
+      ctx.emit(
+        {
+          profileId,
+          signalId: s.signalId,
+          removed: true,
+          reason: `${manual ? 'manual' : 'result'}:${status}${code ? `:${code}` : ''}`,
+          ...(manual ? { by: manual.by } : {}),
+        },
+        CH_ONECLICK,
+      );
     };
     const build = (
       status: Status,
@@ -617,12 +674,12 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         return;
       if (live)
         live.last = { status, reason, configKey: configKey(reason, cfg) };
-      leaveOneClick();
+      leaveOneClick(status, reason);
       ctx.emit(build(status, reason, r), CH_TRADE);
     };
     /** Bỏ qua không ghi lệnh (chỉ nhớ kết quả để xét lại khi cấu hình liên quan đổi). */
     const quiet = (reason: string) => {
-      leaveOneClick();
+      leaveOneClick('skipped', reason);
       if (live)
         live.last = {
           status: 'skipped',

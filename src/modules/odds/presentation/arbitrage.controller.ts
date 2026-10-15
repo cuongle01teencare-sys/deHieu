@@ -84,6 +84,10 @@ const HistoryQuery = z.object({
   status: z.enum(SIGNAL_STATUSES).optional(),
   phase: z.enum(PHASES).optional(),
   room: z.string().optional(),
+  /** Mã kèo (đầy đủ / phần đầu) hoặc tên đội, room. */
+  q: z.string().trim().max(200).optional(),
+  sport: z.string().optional(),
+  market: z.string().optional(),
   from: queryDate(),
   to: queryDate(),
   limit: z.coerce.number().int().min(1).max(500).default(50),
@@ -219,7 +223,7 @@ export class ArbitrageController {
   @ApiOperation({
     summary: 'Lịch sử kèo đã phát (mới nhất trước)',
     description:
-      'Quyền: arbitrage:read. status: active | superseded | cancelled | abandoned.',
+      'Quyền: arbitrage:read. status: active | superseded | cancelled | abandoned. q = mã kèo (đầy đủ hoặc phần đầu) hoặc tên đội / room (chứa); sport, market lọc đúng.',
   })
   @ApiZodQuery(HistoryQuery)
   history(@Query() query: unknown) {

@@ -561,7 +561,11 @@ Mỗi profile có ngưỡng **Chuyển On click khi giá bán thấp nhất ≥*
 - Lệnh giấy ghi **một** dòng *Bỏ qua · Chuyển On click* khi kèo vừa chuyển sang; các lần làm mới sau chỉ cập nhật bảng On click.
 - Trang On click chọn profile ở đầu trang; danh sách tự làm mới, kèo bị hủy, hết hạn hoặc đã vào thì biến mất. Bấm một dòng để xem đủ phân tích như lệnh bot.
 - Bấm **Vào lệnh (giấy)**: trader của profile đọc lại sổ lệnh ngay lúc đó và vào như bot (lãi tối thiểu, số lệnh mỗi cửa mỗi hạng, hạn mức trận vẫn áp; bỏ qua kiểm tra "kèo quá cũ"). Kết quả hiện ở Lệnh giấy với nhãn *vào tay bởi …*. Nếu lúc bấm sổ lệnh đã hết lãi hoặc đủ số lệnh, dòng ghi lý do bỏ qua như bot.
+- **Tiền mục tiêu nhập tay:** mỗi kèo có ô tiền mục tiêu (mặc định tiền của hạng trong profile). Nhập xong trang tính lại ngay tiền hai chân, số share, giá trung bình và lãi theo **cơ chế taker như bot**: mua từ mức giá rẻ nhất, mức nào lãi ròng sau phí dưới ngưỡng thì dừng, nên có thể vào **ít hơn** số đã nhập (trang báo rõ). Đây là ước tính trên sổ lệnh lúc trader cập nhật kèo; bấm vào lệnh thì trader đọc lại sổ thật và tính lại với đúng số tiền đó. Tiền tối thiểu là mức nhỏ hơn giữa tiền tối thiểu của hạng và tiền đã nhập.
+- **Trận thứ mấy trong giải:** cột "Trận trong giải" hiện riêng theo từng sàn (vd csgoempire 8/12, Polymarket 9/14). Hệ thống đếm ngay lúc nhận dữ liệu: gom các trận cùng giải mà sàn đang liệt kê (csgoempire theo mã giải của feed, Polymarket theo series của event), xếp theo giờ bắt đầu. Hai sàn có thể lệch vì mỗi sàn liệt kê số trận khác nhau; sàn thường không liệt kê trận đã xong nên đây là thứ tự trong các trận sàn còn hiện.
 - Bảng On click nằm trong bộ nhớ app: restart app thì trống đến lần trader làm mới kèo kế tiếp.
+- Tab **Lịch sử** của trang On click lưu trong database mọi kèo từng lên bảng: lên lúc nào, cập nhật bao nhiêu lần, phân tích gần nhất, **rời bảng lúc nào và vì sao**: người bấm vào lệnh (ai, kết quả), kèo bị hủy (lý do), hết hạn, bot tự vào vì giá xuống dưới ngưỡng, bot xét lại và bỏ (hết lãi…), app khởi động lại. Lọc theo kết quả, tìm theo mã kèo hoặc tên đội.
+- Tìm một kèo cụ thể: **Kèo → Lịch sử**, gõ mã kèo (đủ hoặc vài ký tự đầu) hoặc tên đội, chọn "Tất cả" thời gian. Mã kèo trong chi tiết lệnh giấy bấm được để nhảy thẳng tới đó.
 
 ### Sổ phơi nhiễm (Redis) và thống kê Lệnh giấy
 

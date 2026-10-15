@@ -21,11 +21,14 @@ export class OneClickAdmin {
     profileId: string,
     signalId: string,
     by: string,
+    /** Tiền mục tiêu người nhập (bỏ trống = theo hạng của profile). */
+    targetStake?: number,
   ): Promise<OperationStatus<{ sent: true }>> {
     if (!this._board.get(profileId, signalId)) return { status: 'NOT_FOUND' };
     const r = await this._sync.sendToProfile(profileId, 'manual_enter', {
       signalId,
       by,
+      ...(targetStake !== undefined ? { targetStake } : {}),
     });
     if (r === 'NO_TASK')
       return {

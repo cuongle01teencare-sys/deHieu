@@ -19,6 +19,11 @@ const leg = z.object({
   url: z.string().nullable().default(null),
   /** Giờ bắt đầu trận theo sàn này lúc kèo phát (ms). */
   startsAt: num.nullable().default(null),
+  /** Trận thứ `no` / `of` trận trong giải `name` theo sàn này (các trận sàn đang liệt kê). */
+  tournament: z
+    .object({ name: z.string().nullable(), no: num, of: num })
+    .nullable()
+    .default(null),
 });
 
 /** Trạng thái một chân lệnh. Giấy = `simulated`; các trạng thái còn lại dành cho giao dịch thật. */

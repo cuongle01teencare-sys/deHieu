@@ -967,6 +967,12 @@ function history(search: string): ListResult<SignalHistoryItem> {
     .filter((s) => !q.get('status') || s.status === q.get('status'))
     .filter((s) => !q.get('phase') || s.phase === q.get('phase'))
     .filter((s) => !q.get('room') || s.room === q.get('room'))
+    .filter((s) => !q.get('sport') || s.sport === q.get('sport'))
+    .filter((s) => !q.get('market') || s.market === q.get('market'))
+    .filter((s) => {
+      const t = (q.get('q') ?? '').trim().toLowerCase();
+      return !t || s.signalId.toLowerCase().startsWith(t) || s.teams.join(' ').toLowerCase().includes(t) || s.room.toLowerCase().includes(t);
+    })
     .filter((s) => s.issuedAt >= from && s.issuedAt <= to);
   const limit = Number(q.get('limit') ?? 50);
   const offset = Number(q.get('offset') ?? 0);

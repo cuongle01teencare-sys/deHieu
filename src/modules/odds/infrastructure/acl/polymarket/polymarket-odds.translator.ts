@@ -22,6 +22,7 @@ import {
   POLYMARKET_MARKETS,
   POLYMARKET_SPORTS,
 } from './polymarket-odds.mapping.js';
+import { TournamentOrder } from '../tournament-order.js';
 
 interface MarketRoute {
   key: MatchKey | null;
@@ -39,6 +40,10 @@ interface MarketRoute {
   taskId: string;
   /** Trận đang live hay chưa — cập nhật mỗi lần descriptor làm mới danh sách trận. */
   phase: Phase;
+  /** Event (trận) chứa market này — để đếm thứ tự trận trong giải. */
+  eventId: string;
+  /** Tên giải (series) để hiển thị. */
+  tourLabel: string | null;
 }
 
 /** Đồng bộ tập token cần theo dõi với task stream (module nối vào lệnh của task). */
@@ -106,6 +111,8 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
   private readonly _misses = new Map<string, number>();
   /** taskId → số vòng liên tiếp đã giữ lại vì gỡ hàng loạt bất thường. */
   private readonly _held = new Map<string, number>();
+  /** Thứ tự trận trong giải (series của event), gắn vào ref của dòng kèo. */
+  private readonly _order = new TournamentOrder();
 
   translate(msg: TaskDataMessage): Promise<OddsLineChange[]> {
     if (msg.kind === 'polymarket.descriptor') {
@@ -130,6 +137,24 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
     const changes: OddsLineChange[] = [];
     const dropped: string[] = [];
 
+    // đếm thứ tự trận trong giải cho CẢ trang trước, để dòng kèo đầu tiên cũng có tổng số đúng
+    for (const raw of page.data) {
+      const ev = PolymarketEventSchema.safeParse(raw);
+      const sport = ev.success
+        ? POLYMARKET_SPORTS[ev.data.sports.sport?.sport ?? '']
+        : undefined;
+      if (!ev.success || !sport) continue;
+      const series = ev.data.series?.[0];
+      const tourKey = series?.id
+        ? `${sport}:s${series.id}`
+        : ev.data.sports.seriesSlug
+          ? `${sport}:${ev.data.sports.seriesSlug}`
+          : null;
+      const eventStart = Date.parse(ev.data.schedule.startTime ?? '');
+      if (tourKey && Number.isFinite(eventStart))
+        this._order.set(ev.data.id, tourKey, eventStart);
+    }
+
     for (const raw of page.data) {
       const ev = PolymarketEventSchema.safeParse(raw);
       if (!ev.success) {
@@ -141,6 +166,7 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
         this._skip(msg.kind, 'unsupported_sport');
         continue;
       }
+      const tourLabel = this._tourLabel(ev.data);
       // market có outcome không phải tên đội (vd totals: Over/Under) lấy cặp đội từ moneyline của event
       const eventTeams = this._eventTeams(ev.data.markets);
 
@@ -242,6 +268,8 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
           route.rawTeams = rawTeams;
           route.sourceMarket = m;
           route.startsAt = startsAt;
+          route.eventId = ev.data.id;
+          route.tourLabel = tourLabel;
           changes.push(...this._reindexRoute(route, false));
           route.phase = phase; // trận chuyển prematch → live
           if (eventUrl) route.eventUrl = eventUrl;
@@ -260,6 +288,8 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
             asks: flip ? [seed[1], seed[0]] : seed,
             taskId: msg.taskId,
             phase,
+            eventId: ev.data.id,
+            tourLabel,
           };
           route = created;
           this._markets.set(m.conditionId, created);
@@ -545,9 +575,20 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
           url: r.eventUrl,
           t0: r.tokens[0],
           t1: r.tokens[1],
+          // trận thứ tno / tof trong giải `tour` (theo các trận Polymarket đang liệt kê)
+          ...this._order.refFields(r.eventId, r.tourLabel),
         },
       }),
     };
+  }
+
+  /** Tên giải (series) để hiển thị. */
+  private _tourLabel(e: {
+    series?: { slug?: string | null; title?: string | null }[] | null;
+    sports: { seriesSlug?: string | null };
+  }): string | null {
+    const s = e.series?.[0];
+    return s?.title ?? s?.slug ?? e.sports.seriesSlug ?? null;
   }
 
   /** Original names from moneyline; retain them so aliases can also be deleted. */
@@ -569,6 +610,9 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
     r?.tokens.forEach((t) => this._tokens.delete(t));
     this._markets.delete(conditionId);
     this._misses.delete(conditionId);
+    // event không còn market nào → bỏ khỏi thứ tự giải
+    if (r && ![...this._markets.values()].some((x) => x.eventId === r.eventId))
+      this._order.delete(r.eventId);
     return r ? [...r.tokens] : [];
   }
 }

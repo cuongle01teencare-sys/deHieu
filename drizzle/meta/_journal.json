@@ -50,6 +50,13 @@
       "when": 1792045343166,
       "tag": "0006_signal_close_detail",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792070651881,
+      "tag": "0007_one_click_history",
+      "breakpoints": true
     }
   ]
 }

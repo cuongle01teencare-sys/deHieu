@@ -14,6 +14,7 @@ import type { Phase } from '../../../domain/phase.js';
 import { SptPubFeedSchema, type SptPubOutcomeDTO } from './sptpub-feed.dto.js';
 import { SPTPUB_MARKETS, SPTPUB_SPORTS } from './sptpub-odds.mapping.js';
 import { SptPubSourceLinks } from './sptpub-source-links.js';
+import { TournamentOrder } from '../tournament-order.js';
 
 const FEED_PHASE: Readonly<Record<string, Phase>> = {
   'sptpub.live': 'live',
@@ -64,6 +65,8 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
    */
   private readonly _seenBooks = new Map<string, Set<string>>();
   private readonly _sourceLinks = new Map<string, SptPubSourceLinks>();
+  /** Thứ tự trận trong giải (theo `desc.tournament`), gắn vào ref của dòng kèo. */
+  private readonly _order = new TournamentOrder();
 
   constructor(
     private readonly _teams: TeamNameResolver,
@@ -91,6 +94,14 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
     sourceLinks.update(parsed.data);
     this._sourceLinks.set(msg.taskId, sourceLinks);
     const changes: OddsLineChange[] = [];
+    // đếm thứ tự trận trong giải cho CẢ bản tin trước, để dòng kèo đầu tiên cũng có tổng số đúng
+    for (const [eventId, ev] of Object.entries(parsed.data.events ?? {})) {
+      const sport = ev?.desc ? SPTPUB_SPORTS[ev.desc.sport] : undefined;
+      const tour = (ev?.desc as { tournament?: unknown } | undefined)
+        ?.tournament;
+      if (ev?.desc && sport && typeof tour === 'string' && tour)
+        this._order.set(eventId, `${sport}:${tour}`, ev.desc.scheduled * 1000);
+    }
     for (const [eventId, ev] of Object.entries(parsed.data.events ?? {})) {
       if (msg.channel === 'snapshot') this._seen.get(msg.taskId)?.add(eventId);
       if (ev === null) {
@@ -104,7 +115,7 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
         if (!sport) this._skip(msg.kind, 'unsupported_sport');
         else if (ev.desc.virtual || ev.desc.type !== 'match' || !c1 || !c2)
           this._skip(msg.kind, 'invalid_event');
-        else
+        else {
           this._routes.set(eventId, {
             sport,
             teams: [c1.name, c2.name],
@@ -113,6 +124,15 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
             phase,
             sourceDesc: ev.desc,
           });
+          const tour = (ev.desc as { tournament?: unknown }).tournament;
+          if (typeof tour === 'string' && tour)
+            this._order.set(
+              eventId,
+              `${sport}:${tour}`,
+              ev.desc.scheduled * 1000,
+            );
+          else this._order.delete(eventId);
+        }
       }
       const route = this._routes.get(eventId);
       if (!route || !ev.markets || route.taskId !== msg.taskId) continue;
@@ -274,9 +294,16 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
       !!second.b ||
       !(Number(first.k) > 1) ||
       !(Number(second.k) > 1);
-    const sourceUrl = this._sourceLinks
-      .get(route.taskId)
-      ?.eventUrl(eventId, route.sourceDesc);
+    const links = this._sourceLinks.get(route.taskId);
+    const sourceUrl = links?.eventUrl(eventId, route.sourceDesc);
+    const tourId = (route.sourceDesc as { tournament?: unknown } | null)
+      ?.tournament;
+    const tourRef = this._order.refFields(
+      eventId,
+      typeof tourId === 'string'
+        ? (links?.tournamentSlug(tourId) ?? tourId)
+        : null,
+    );
     changes.push({
       type: 'set',
       key,
@@ -294,6 +321,8 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
           o0: oidFirst,
           o1: oidSecond,
           ...(sourceUrl ? { url: sourceUrl } : {}),
+          // trận thứ tno / tof trong giải `tour` (theo các trận sàn đang liệt kê)
+          ...tourRef,
         },
       }),
     });
@@ -303,6 +332,7 @@ export class SptPubOddsTranslator implements RawOddsTranslator {
   /** Gỡ trận: mọi room mà trận này đã thực sự ghi vào. */
   private _removeEvent(eventId: string): OddsLineChange[] {
     this._routes.delete(eventId);
+    this._order.delete(eventId);
     const books = this._books.get(eventId);
     this._books.delete(eventId);
     return books ? [...books.values()].flatMap((b) => this._remove(b)) : [];

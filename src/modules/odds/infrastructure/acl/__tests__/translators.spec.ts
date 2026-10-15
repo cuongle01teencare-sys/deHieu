@@ -91,6 +91,33 @@ describe('SptPubOddsTranslator', () => {
     );
   });
 
+  it('thứ tự trận trong giải: gom trận cùng giải, xếp theo giờ bắt đầu → ref tour/tno/tof', async () => {
+    const t = new SptPubOddsTranslator(teams);
+    const mk = (id: string, scheduled: number, tournament: string) => {
+      const e = event(id)[id];
+      return { [id]: { ...e, desc: { ...e.desc, scheduled, tournament } } };
+    };
+    await t.translate(
+      msg({
+        channel: 'snapshot',
+        payload: {
+          version: 1,
+          tournaments: { t1: { slug: 'iem-cologne' } },
+          events: {
+            ...mk('900', 3_000, 't1'),
+            ...mk('901', 1_000, 't1'),
+            ...mk('902', 2_000, 't2'),
+          },
+        },
+      }),
+    );
+    const out = await t.translate(
+      msg({ payload: { version: 2, events: mk('900', 3_000, 't1') } }),
+    );
+    const ref = out[0]?.type === 'set' ? out[0].line.props.ref : null;
+    expect(ref).toMatchObject({ tour: 'iem-cologne', tno: '2', tof: '2' });
+  });
+
   it('đưa odds về thứ tự đội của room, ref mang id gốc', async () => {
     const t = new SptPubOddsTranslator(teams);
     const [c] = await t.translate(
@@ -320,6 +347,51 @@ describe('PolymarketOddsTranslator', () => {
     expect(delta?.type === 'set' && delta.line.props.ref.url).toBe(
       first.line.props.ref.url,
     );
+  });
+
+  it('thứ tự trận trong giải theo series của event → ref tour/tno/tof', async () => {
+    const t = new PolymarketOddsTranslator(teams);
+    const ev = (id: string, start: string, cond: string) => ({
+      ...events[0],
+      id,
+      schedule: { startTime: start },
+      series: [{ id: 77, slug: 'cs2-iem', title: 'IEM Cologne' }],
+      markets: [{ ...events[0].markets[0], conditionId: cond }],
+    });
+    const out = await t.translate(
+      msg({
+        tenant: 'polymarket',
+        kind: 'polymarket.descriptor',
+        payload: [
+          ev('a', '2026-09-25T12:00:00Z', '0x1'),
+          ev('b', '2026-09-25T09:00:00Z', '0x2'),
+        ],
+      }),
+    );
+    const refs = out.flatMap((c) =>
+      c.type === 'set' ? [c.line.props.ref] : [],
+    );
+    expect(refs.find((r) => r.c === '0x2')).toMatchObject({
+      tour: 'IEM Cologne',
+      tno: '1',
+      tof: '2',
+    });
+    // đếm cả trang trước khi phát: event 'a' (đứng đầu trang) cũng thấy đủ 2 trận
+    expect(refs.find((r) => r.c === '0x1')).toMatchObject({
+      tno: '2',
+      tof: '2',
+    });
+    const again = await t.translate(
+      msg({
+        tenant: 'polymarket',
+        kind: 'polymarket.descriptor',
+        payload: [ev('a', '2026-09-25T12:00:00Z', '0x1')],
+      }),
+    );
+    expect(again[0]?.type === 'set' && again[0].line.props.ref).toMatchObject({
+      tno: '2',
+      tof: '2',
+    });
   });
 
   it('đảo token theo thứ tự đội của room và yêu cầu subscribe token', async () => {

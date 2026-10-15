@@ -107,6 +107,18 @@ export class DrizzleSignalHistoryRepository implements SignalHistoryRepository {
     if (q.status) where.push(eq(t.status, q.status));
     if (q.phase) where.push(eq(t.phase, q.phase));
     if (q.room) where.push(eq(t.room, q.room));
+    if (q.sport) where.push(eq(t.sport, q.sport));
+    if (q.market) where.push(eq(t.market, q.market));
+    const text = q.q?.trim().toLowerCase();
+    if (text) {
+      // thoát ký tự đặc biệt của LIKE (%, _, dấu gạch ngược — ký tự thoát mặc định của Postgres)
+      const esc = text.replace(/[\\%_]/g, (c) => `\\${c}`);
+      const like = `%${esc}%`;
+      const head = `${esc}%`;
+      where.push(
+        sql`(lower(${t.signalId}) like ${head} or lower(${t.teams}::text) like ${like} or lower(${t.room}) like ${like})`,
+      );
+    }
     if (q.from) where.push(gte(t.issuedAt, q.from));
     if (q.to) where.push(lte(t.issuedAt, q.to));
     return where.length ? and(...where) : undefined;

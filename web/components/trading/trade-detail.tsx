@@ -94,6 +94,17 @@ function explain(t: TradeAttempt, d: Detail): string {
 }
 
 const usd = (n: number) => `${n < 0 ? '-' : ''}${Math.abs(n).toFixed(2)}$`;
+
+/** "Trận 8/12 · iem-cologne" theo một sàn. */
+export function TournamentLine({ leg }: { leg: { tournament?: { name: string | null; no: number; of: number } | null } | null | undefined }) {
+  const t = leg?.tournament;
+  if (!t) return <div className="mt-1 text-caption text-faint">Không rõ thứ tự trong giải</div>;
+  return (
+    <div className="mt-1 text-caption text-muted-fg">
+      Trận thứ <span className="num text-fg">{t.no}</span>/<span className="num">{t.of}</span> trong giải{t.name ? <span className="text-fg"> {t.name}</span> : null}
+    </div>
+  );
+}
 const ms = (a: number | null | undefined, b: number | null | undefined) => (a != null && b != null ? `${Math.max(0, b - a)}ms` : '—');
 
 function SourceLink({ url, label }: { url: string | null | undefined; label: string }) {
@@ -199,7 +210,9 @@ export function TradeDetailPanel({
                   Xem trận trong Arb Ops →
                 </Link>
               ) : null}
-              <span className="num text-caption text-faint">signal {t.signalId}</span>
+              <Link href={`/keo?tab=history&q=${encodeURIComponent(t.signalId)}`} className="num text-caption text-faint hover:text-accent-text hover:underline">
+                kèo {t.signalId} → lịch sử kèo
+              </Link>
             </div>
           </DrawerSection>
 
@@ -217,6 +230,7 @@ export function TradeDetailPanel({
                   <div className="num mt-1 text-caption text-muted-fg">
                     {t.status === 'paper_filled' ? `cược ${usd(t.book.stake)} → thắng nhận ${usd(t.book.stake * t.book.odds)}` : 'không vào'}
                   </div>
+                  <TournamentLine leg={t.book} />
                 </div>
               ) : null}
               {t.polymarket ? (
@@ -234,9 +248,11 @@ export function TradeDetailPanel({
                       ? `${+t.polymarket.shares.toFixed(2)} share × ${t.polymarket.avgPrice.toFixed(3)} + phí ${usd(t.polymarket.fee)} = ${usd(t.polymarket.cost)}`
                       : 'không vào'}
                   </div>
+                  <TournamentLine leg={t.polymarket} />
                 </div>
               ) : null}
             </div>
+            <p className="mt-2 text-caption text-faint">Thứ tự trong giải: đếm các trận cùng giải mà sàn đang liệt kê, xếp theo giờ bắt đầu (sàn thường không liệt kê trận đã xong).</p>
           </DrawerSection>
 
           {d.depth ? (

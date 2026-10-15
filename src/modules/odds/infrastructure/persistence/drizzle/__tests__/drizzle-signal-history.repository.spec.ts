@@ -192,6 +192,24 @@ describe('Lịch sử kèo (recorder + DrizzleSignalHistoryRepository)', () => {
     expect(await repo.get('p-live')).toMatchObject({ status: 'active' });
   });
 
+  it('tìm theo mã kèo (phần đầu), tên đội; lọc môn, market', async () => {
+    await recorder.publish([
+      new ArbitrageSignalIssued(signal('0af4d189-aaaa', 0.03)),
+    ]);
+    await recorder.publish([new ArbitrageSignalIssued(signal('zz-2', 0.03))]);
+    await recorder.flush();
+    const q = (x: Record<string, string>) =>
+      repo.list({ limit: 10, offset: 0, ...x });
+    expect((await q({ q: '0AF4' })).map((e) => e.signalId)).toEqual([
+      '0af4d189-aaaa',
+    ]);
+    expect(await q({ q: 'sinners' })).toHaveLength(2);
+    expect(await q({ q: 'af4d' })).toHaveLength(0); // mã kèo: chỉ khớp phần đầu
+    expect(await q({ q: '100%' })).toHaveLength(0);
+    expect(await q({ sport: 'cs2', market: 'game-winner' })).toHaveLength(2);
+    expect(await q({ market: 'map-1-winner' })).toHaveLength(0);
+  });
+
   it('đếm theo bộ lọc (cho phân trang)', async () => {
     await recorder.publish([new ArbitrageSignalIssued(signal('c1', 0.03))]);
     await recorder.publish([new ArbitrageSignalIssued(signal('c2', 0.03))]);

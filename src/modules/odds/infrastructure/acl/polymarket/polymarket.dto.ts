@@ -45,7 +45,18 @@ export const PolymarketEventSchema = z.looseObject({
     .nullish(),
   sports: z.looseObject({
     sport: z.looseObject({ sport: z.string() }).nullish(),
+    seriesSlug: z.string().nullish(),
   }),
+  /** Giải (series) của trận trên Polymarket. */
+  series: z
+    .array(
+      z.looseObject({
+        id: z.union([z.string(), z.number()]).transform(String),
+        slug: z.string().nullish(),
+        title: z.string().nullish(),
+      }),
+    )
+    .nullish(),
   markets: z.array(z.unknown()).default([]),
 });
 

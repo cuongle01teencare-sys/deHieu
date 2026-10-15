@@ -5,6 +5,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
 } from 'drizzle-orm/pg-core';
@@ -136,3 +137,36 @@ export const drizzleTradingSettingsTable = pgTable('trading_settings', {
     .notNull()
     .$onUpdate(() => new Date()),
 });
+
+/** Lịch sử On click: mỗi profile × kèo một dòng (lên bảng, cập nhật, rời bảng vì sao). */
+export const drizzleOneClickHistoryTable = pgTable(
+  'one_click_history',
+  {
+    profileId: text('profile_id').notNull(),
+    signalId: text('signal_id').notNull(),
+    room: text('room').notNull(),
+    sport: text('sport').notNull(),
+    market: text('market').notNull(),
+    phase: text('phase').notNull(),
+    comboId: text('combo_id').notNull(),
+    teams: jsonb('teams').$type<[string, string]>().notNull(),
+    signalMargin: doublePrecision('signal_margin').notNull(),
+    tierName: text('tier_name'),
+    minAsk: doublePrecision('min_ask'),
+    threshold: doublePrecision('threshold'),
+    /** Phân tích "nếu vào bây giờ" gần nhất (TradeAttempt). */
+    analysis: jsonb('analysis').$type<Record<string, unknown>>().notNull(),
+    updates: integer('updates').default(1).notNull(),
+    firstAt: timestamp('first_at', { withTimezone: true }).notNull(),
+    lastAt: timestamp('last_at', { withTimezone: true }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    endReason: text('end_reason'),
+    enteredBy: text('entered_by'),
+  },
+  (t) => [
+    primaryKey({ columns: [t.profileId, t.signalId] }),
+    index('one_click_history_profile_first_idx').on(t.profileId, t.firstAt),
+    index('one_click_history_first_idx').on(t.firstAt),
+  ],
+);

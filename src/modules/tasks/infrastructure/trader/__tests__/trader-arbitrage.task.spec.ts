@@ -110,7 +110,13 @@ const signal = (id: string, margin = 0.06) => ({
       side: 0,
       pick: 'alpha',
       odds: 2,
-      ref: { e: '1', url: 'https://csgoempire.com/match-betting?bt-path=x' },
+      ref: {
+        e: '1',
+        url: 'https://csgoempire.com/match-betting?bt-path=x',
+        tour: 'iem-cologne',
+        tno: '3',
+        tof: '12',
+      },
       startsAt: 1_000_000,
     },
     {
@@ -252,6 +258,8 @@ describe('TraderArbitrageTask (giấy)', () => {
         tenant: 'sptpub',
         stake: 25,
         url: 'https://csgoempire.com/match-betting?bt-path=x',
+        // thứ tự trận trong giải theo sàn (ACL gắn vào ref)
+        tournament: { name: 'iem-cologne', no: 3, of: 12 },
       },
       detail: {
         depth: { maxPrice: 0.4, sharesAtEdge: 50 },
@@ -263,6 +271,7 @@ describe('TraderArbitrageTask (giấy)', () => {
         avgPrice: 0.4,
         fee: 0.6,
         url: null,
+        tournament: null,
       },
       totalCost: 45.6,
       payout: 50,
@@ -882,9 +891,91 @@ describe('TraderArbitrageTask (giấy)', () => {
     });
     // kèo đã vào → gỡ khỏi bảng
     await until(() => board().some((b) => b.removed === true));
+    // lý do rời bảng cho lịch sử: người bấm, kết quả, người vào
+    expect(board().find((b) => b.removed === true)).toMatchObject({
+      reason: 'manual:paper_filled',
+      by: 'alice',
+    });
     await expect(
       t.command('manual_enter', { signalId: 'khong-co', by: 'alice' }),
     ).rejects.toThrow(/SIGNAL_NOT_LIVE/);
+    await t.stop();
+  });
+
+  it('On click: người nhập tiền mục tiêu → vào theo tiền đó, vẫn taker (sổ mỏng thì vào ít hơn)', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    const base = config('A');
+    await t.command(
+      'config',
+      config('A', {
+        risk: { ...base.risk, oneClickMinPrice: 0.3, maxEntriesPerTier: 5 },
+      }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('oc3') });
+    await until(() => trades(t).length === 1);
+    // nhập 10$: odds 2 → cần 20 share, mức 0.40 có 50 share → vào đủ 10$
+    await t.command('manual_enter', {
+      signalId: 'oc3',
+      by: 'bob',
+      targetStake: 10,
+    });
+    await until(() => trades(t).length === 2);
+    expect(trades(t)[1]).toMatchObject({
+      status: 'paper_filled',
+      book: { stake: 10 },
+      polymarket: { shares: 20 },
+      detail: { manual: { by: 'bob', targetStake: 10 }, targetStake: 10 },
+    });
+    // nhập 80$: cần 160 share nhưng chỉ mức 0.40 (50 share) còn lãi → dừng ở 25$
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('oc4') });
+    await until(() => trades(t).length === 3);
+    await t.command('manual_enter', {
+      signalId: 'oc4',
+      by: 'bob',
+      targetStake: 80,
+    });
+    await until(() => trades(t).length === 4);
+    expect(trades(t)[3]).toMatchObject({
+      status: 'paper_filled',
+      book: { stake: 25 },
+      polymarket: { shares: 50 },
+      detail: { limitedBy: 'depth' },
+    });
+    await expect(
+      t.command('manual_enter', {
+        signalId: 'oc4',
+        by: 'bob',
+        targetStake: -1,
+      }),
+    ).rejects.toThrow(/TARGET_STAKE_INVALID/);
+    await t.stop();
+  });
+
+  it('On click: kèo bị hủy → rời bảng kèm lý do hủy', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    const base = config('A');
+    await t.command(
+      'config',
+      config('A', { risk: { ...base.risk, oneClickMinPrice: 0.3 } }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    const board = () =>
+      t.emitted.filter((e) => e.channel === 'oneclick').map((e) => e.payload);
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('oc2') });
+    await until(() => board().length === 1);
+    hub.broadcast({
+      type: 'cancel',
+      signalId: 'oc2',
+      reason: 'margin_decreased',
+    });
+    await until(() => board().length === 2);
+    expect(board()[1]).toEqual({
+      profileId: 'A',
+      signalId: 'oc2',
+      removed: true,
+      reason: 'cancelled:margin_decreased',
+    });
     await t.stop();
   });
 

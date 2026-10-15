@@ -9,6 +9,10 @@ export interface SignalHistoryQuery {
   readonly status?: SignalStatus;
   readonly phase?: Phase;
   readonly room?: string;
+  /** Mã kèo (đầy đủ hoặc phần đầu) hoặc tên đội / room (chứa, không phân biệt hoa thường). */
+  readonly q?: string;
+  readonly sport?: string;
+  readonly market?: string;
   readonly from?: Date;
   readonly to?: Date;
   readonly limit: number;

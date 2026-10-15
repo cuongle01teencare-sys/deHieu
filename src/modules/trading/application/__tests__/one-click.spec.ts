@@ -55,6 +55,53 @@ describe('On click', () => {
     expect(() => b.apply({ profileId: 'p1' })).toThrow();
   });
 
+  it('bảng trả sự kiện cho lịch sử: lên bảng, rời bảng kèm lý do / người bấm, hết hạn (sweep)', () => {
+    let now = 1_000;
+    const b = new OneClickBoard(() => now);
+    expect(
+      b.apply({
+        profileId: 'p1',
+        signalId: 's1',
+        expiresAt: 5_000,
+        candidate: candidate('s1'),
+      }),
+    ).toMatchObject({ type: 'upsert', candidate: { signalId: 's1' } });
+    b.apply({
+      profileId: 'p1',
+      signalId: 's2',
+      expiresAt: 2_000,
+      candidate: candidate('s2'),
+    });
+    expect(
+      b.apply({
+        profileId: 'p1',
+        signalId: 's1',
+        removed: true,
+        reason: 'manual:paper_filled',
+        by: 'admin',
+      }),
+    ).toEqual({
+      type: 'end',
+      profileId: 'p1',
+      signalId: 's1',
+      reason: 'manual:paper_filled',
+      by: 'admin',
+      at: 1_000,
+    });
+    now = 2_500;
+    expect(b.sweep()).toEqual([
+      {
+        type: 'end',
+        profileId: 'p1',
+        signalId: 's2',
+        reason: 'expired',
+        by: null,
+        at: 2_500,
+      },
+    ]);
+    expect(b.sweep()).toEqual([]);
+  });
+
   it('vào lệnh: gửi manual_enter cho trader của profile kèm người bấm; lỗi rõ ràng', async () => {
     const b = new OneClickBoard(() => 1_000);
     b.apply({

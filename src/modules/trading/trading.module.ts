@@ -47,6 +47,12 @@ import { ExposureAdmin } from './application/exposure-admin.js';
 import { OneClickBoard } from './application/one-click-board.js';
 import { OneClickAdmin } from './application/one-click-admin.js';
 import {
+  ONE_CLICK_HISTORY_REPOSITORY,
+  OneClickHistoryRecorder,
+  type OneClickHistoryRepository,
+} from './application/one-click-history.js';
+import { DrizzleOneClickHistoryRepository } from './infrastructure/persistence/drizzle/drizzle-one-click-history.repository.js';
+import {
   EXPOSURE_LEDGER_READER,
   type ExposureLedgerReader,
 } from './application/exposure.ports.js';
@@ -56,6 +62,8 @@ import type { Redis } from 'ioredis';
 
 /** Đối chiếu định kỳ cấu hình các task trader (bắt cả thay đổi hạng kèo ở module odds). */
 const CONFIG_RECONCILE_MS = 30_000;
+/** Nhịp gỡ kèo On click đã hết hạn (ghi lịch sử). */
+const ONE_CLICK_SWEEP_MS = 10_000;
 
 /**
  * Auto trade. Worker trader (task `trader.arbitrage`) là một consumer của ConsumerHub;
@@ -175,6 +183,18 @@ const CONFIG_RECONCILE_MS = 30_000;
     },
     { provide: OneClickBoard, useValue: new OneClickBoard() },
     {
+      provide: ONE_CLICK_HISTORY_REPOSITORY,
+      inject: [TransactionContext],
+      useFactory: (tx: TransactionContext) =>
+        new DrizzleOneClickHistoryRepository(tx),
+    },
+    {
+      provide: OneClickHistoryRecorder,
+      inject: [ONE_CLICK_HISTORY_REPOSITORY],
+      useFactory: (r: OneClickHistoryRepository) =>
+        new OneClickHistoryRecorder(r),
+    },
+    {
       provide: OneClickAdmin,
       inject: [OneClickBoard, TraderConfigSync],
       useFactory: (b: OneClickBoard, s: TraderConfigSync) =>
@@ -182,26 +202,50 @@ const CONFIG_RECONCILE_MS = 30_000;
     },
     {
       provide: TraderDataHandler,
-      inject: [TRADE_ATTEMPT_REPOSITORY, TraderConfigSync, OneClickBoard],
+      inject: [
+        TRADE_ATTEMPT_REPOSITORY,
+        TraderConfigSync,
+        OneClickBoard,
+        OneClickHistoryRecorder,
+      ],
       useFactory: (
         r: TradeAttemptRepository,
         s: TraderConfigSync,
         b: OneClickBoard,
-      ) => new TraderDataHandler(r, s, undefined, b),
+        h: OneClickHistoryRecorder,
+      ) => new TraderDataHandler(r, s, undefined, b, h),
     },
   ],
 })
 export class TradingModule implements OnModuleInit, OnApplicationShutdown {
   private readonly _logger = new Logger('Trading');
   private _reconcile: ReturnType<typeof setInterval> | null = null;
+  private _sweep: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     @Inject(TaskSupervisor) private readonly _supervisor: TaskSupervisor,
     @Inject(TraderDataHandler) private readonly _data: TraderDataHandler,
     @Inject(TraderConfigSync) private readonly _sync: TraderConfigSync,
+    @Inject(OneClickBoard) private readonly _board: OneClickBoard,
+    @Inject(OneClickHistoryRecorder)
+    private readonly _ocHistory: OneClickHistoryRecorder,
   ) {}
 
-  onModuleInit() {
+  async onModuleInit() {
+    // bảng On click nằm trong bộ nhớ: app khởi động lại → kèo đang mở trong lịch sử coi như rời bảng
+    // (trader gửi lại kèo còn sống → dòng được mở lại)
+    try {
+      await this._ocHistory.closeOpen('app_restart');
+    } catch (e: unknown) {
+      this._logger.warn(`lịch sử On click: ${String(e)}`);
+    }
+    // kèo hết hạn không được làm mới → rời bảng, ghi lịch sử
+    this._sweep = setInterval(() => {
+      for (const ev of this._board.sweep())
+        this._ocHistory
+          .record(ev)
+          .catch((e: unknown) => this._logger.warn(String(e)));
+    }, ONE_CLICK_SWEEP_MS);
     // adapter đầu vào: dữ liệu task trader (hỏi cấu hình, kết quả lệnh)
     this._supervisor.onData(async (msg) => {
       try {
@@ -220,5 +264,6 @@ export class TradingModule implements OnModuleInit, OnApplicationShutdown {
 
   onApplicationShutdown() {
     if (this._reconcile) clearInterval(this._reconcile);
+    if (this._sweep) clearInterval(this._sweep);
   }
 }

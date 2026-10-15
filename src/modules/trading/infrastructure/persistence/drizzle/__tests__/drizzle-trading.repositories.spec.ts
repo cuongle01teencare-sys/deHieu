@@ -39,6 +39,7 @@ const trade = (id: string, over: Partial<TradeAttempt> = {}): TradeAttempt => ({
     stake: 25,
     url: null,
     startsAt: null,
+    tournament: null,
   },
   polymarket: null,
   totalCost: 45.6,

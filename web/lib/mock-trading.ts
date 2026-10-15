@@ -97,8 +97,8 @@ let trades: TradeAttempt[] = Array.from({ length: 48 }, (_, i) => {
     reason: i === 7 ? 'SIGNAL_CANCELLED: margin_decreased' : filled ? null : SKIPS[i % SKIPS.length]!,
     signalMargin: margin,
     tierName: margin >= 0.05 ? 'VIP' : 'Thường',
-    book: { tenant: 'sptpub', side: 0, pick: teams[0], odds, stake, url: 'https://csgoempire.com/match-betting' },
-    polymarket: { tenant: 'polymarket', side: 1, pick: teams[1], odds: round2(1 / price), tokenId: `tok-${i}`, shares, avgPrice: price, fee, cost, url: `https://polymarket.com/event/${sport}-${teams.join('-').replace(/[^a-z0-9-]/g, '')}` },
+    book: { tenant: 'sptpub', side: 0, pick: teams[0], odds, stake, url: 'https://csgoempire.com/match-betting', tournament: { name: 'iem-cologne', no: 3 + (i % 5), of: 12 } },
+    polymarket: { tenant: 'polymarket', side: 1, pick: teams[1], odds: round2(1 / price), tokenId: `tok-${i}`, shares, avgPrice: price, fee, cost, url: `https://polymarket.com/event/${sport}-${teams.join('-').replace(/[^a-z0-9-]/g, '')}`, tournament: { name: 'IEM Cologne', no: 4 + (i % 5), of: 14 } },
     totalCost: filled ? total : 0,
     payout: filled ? shares : 0,
     profit: filled ? round2(shares - total) : 0,
@@ -170,6 +170,57 @@ export function mockTrading(method: string, path: string, search: string, body: 
     if (p === 'trades') {
       const before = Number(q.get('before') ?? Infinity);
       return ok(filtered().filter((t) => t.createdAt < before).slice(0, Number(q.get('limit') ?? 100)));
+    }
+    if (p === 'oneclick/history') {
+      const now = Date.now();
+      const ends: [string | null, string | null][] = [
+        [null, null],
+        ['manual:paper_filled', 'admin'],
+        ['cancelled:margin_decreased', null],
+        ['expired', null],
+        ['result:paper_filled', null],
+        ['result:skipped:NO_EDGE', null],
+        ['app_restart', null],
+      ];
+      const all = trades
+        .filter((t) => t.profileId === (q.get('profileId') ?? t.profileId) && t.status === 'paper_filled')
+        .slice(0, 14)
+        .map((t, k) => {
+          const [endReason, enteredBy] = ends[k % ends.length]!;
+          const firstAt = now - (k + 1) * 47 * 60_000;
+          return {
+            profileId: t.profileId,
+            signalId: t.signalId,
+            room: t.room,
+            sport: t.sport,
+            market: t.market,
+            phase: t.phase,
+            comboId: t.comboId,
+            teams: t.teams,
+            signalMargin: t.signalMargin,
+            tierName: t.tierName,
+            minAsk: 0.52 + (k % 4) * 0.03,
+            threshold: 0.5,
+            analysis: { ...t, reason: 'ONE_CLICK: giá bán thấp nhất ≥ 0.5', detail: { ...t.detail, minAsk: 0.52 + (k % 4) * 0.03, oneClickMinPrice: 0.5 } },
+            updates: 1 + (k % 3),
+            firstAt,
+            lastAt: firstAt + 5 * 60_000,
+            expiresAt: firstAt + 10 * 60_000,
+            endedAt: endReason ? firstAt + 7 * 60_000 : null,
+            endReason,
+            enteredBy,
+          };
+        });
+      const kind = (e: { endedAt: number | null; endReason: string | null }) =>
+        e.endedAt === null ? 'open' : e.endReason?.startsWith('manual:') ? 'manual' : e.endReason?.startsWith('cancelled:') ? 'cancelled' : e.endReason === 'expired' ? 'expired' : e.endReason?.startsWith('result:paper_filled') ? 'auto' : 'other';
+      const text = (q.get('q') ?? '').trim().toLowerCase();
+      const from = Number(q.get('from') ?? 0);
+      const items = all
+        .filter((e) => !q.get('outcome') || kind(e) === q.get('outcome'))
+        .filter((e) => e.firstAt >= from)
+        .filter((e) => !text || e.signalId.toLowerCase().startsWith(text) || e.teams.join(' ').toLowerCase().includes(text));
+      const limit = Number(q.get('limit') ?? 50);
+      return ok({ total: items.length, items: items.slice(0, limit) });
     }
     if (p === 'oneclick') {
       const pid = q.get('profileId') ?? '';
