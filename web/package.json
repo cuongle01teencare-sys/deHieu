@@ -12,6 +12,7 @@
     "start": "next start -p 3100",
     "typecheck": "tsc --noEmit",
     "test:match-links": "node --test scripts/match-links.test.mjs",
+    "test:push": "node --test scripts/push.test.mjs",
     "hash-password": "node scripts/hash-password.mjs"
   },
   "dependencies": {

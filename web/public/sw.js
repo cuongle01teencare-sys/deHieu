@@ -1,5 +1,5 @@
 /* Arb Ops service worker — thông báo đẩy + mở đúng màn khi bấm thông báo.
- * Khi tích hợp OneSignal: importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js');
+ * OneSignal dùng worker riêng ở /push/onesignal/OneSignalSDKWorker.js, không import ở đây.
  * Không cache HTML (trang cần phiên đăng nhập); dữ liệu offline dùng bản chụp trong localStorage. */
 self.addEventListener('install', () => {});
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));

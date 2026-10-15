@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { BellRing, Share, SquarePlus, WifiOff, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { fmtHM } from '@/lib/format';
-import { isIos, isStandalone, pushPermission, pushSupport, requestPush } from '@/lib/push';
+import { initializePush, isIos, isStandalone, pushPermission, pushSdkState, pushSubscribed, pushSupport, requestPush, type PushSdkState, type PushSupport } from '@/lib/push';
 import { cn } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Sheet } from '../ui/panel';
@@ -85,6 +85,7 @@ const SNOOZE_KEY = 'arbops-push-snooze';
 export function PushPromptManager() {
   const [open, setOpen] = useState<'push' | 'ios' | null>(null);
   useEffect(() => {
+    void initializePush().catch((error: unknown) => console.warn('Không khởi tạo được thông báo đẩy', error));
     const onOpen = (e: Event) => setOpen((e as CustomEvent<'push' | 'ios'>).detail);
     window.addEventListener('arbops:prompt', onOpen);
     let snoozed = false;
@@ -94,10 +95,10 @@ export function PushPromptManager() {
       /* bỏ qua */
     }
     const t = setTimeout(() => {
-      if (snoozed) return;
+      if (snoozed || pushSdkState() === 'disabled' || pushSdkState() === 'error') return;
       const s = pushSupport();
       if (s === 'ios-needs-install') setOpen('ios');
-      else if (s === 'supported' && pushPermission() === 'default') setOpen('push');
+      else if (s === 'supported' && pushSdkState() === 'ready' && pushPermission() === 'default') setOpen('push');
     }, 25_000);
     return () => {
       clearTimeout(t);
@@ -125,6 +126,7 @@ export const openPrompt = (which: 'push' | 'ios') => window.dispatchEvent(new Cu
 
 export function PushPromptSheet({ open, onOpenChange, onDone }: { open: boolean; onOpenChange: (v: boolean) => void; onDone?: () => void }) {
   const [busy, setBusy] = useState(false);
+  const install = useInstallState();
   return (
     <Sheet
       open={open}
@@ -142,13 +144,20 @@ export function PushPromptSheet({ open, onOpenChange, onDone }: { open: boolean;
           <Button
             variant="primary"
             loading={busy}
+            disabled={install.sdkState !== 'ready' || install.support !== 'supported'}
             onClick={async () => {
               setBusy(true);
-              const r = await requestPush();
-              setBusy(false);
-              onDone?.();
-              if (r === 'granted') toast.success('Đã bật thông báo trên thiết bị này');
-              else if (r === 'denied') toast.error('Trình duyệt đã chặn thông báo', { description: 'Mở cài đặt trình duyệt để cho phép lại.' });
+              try {
+                const r = await requestPush();
+                onDone?.();
+                if (r === 'granted') toast.success('Đã cho phép thông báo', { description: 'OneSignal đang hoàn tất đăng ký thiết bị.' });
+                else if (r === 'denied') toast.error('Trình duyệt đã chặn thông báo', { description: 'Mở cài đặt trình duyệt để cho phép lại.' });
+                else if (r === 'unsupported') toast.error('Thiết bị chưa hỗ trợ thông báo đẩy');
+              } catch (error) {
+                toast.error(error instanceof Error ? error.message : 'Không bật được thông báo');
+              } finally {
+                setBusy(false);
+              }
             }}
           >
             Bật thông báo
@@ -228,9 +237,19 @@ export function ServiceWorkerManager() {
 
 /** Thông tin cài đặt cho trang Thông báo. */
 export function useInstallState() {
-  const [s, set] = useState({ ios: false, standalone: false, permission: 'default' as NotificationPermission | 'unsupported' });
+  const [s, set] = useState({
+    ios: false,
+    standalone: false,
+    permission: 'default' as NotificationPermission | 'unsupported',
+    sdkState: 'loading' as PushSdkState,
+    support: 'unsupported' as PushSupport,
+    subscribed: false,
+  });
   useEffect(() => {
-    const read = () => set({ ios: isIos(), standalone: isStandalone(), permission: pushPermission() });
+    const read = () => set({
+      ios: isIos(), standalone: isStandalone(), permission: pushPermission(),
+      sdkState: pushSdkState(), support: pushSupport(), subscribed: pushSubscribed(),
+    });
     read();
     const t = setInterval(read, 2_000);
     return () => clearInterval(t);

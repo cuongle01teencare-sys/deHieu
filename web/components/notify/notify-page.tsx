@@ -24,16 +24,7 @@ export function NotifyPage() {
     savePrefs(n);
   };
 
-  const status =
-    install.permission === 'granted'
-      ? { tone: 'ok' as const, text: 'Đã bật trên thiết bị này' }
-      : install.permission === 'denied'
-        ? { tone: 'critical' as const, text: 'Trình duyệt đang chặn thông báo' }
-        : install.ios && !install.standalone
-          ? { tone: 'warn' as const, text: 'Cần thêm vào Màn hình chính' }
-          : install.permission === 'unsupported'
-            ? { tone: 'muted' as const, text: 'Trình duyệt không hỗ trợ' }
-            : { tone: 'muted' as const, text: 'Chưa bật' };
+  const status = installStatus(install);
 
   const rows: { key: keyof PushPrefs; title: string; desc: string; extra?: React.ReactNode }[] = [
     { key: 'critical', title: 'Sự cố nghiêm trọng', desc: 'Publisher FAILED, node mất kết nối, Redis/Postgres lỗi.' },
@@ -92,21 +83,21 @@ export function NotifyPage() {
           </div>
         </div>
         <div className="flex gap-2">
-          {install.permission === 'granted' ? (
+          {install.sdkState === 'ready' && install.permission === 'granted' && install.subscribed ? (
             <Button
               variant="secondary"
               onClick={async () => {
                 const ok = await sendTestNotification();
-                toast[ok ? 'success' : 'error'](ok ? 'Đã gửi thông báo thử' : 'Không gửi được — kiểm tra quyền thông báo');
+                toast[ok ? 'success' : 'error'](ok ? 'Đã hiển thị thông báo thử cục bộ' : 'Không hiển thị được — kiểm tra quyền thông báo');
               }}
             >
-              <Send /> Gửi thử thông báo
+              <Send /> Thử trên thiết bị
             </Button>
-          ) : install.ios && !install.standalone ? (
+          ) : install.sdkState !== 'disabled' && install.ios && !install.standalone ? (
             <Button variant="primary" onClick={() => setSheet('ios')}>
               Hướng dẫn cài
             </Button>
-          ) : install.permission === 'default' ? (
+          ) : install.sdkState === 'ready' && install.support === 'supported' && (install.permission === 'default' || install.permission === 'granted') ? (
             <Button variant="primary" onClick={() => setSheet('push')}>
               Bật thông báo
             </Button>
@@ -131,7 +122,7 @@ export function NotifyPage() {
         </ul>
       </Section>
 
-      <Section title="Thiết bị" description="Thiết bị đã đăng ký nhận thông báo cho tài khoản này">
+      <Section title="Thiết bị" description="Trạng thái đăng ký nhận thông báo trên thiết bị này">
         <ul>
           <li className="flex min-h-14 items-center gap-4 border-b border-line py-3">
             {install.standalone || install.ios ? <Smartphone className="size-4 stroke-[1.5] text-muted-fg" /> : <Laptop className="size-4 stroke-[1.5] text-muted-fg" />}
@@ -142,7 +133,7 @@ export function NotifyPage() {
               <div className="text-caption text-muted-fg">{status.text}</div>
             </div>
           </li>
-          <li className="py-3 text-caption text-faint">Thiết bị khác của tài khoản sẽ hiện ở đây sau khi tích hợp OneSignal (danh sách subscription theo external_id).</li>
+          <li className="py-3 text-caption text-faint">Nút thử trên thiết bị chỉ kiểm tra hiển thị cục bộ. Kiểm tra nhận push thực tế bằng cách gửi thông báo từ OneSignal dashboard.</li>
         </ul>
       </Section>
 
@@ -158,6 +149,17 @@ export function NotifyPage() {
       <IosInstallSheet open={sheet === 'ios'} onOpenChange={(v) => setSheet(v ? 'ios' : null)} />
     </div>
   );
+}
+
+function installStatus(install: ReturnType<typeof useInstallState>) {
+  if (install.sdkState === 'disabled') return { tone: 'muted' as const, text: 'Thông báo đẩy chưa được cấu hình' };
+  if (install.ios && !install.standalone) return { tone: 'warn' as const, text: 'Cần thêm vào Màn hình chính' };
+  if (install.support === 'unsupported') return { tone: 'muted' as const, text: 'Trình duyệt không hỗ trợ' };
+  if (install.sdkState === 'error') return { tone: 'critical' as const, text: 'Không kết nối được dịch vụ thông báo — hãy tải lại trang' };
+  if (install.sdkState === 'loading') return { tone: 'muted' as const, text: 'Đang kết nối dịch vụ thông báo…' };
+  if (install.permission === 'granted' && install.subscribed) return { tone: 'ok' as const, text: 'Đã bật trên thiết bị này' };
+  if (install.permission === 'denied') return { tone: 'critical' as const, text: 'Trình duyệt đang chặn thông báo' };
+  return { tone: 'muted' as const, text: 'Chưa đăng ký nhận thông báo' };
 }
 
 export const TEMPLATES = [
