@@ -364,7 +364,7 @@ function ProfileForm({
         <MarketPicker value={risk.markets} onChange={(markets) => setRisk({ ...risk, markets })} />
 
         <div className="h-px bg-line" />
-        <StakePlanEditor value={plan} onChange={setPlan} />
+        <StakePlanEditor value={plan} onChange={setPlan} defaultEntries={risk.maxEntriesPerTier} />
         <div className="h-px bg-line" />
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -377,7 +377,11 @@ function ProfileForm({
           <Field label="Bỏ kèo cũ hơn (giây)" htmlFor="pf-age" help="Tính từ lúc phát; 0 = không kiểm tra.">
             <NumInput id="pf-age" value={risk.maxSignalAgeMs / 1000} onValue={(v) => v !== undefined && setRisk({ ...risk, maxSignalAgeMs: Math.round(v * 1000) })} />
           </Field>
-          <Field label="Số lệnh mỗi cửa mỗi hạng" htmlFor="pf-entries" help="Cùng cửa ở cùng hạng vào tối đa bấy nhiêu lệnh, dù margin lên hay xuống; lên hạng khác thì tính lại từ đầu.">
+          <Field
+            label="Số lệnh mỗi cửa mỗi hạng (mặc định)"
+            htmlFor="pf-entries"
+            help="Cùng cửa ở cùng hạng vào tối đa bấy nhiêu lệnh, dù margin lên hay xuống; lên hạng khác thì tính lại từ đầu. Đặt riêng cho từng hạng ở cột Số lệnh mỗi cửa trong bảng tiền."
+          >
             <NumInput id="pf-entries" value={risk.maxEntriesPerTier} onValue={(v) => v !== undefined && v >= 1 && setRisk({ ...risk, maxEntriesPerTier: Math.floor(v) })} />
           </Field>
         </div>

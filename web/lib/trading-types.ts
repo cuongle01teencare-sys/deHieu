@@ -24,6 +24,8 @@ export interface TierStakeOverride {
   stake?: number;
   minStake?: number;
   maxStake?: number;
+  /** Số lệnh tối đa mỗi cửa ở hạng này (ghi đè mặc định của profile). */
+  maxEntries?: number;
 }
 
 export interface StakePlan {
@@ -61,6 +63,8 @@ export interface StakeRow {
   scaleWithinTier: boolean;
   /** false = profile không vào hạng này. */
   enabled?: boolean;
+  /** Số lệnh mỗi cửa riêng của hạng; null = theo mặc định profile. */
+  maxEntries?: number | null;
 }
 
 export interface StakePreview {

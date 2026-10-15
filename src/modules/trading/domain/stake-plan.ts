@@ -31,6 +31,8 @@ export interface TierStakeOverride {
   readonly stake?: number;
   readonly minStake?: number;
   readonly maxStake?: number;
+  /** Số lệnh tối đa mỗi cửa ở hạng này (ghi đè mặc định của profile). */
+  readonly maxEntries?: number;
 }
 
 export interface StakePlan {
@@ -104,6 +106,7 @@ export function resolveStakeTable(
       maxStake,
       scaleWithinTier: plan.scaleWithinTier,
       enabled: tierSelected(plan, t.id),
+      maxEntries: o.maxEntries ?? null,
     };
   });
 }
@@ -129,6 +132,15 @@ export function validateStakePlan(plan: StakePlan): string | null {
       o.minStake > o.maxStake
     )
       return `override ${id}: minStake > maxStake`;
+    if (
+      o.maxEntries !== undefined &&
+      !(
+        Number.isInteger(o.maxEntries) &&
+        o.maxEntries >= 1 &&
+        o.maxEntries <= 100
+      )
+    )
+      return `override ${id}: maxEntries phải là số nguyên 1–100`;
   }
   return null;
 }

@@ -27,7 +27,7 @@ function resolveStakeTable(plan: StakePlan, tiers: SignalTier[]): StakeRow[] {
       const stake = round2(plan.trend === 'custom' ? (o.stake ?? 0) : auto);
       const minStake = round2(o.minStake ?? stake * plan.minStakeRatio);
       const maxStake = round2(Math.max(stake, o.maxStake ?? stake * plan.maxStakeRatio));
-      return { tierId: t.id, tierName: t.name, minMargin: t.minMargin, maxMargin: t.maxMargin, stake, minStake: Math.min(minStake, stake), maxStake, scaleWithinTier: plan.scaleWithinTier, enabled: plan.tierIds == null || plan.tierIds.includes(t.id) };
+      return { tierId: t.id, tierName: t.name, minMargin: t.minMargin, maxMargin: t.maxMargin, stake, minStake: Math.min(minStake, stake), maxStake, scaleWithinTier: plan.scaleWithinTier, enabled: plan.tierIds == null || plan.tierIds.includes(t.id), maxEntries: o.maxEntries ?? null };
     });
 }
 

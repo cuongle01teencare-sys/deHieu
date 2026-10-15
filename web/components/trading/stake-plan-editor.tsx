@@ -51,7 +51,16 @@ const parseNum = (s: string): number | undefined => {
  * Kế hoạch vốn theo hạng kèo (dùng chung hạng với kênh thông báo): xu hướng giữa các hạng
  * + mức tối thiểu/tối đa, xem trước bảng tiền do backend tính (cùng công thức worker dùng).
  */
-export function StakePlanEditor({ value, onChange }: { value: StakePlan; onChange: (p: StakePlan) => void }) {
+export function StakePlanEditor({
+  value,
+  onChange,
+  defaultEntries,
+}: {
+  value: StakePlan;
+  onChange: (p: StakePlan) => void;
+  /** Số lệnh mỗi cửa mặc định của profile (ô trống ở cột Số lệnh = dùng số này). */
+  defaultEntries: number;
+}) {
   const [preview, setPreview] = useState<StakePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const set = (p: Partial<StakePlan>) => onChange({ ...value, ...p });
@@ -166,6 +175,9 @@ export function StakePlanEditor({ value, onChange }: { value: StakePlan; onChang
                 <TH numeric>
                   <HeadHint label="Tiền mục tiêu tối đa ($)" hint={COL_HINT.max} />
                 </TH>
+                <TH numeric>
+                  <HeadHint label="Số lệnh mỗi cửa" hint={COL_HINT.entries} />
+                </TH>
               </tr>
             </THead>
             <tbody>
@@ -203,6 +215,15 @@ export function StakePlanEditor({ value, onChange }: { value: StakePlan; onChang
                     <TD numeric>
                       <CellInput label={`Tiền mục tiêu tối đa ${r.tierName}`} value={o.maxStake} placeholder={String(r.maxStake)} onValue={(maxStake) => setOverride(r.tierId, { maxStake })} />
                     </TD>
+                    <TD numeric>
+                      <CellInput
+                        label={`Số lệnh mỗi cửa ${r.tierName}`}
+                        value={o.maxEntries}
+                        placeholder={String(defaultEntries)}
+                        narrow
+                        onValue={(v) => setOverride(r.tierId, { maxEntries: v === undefined ? undefined : Math.min(100, Math.max(1, Math.floor(v))) })}
+                      />
+                    </TD>
                   </TR>
                 );
               })}
@@ -227,6 +248,8 @@ const COL_HINT = {
     'Tiền cược bên csgoempire mà worker muốn vào cho một kèo của hạng này (mức cao nhất, không bao giờ vào hơn). Từ đó worker cần mua tiền × odds share Polymarket, ví dụ 50$ @ 2.0 → 100 share. Sổ Polymarket chỉ có 80 share còn lãi → csgoempire vào 80 ÷ 2.0 = 40$. Bật Tăng dần trong hạng thì đây là mục tiêu ở cận dưới của hạng.',
   min: 'Tiền cược csgoempire thấp nhất chấp nhận được, so với TỔNG share mua được ở mọi mức giá cộng lại (không phải từng người bán). Ví dụ mục tiêu 50$, tối thiểu 35$: mua được 80 share → 40$ ≥ 35$ thì vào 40$; chỉ 60 share → 30$ thì bỏ qua cả hai chân. Giữ nguyên cho mọi margin trong hạng, kể cả khi bật Tăng dần trong hạng.',
   max: 'Chỉ có tác dụng khi bật Tăng dần trong hạng. Khi bật: tiền mục tiêu tăng đều từ cột Tiền mục tiêu (ở cận dưới của hạng) lên số này (ở cận trên), theo margin của kèo.',
+  entries:
+    'Một cửa (cùng market, cùng cặp sàn/phía) ở hạng này được vào tối đa bấy nhiêu lệnh. Ô trống = theo "Số lệnh mỗi cửa mỗi hạng" mặc định của profile (ô bên dưới). Mỗi hạng đếm riêng.',
 } as const;
 
 /** Tăng dần trong hạng: mục tiêu tăng thêm bao nhiêu $ mỗi 0,1% margin (null = không tăng). */
@@ -323,11 +346,13 @@ function CellInput({
   value,
   placeholder,
   onValue,
+  narrow,
 }: {
   label: string;
   value: number | undefined;
   placeholder: string;
   onValue: (v: number | undefined) => void;
+  narrow?: boolean;
 }) {
   const [text, setText] = useState(value === undefined ? '' : String(value));
   useEffect(() => {
@@ -337,7 +362,7 @@ function CellInput({
     <Input
       aria-label={label}
       inputMode="decimal"
-      className="num ml-auto h-8 w-24 text-right"
+      className={cn('num ml-auto h-8 text-right', narrow ? 'w-16' : 'w-24')}
       value={text}
       placeholder={placeholder}
       onChange={(e) => {

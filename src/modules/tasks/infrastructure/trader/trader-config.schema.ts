@@ -30,6 +30,8 @@ export const TraderConfigSchema = z.object({
       scaleWithinTier: z.boolean(),
       // app cũ không gửi → vào hạng
       enabled: z.boolean().default(true),
+      // null = theo risk.maxEntriesPerTier
+      maxEntries: z.number().int().min(1).nullable().default(null),
     }),
   ),
   strategy: z.object({

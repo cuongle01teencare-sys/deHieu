@@ -438,6 +438,7 @@ Cột **Tiền mục tiêu**, **Tiền mục tiêu tối thiểu**, **Tiền m�
 | Tối thiểu (% tiền hạng) | Mức tối thiểu của mọi hạng = tiền hạng × %. Vào được ít hơn → bỏ qua. 0% = vào được bao nhiêu cũng vào |
 | Tối đa (× tiền hạng) | Chỉ dùng khi bật **Tăng dần trong hạng**. ×1 = không tăng |
 | Ô trong bảng | Ghi đè cho riêng hạng đó (để trống = tự tính theo các trường trên) |
+| Số lệnh mỗi cửa (cột cuối) | Số lệnh tối đa cho một cửa ở hạng đó; ô trống = theo "Số lệnh mỗi cửa mỗi hạng (mặc định)" của profile. Tăng số này thì cửa đang bị "Cửa này đã vào" của kèo còn sống được xét lại ngay |
 
 **Tiền mục tiêu và Tối thiểu cùng đơn vị** (USD cược csgoempire), chỉ khác vai trò: mục tiêu là mức muốn vào (và không vượt), tối thiểu là mức thấp nhất còn chấp nhận. Ví dụ mục tiêu 50$, tối thiểu 35$, odds 2.0 → cần 100 share Polymarket:
 

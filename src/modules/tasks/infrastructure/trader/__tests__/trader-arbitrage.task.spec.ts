@@ -78,6 +78,7 @@ const config = (
       maxStake: 25,
       scaleWithinTier: false,
       enabled: true,
+      maxEntries: null,
     },
   ],
   strategy: { id: 'arb-taker', params: {} },
@@ -317,6 +318,7 @@ describe('TraderArbitrageTask (giấy)', () => {
       maxStake: 25,
       scaleWithinTier: false,
       enabled: true,
+      maxEntries: null,
     };
     const std = {
       ...vip,
@@ -370,6 +372,41 @@ describe('TraderArbitrageTask (giấy)', () => {
       'paper_filled',
       'skipped',
     ]);
+    await t.stop();
+  });
+
+  it('số lệnh riêng của hạng ghi đè mặc định profile (hạng 3 lệnh, mặc định 1)', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    const base = config('A');
+    await t.command(
+      'config',
+      config('A', {
+        stakeTable: base.stakeTable.map((r) => ({ ...r, maxEntries: 3 })),
+      }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    for (const [i, id] of ['e1', 'e2', 'e3', 'e4'].entries()) {
+      hub.broadcast({ type: 'signal', kind: 'issued', signal: signal(id) });
+      await until(() => trades(t).length === i + 1);
+    }
+    expect(trades(t).map((x) => x.status)).toEqual([
+      'paper_filled',
+      'paper_filled',
+      'paper_filled',
+      'skipped',
+    ]);
+    // tăng số lệnh của hạng → cửa đang bị chặn được xét lại
+    await t.command(
+      'config',
+      config('A', {
+        stakeTable: base.stakeTable.map((r) => ({ ...r, maxEntries: 4 })),
+      }),
+    );
+    await until(() => trades(t).length === 5);
+    expect(trades(t)[4]).toMatchObject({
+      id: 'A:e4:2',
+      status: 'paper_filled',
+    });
     await t.stop();
   });
 
@@ -513,6 +550,7 @@ describe('TraderArbitrageTask (giấy)', () => {
 
   it('hạng chồng nhau: chỉ chọn trong hạng được tick (VIP không tick, VIP-auto tick → vào VIP-auto)', async () => {
     const row = {
+      maxEntries: null,
       minStake: 5,
       maxStake: 25,
       stake: 25,

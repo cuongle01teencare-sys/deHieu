@@ -17,6 +17,8 @@ export interface StakeRow {
   readonly scaleWithinTier: boolean;
   /** false = profile không vào hạng này (kèo thuộc hạng bị bỏ qua). Không có = vào. */
   readonly enabled?: boolean;
+  /** Số lệnh tối đa mỗi cửa ở hạng này; null/không có = theo mặc định của profile (risk.maxEntriesPerTier). */
+  readonly maxEntries?: number | null;
 }
 
 export const round2 = (n: number) => Math.round(n * 100) / 100;

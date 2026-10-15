@@ -59,6 +59,8 @@ const StakePlanBody = z.object({
         stake: money.optional(),
         minStake: money.optional(),
         maxStake: money.optional(),
+        /** Số lệnh tối đa mỗi cửa ở hạng này (ghi đè risk.maxEntriesPerTier). */
+        maxEntries: z.number().int().min(1).max(100).optional(),
       }),
     )
     .default({}),

@@ -58,6 +58,11 @@ const CONFIG_SKIPS: Readonly<Record<string, (c: TraderConfig) => unknown>> = {
   TIER_NOT_SELECTED: (c) => c.stakeTable,
   NO_TIER: (c) => c.stakeTable,
   UNKNOWN_STRATEGY: (c) => c.strategy.id,
+  // tăng số lệnh mỗi hạng → cửa đang bị chặn được xét lại
+  ALREADY_ENTERED: (c) => [
+    c.risk.maxEntriesPerTier,
+    c.stakeTable.map((r) => [r.tierId, r.maxEntries]),
+  ],
 };
 const reasonCode = (r: string | null) => (r ?? '').split(':')[0].trim();
 /**
@@ -488,7 +493,8 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           : `NO_TIER: margin ${(s.margin * 100).toFixed(2)}%`,
       );
     // mỗi hạng kèo tính riêng: cùng cửa ở hạng này đã đủ số lệnh → bỏ qua (kèo phát lại = signalId mới, vẫn cửa cũ)
-    const max = cfg.risk.maxEntriesPerTier;
+    // số lệnh mỗi cửa: riêng của hạng nếu có, không thì mặc định của profile
+    const max = pick.row.maxEntries ?? cfg.risk.maxEntriesPerTier;
     const entryKey = `entry:${profileId}:${s.room}:${s.comboId}:${pick.row.tierId}`;
     const entered = await deps.ledger.count(entryKey);
     if (entered >= max)
