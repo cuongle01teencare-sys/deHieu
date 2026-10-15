@@ -11,6 +11,7 @@ import { Eyebrow, PageHeader, Section } from '../ui/layout';
 import { Pill } from '../ui/status';
 import { IosInstallSheet, PushPromptSheet, useInstallState } from '../shell/pwa';
 import { NotificationList } from '../shell/notifications';
+import { ServerPushTest } from './server-push-test';
 
 /** Tùy chọn thông báo đẩy (OneSignal) cho thiết bị này + danh sách thiết bị + gửi thử. */
 export function NotifyPage() {
@@ -105,6 +106,8 @@ export function NotifyPage() {
         </div>
       </div>
 
+      <ServerPushTest subscribed={install.sdkState === 'ready' && install.permission === 'granted' && install.subscribed} />
+
       <Section title="Nhận thông báo cho">
         <ul>
           {rows.map((r) => (
@@ -133,7 +136,7 @@ export function NotifyPage() {
               <div className="text-caption text-muted-fg">{status.text}</div>
             </div>
           </li>
-          <li className="py-3 text-caption text-faint">Nút thử trên thiết bị chỉ kiểm tra hiển thị cục bộ. Kiểm tra nhận push thực tế bằng cách gửi thông báo từ OneSignal dashboard.</li>
+          <li className="py-3 text-caption text-faint">Nút "Thử trên thiết bị" chỉ kiểm tra hiển thị cục bộ. Kiểm tra nhận push thực tế bằng "Gửi thử tới thiết bị này" ở mục Gửi thử từ backend.</li>
         </ul>
       </Section>
 

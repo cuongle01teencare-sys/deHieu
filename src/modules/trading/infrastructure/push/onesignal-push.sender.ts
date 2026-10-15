@@ -1,5 +1,6 @@
 import type {
   PushMessage,
+  PushResult,
   PushSender,
 } from '../../application/one-click-notifier.js';
 
@@ -21,7 +22,7 @@ export class OneSignalPushSender implements PushSender {
     private readonly _fetch: typeof fetch = fetch,
   ) {}
 
-  async send(m: PushMessage): Promise<void> {
+  async send(m: PushMessage): Promise<PushResult> {
     const res = await this._fetch(
       this._o.endpoint ?? 'https://api.onesignal.com/notifications?c=push',
       {
@@ -34,9 +35,13 @@ export class OneSignalPushSender implements PushSender {
         body: JSON.stringify({
           app_id: this._o.appId,
           target_channel: 'push',
-          filters: [
-            { field: 'tag', key: 'signals', relation: '=', value: '1' },
-          ],
+          ...(m.subscriptionIds?.length
+            ? { include_subscription_ids: [...m.subscriptionIds] }
+            : {
+                filters: [
+                  { field: 'tag', key: 'signals', relation: '=', value: '1' },
+                ],
+              }),
           headings: { en: m.title },
           contents: { en: m.body },
           ...(m.url ? { url: m.url } : {}),
@@ -53,5 +58,24 @@ export class OneSignalPushSender implements PushSender {
         `OneSignal ${res.status}: ${(await res.text().catch(() => '')).slice(0, 300)}`,
       );
     // OneSignal trả 200 kèm errors khi không có thiết bị nào khớp — không coi là lỗi gửi
+    const body = (await res.json().catch(() => ({}))) as {
+      id?: unknown;
+      errors?: unknown;
+    };
+    return {
+      id: typeof body.id === 'string' && body.id ? body.id : null,
+      errors: errorsOf(body.errors),
+    };
   }
+}
+
+/** errors của OneSignal: mảng chuỗi hoặc object (vd { invalid_player_ids: [...] }). */
+function errorsOf(e: unknown): string[] {
+  if (!e) return [];
+  if (Array.isArray(e)) return e.map(String);
+  if (typeof e === 'object')
+    return Object.entries(e as Record<string, unknown>).map(
+      ([k, v]) => `${k}: ${JSON.stringify(v)}`,
+    );
+  return [JSON.stringify(e)];
 }

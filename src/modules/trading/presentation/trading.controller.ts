@@ -1,5 +1,6 @@
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -28,6 +29,7 @@ import {
   ONE_CLICK_OUTCOMES,
   OneClickHistoryRecorder,
 } from '../application/one-click-history.js';
+import { OneClickNotifier } from '../application/one-click-notifier.js';
 import { TRADING_PERMISSIONS as P } from '../application/trading.permissions.js';
 import { TRADE_SOURCES, TRADE_STATUSES } from '../application/trade-attempt.js';
 import { STAKE_TRENDS } from '../domain/stake-plan.js';
@@ -174,6 +176,10 @@ const OneClickHistoryQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(50),
   offset: z.coerce.number().int().min(0).default(0),
 });
+const PushTestBody = z.object({
+  /** Mã đăng ký OneSignal của thiết bị đang bấm; bỏ trống = mọi thiết bị bật mục "Kèo". */
+  subscriptionId: z.string().min(1).max(200).optional(),
+});
 const OneClickEnterBody = z.object({
   profileId: z.string().min(1),
   signalId: z.string().min(1),
@@ -200,6 +206,7 @@ export class TradingController {
     @Inject(OneClickAdmin) private readonly _oneClick: OneClickAdmin,
     @Inject(OneClickHistoryRecorder)
     private readonly _ocHistory: OneClickHistoryRecorder,
+    @Inject(OneClickNotifier) private readonly _notifier: OneClickNotifier,
   ) {}
 
   // ------------------------------------------------------------- tài khoản
@@ -443,6 +450,50 @@ export class TradingController {
   @ApiZodQuery(OneClickHistoryQuery)
   oneClickHistory(@Query() q: unknown) {
     return this._ocHistory.list(OneClickHistoryQuery.parse(q));
+  }
+
+  @Get('push/status')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Trạng thái gửi thông báo đẩy (OneSignal) của backend',
+    description:
+      'Quyền: trading:read. configured = đã đặt ONESIGNAL_APP_ID + ONESIGNAL_REST_API_KEY; webUrl = WEB_APP_URL (link mở khi bấm thông báo).',
+  })
+  pushStatus() {
+    return {
+      configured: this._notifier.enabled,
+      webUrl: this._notifier.webUrl,
+    };
+  }
+
+  @Post('push/test')
+  @HttpCode(200)
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Gửi thử thông báo đẩy thật qua OneSignal',
+    description:
+      'Quyền: trading:manage. Cùng đường gửi với kèo On click. subscriptionId = chỉ thiết bị này; bỏ trống = mọi thiết bị bật mục "Kèo". Trả { id, errors } của OneSignal; 400 ONESIGNAL_NOT_CONFIGURED khi backend chưa có key; 400 ONESIGNAL_FAILED kèm lỗi HTTP.',
+  })
+  @ApiZodBody(PushTestBody)
+  async pushTest(
+    @Body() body: unknown,
+    @CurrentPrincipal() principal?: { id: string },
+  ) {
+    const b = PushTestBody.parse(body);
+    try {
+      const r = await this._notifier.test(
+        principal?.id ?? 'unknown',
+        b.subscriptionId,
+      );
+      if (!r)
+        throw new BadRequestException(
+          'ONESIGNAL_NOT_CONFIGURED: backend chưa đặt ONESIGNAL_APP_ID / ONESIGNAL_REST_API_KEY',
+        );
+      return r;
+    } catch (e: unknown) {
+      if (e instanceof BadRequestException) throw e;
+      throw new BadRequestException(`ONESIGNAL_FAILED: ${String(e)}`);
+    }
   }
 
   @Post('oneclick/enter')

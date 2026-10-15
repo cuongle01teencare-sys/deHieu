@@ -176,6 +176,7 @@ export function mockTrading(method: string, path: string, search: string, body: 
       const before = Number(q.get('before') ?? Infinity);
       return ok(filtered().filter((t) => t.createdAt < before).slice(0, Number(q.get('limit') ?? 100)));
     }
+    if (p === 'push/status') return ok({ configured: true, webUrl: 'https://arbops.example.com' });
     if (p === 'oneclick/history') {
       const now = Date.now();
       const ends: [string | null, string | null][] = [
@@ -284,6 +285,7 @@ export function mockTrading(method: string, path: string, search: string, body: 
     }
   }
 
+  if (method === 'POST' && p === 'push/test') return ok({ id: `mock-${Date.now().toString(36)}`, errors: [] });
   if (method === 'POST' && p === 'oneclick/enter') {
     const sid = String(b.signalId ?? '');
     const src = trades.find((t) => t.signalId === sid && t.profileId === b.profileId);

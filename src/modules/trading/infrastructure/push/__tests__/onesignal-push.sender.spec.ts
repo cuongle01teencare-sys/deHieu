@@ -45,4 +45,40 @@ describe('OneSignalPushSender', () => {
       }),
     ).rejects.toThrow(/OneSignal 403/);
   });
+
+  it('gửi tới một thiết bị (include_subscription_ids); đọc lỗi OneSignal trả về', async () => {
+    let body: Record<string, unknown> = {};
+    const s = new OneSignalPushSender({ appId: 'app', apiKey: 'legacy' }, ((
+      _u: string,
+      init: RequestInit,
+    ) => {
+      body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect((init.headers as Record<string, string>).Authorization).toBe(
+        'Basic legacy',
+      );
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            id: '',
+            errors: ['All included players are not subscribed'],
+          }),
+          { status: 200 },
+        ),
+      );
+    }) as unknown as typeof fetch);
+    const r = await s.send({
+      title: 't',
+      body: 'b',
+      url: null,
+      collapseId: 'c',
+      ttlSec: 60,
+      subscriptionIds: ['sub-1'],
+    });
+    expect(body.include_subscription_ids).toEqual(['sub-1']);
+    expect(body.filters).toBeUndefined();
+    expect(r).toEqual({
+      id: null,
+      errors: ['All included players are not subscribed'],
+    });
+  });
 });

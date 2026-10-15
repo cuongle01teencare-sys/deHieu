@@ -68,7 +68,9 @@ describe('Thông báo On click', () => {
   it('nội dung: trận, margin, giá bán thấp nhất, lãi dự kiến, thứ tự trong giải, profile; mở trang On click', async () => {
     const sent: PushMessage[] = [];
     const n = new OneClickNotifier(
-      { send: (m) => (sent.push(m), Promise.resolve()) },
+      {
+        send: (m) => (sent.push(m), Promise.resolve({ id: 'n1', errors: [] })),
+      },
       () => Promise.resolve('Profile Test'),
       'https://arbops.example.com/',
       () => 1_000,
@@ -84,6 +86,19 @@ describe('Thông báo On click', () => {
     expect(sent[0]?.body).toContain('Giá bán thấp nhất 0.55');
     expect(sent[0]?.body).toContain('csgoempire 8/12');
     expect(sent[0]?.body).toContain('Profile Test');
+    // gửi thử: chỉ thiết bị đang bấm, mở trang Thông báo
+    expect(await n.test('admin', 'sub-1')).toEqual({ id: 'n1', errors: [] });
+    expect(sent[1]).toMatchObject({
+      title: 'Arb Ops: thông báo thử',
+      subscriptionIds: ['sub-1'],
+      url: 'https://arbops.example.com/thong-bao',
+    });
+    expect(sent[1]?.body).toContain('bởi admin');
+    expect(
+      await new OneClickNotifier(null, () => Promise.resolve(null), null).test(
+        'a',
+      ),
+    ).toBeNull();
     // chưa cấu hình OneSignal → không gửi, không lỗi
     await new OneClickNotifier(null, () => Promise.resolve(null), null).entered(
       cand(),

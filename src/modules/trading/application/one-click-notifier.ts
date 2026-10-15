@@ -10,11 +10,19 @@ export interface PushMessage {
   readonly collapseId: string;
   /** Hết hạn sau (giây): kèo hết thì thông báo cũ cũng vô nghĩa. */
   readonly ttlSec: number;
+  /** Chỉ gửi tới các thiết bị này (mã đăng ký OneSignal); bỏ trống = mọi thiết bị bật mục "Kèo". */
+  readonly subscriptionIds?: readonly string[];
+}
+
+/** Kết quả OneSignal trả về: mã thông báo, lỗi (vd không thiết bị nào khớp). */
+export interface PushResult {
+  readonly id: string | null;
+  readonly errors: readonly string[];
 }
 
 /** Port: gửi push (OneSignal). */
 export interface PushSender {
-  send(m: PushMessage): Promise<void>;
+  send(m: PushMessage): Promise<PushResult>;
 }
 export const PUSH_SENDER = Symbol('PUSH_SENDER');
 
@@ -38,9 +46,34 @@ export class OneClickNotifier {
     return this._sender !== null;
   }
 
+  get webUrl(): string | null {
+    return this._webUrl;
+  }
+
   async entered(c: OneClickCandidate): Promise<void> {
     if (!this._sender) return;
     await this._sender.send(await this.message(c));
+  }
+
+  /**
+   * Gửi thử THẬT qua OneSignal (cùng đường gửi kèo On click): tới một thiết bị (mã đăng ký của
+   * trình duyệt đang bấm) hoặc mọi thiết bị đang bật mục "Kèo". null = chưa cấu hình OneSignal.
+   */
+  async test(by: string, subscriptionId?: string): Promise<PushResult | null> {
+    if (!this._sender) return null;
+    const at = new Date(this._now()).toLocaleTimeString('vi-VN', {
+      timeZone: 'Asia/Ho_Chi_Minh',
+    });
+    return this._sender.send({
+      title: 'Arb Ops: thông báo thử',
+      body: `Gửi từ backend qua OneSignal lúc ${at} (bởi ${by}). Nhận được = kèo On click cũng sẽ báo về đây.`,
+      url: this._webUrl
+        ? `${this._webUrl.replace(/\/+$/, '')}/thong-bao`
+        : null,
+      collapseId: `test:${this._now()}`,
+      ttlSec: 600,
+      ...(subscriptionId ? { subscriptionIds: [subscriptionId] } : {}),
+    });
   }
 
   async message(c: OneClickCandidate): Promise<PushMessage> {

@@ -41,6 +41,11 @@ export function pushSdkState(): PushSdkState {
   return pushConfigured() ? sdkState : 'disabled';
 }
 
+/** Mã đăng ký OneSignal của thiết bị này (để backend gửi thử đúng thiết bị). */
+export function pushSubscriptionId(): string | null {
+  return sdk?.User.PushSubscription.id ?? null;
+}
+
 export function pushSubscribed(): boolean {
   return Boolean(sdk?.User.PushSubscription.id && sdk.User.PushSubscription.optedIn);
 }
