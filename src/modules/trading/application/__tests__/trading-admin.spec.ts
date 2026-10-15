@@ -307,6 +307,29 @@ describe('TradingAdmin + TraderConfigSync', () => {
     ).toBe(true);
   });
 
+  it('chọn market: [] → đứng yên; danh sách được bỏ trùng và gửi cho worker', async () => {
+    const { empire, poly } = await addAccounts();
+    const base = profileInput(empire.id, poly.id);
+    const r = await admin.saveProfile(null, {
+      ...base,
+      risk: { ...base.risk, markets: [] },
+    });
+    if (r.status !== 'SUCEED') throw new Error('profile');
+    expect((await admin.runtimeConfig(r.data.id)).inactiveReason).toBe(
+      'NO_MARKET_SELECTED',
+    );
+    await admin.saveProfile(r.data.id, {
+      ...base,
+      risk: {
+        ...base.risk,
+        markets: ['game-winner', 'game-winner', 'map-handicap-p1.5'],
+      },
+    });
+    const cfg = await admin.runtimeConfig(r.data.id);
+    expect(cfg.active).toBe(true);
+    expect(cfg.risk.markets).toEqual(['game-winner', 'map-handicap-p1.5']);
+  });
+
   it('tài khoản tắt → worker nhận active=false kèm lý do', async () => {
     const { empire, poly } = await addAccounts();
     const r = await admin.saveProfile(null, profileInput(empire.id, poly.id));

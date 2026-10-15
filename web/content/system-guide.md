@@ -425,6 +425,10 @@ Cột **Tiền mục tiêu**, **Tiền mục tiêu tối thiểu**, **Tiền m�
 
 Ô tick đầu mỗi dòng của bảng chọn hạng profile được vào; lựa chọn lưu trong profile nên task trader khởi động lại vẫn chạy đúng như vậy. Profile mới chưa chọn hạng nào và đứng yên (`NO_TIER_SELECTED`) cho tới khi chọn. Kèo thuộc hạng không được chọn bị bỏ qua với lý do `TIER_NOT_SELECTED`. Hạng mới admin thêm sau không tự được chọn. Profile tạo trước khi có tính năng này vẫn vào mọi hạng cho tới khi sửa lựa chọn.
 
+### Chọn market profile sẽ vào
+
+Ô **Market sẽ vào** trong profile: **Mọi market** (mặc định, kể cả market thêm sau) hoặc **Chỉ market đã chọn**, ví dụ chỉ `game-winner` (Thắng trận) hoặc chỉ `map-handicap-p1.5` (Chấp +1.5, mức chấp tính cho đội đứng trước). Kèo ở market không chọn bị bỏ qua với lý do `MARKET_NOT_SELECTED`, trước cả khi đọc sổ lệnh. Chọn "Chỉ market đã chọn" mà không chọn market nào → profile đứng yên (`NO_MARKET_SELECTED`). Lựa chọn lưu trong profile, kết hợp với lựa chọn hạng: kèo phải thuộc cả market lẫn hạng được chọn.
+
 ### Bảng được tính từ đâu
 
 | Trường | Ý nghĩa |
@@ -492,6 +496,19 @@ Kèo margin 3%, hạng Thường: tiền 50$, tối thiểu 50% = 25$. Odds csgo
 Mua được 90 share (27$ + 14,1$ = 41,1$) → chân csgoempire = 90 ÷ 2.0 = **45$**. 45$ ≥ 25$ nên vào: tổng chi 86,1$, nhận về 90$, lãi 3,9$ (4,53%). Nếu Tối thiểu là 100% (50$) thì lệnh này bị bỏ qua vì chỉ vào được 45$.
 
 Mở chi tiết một lệnh ở trang Auto trade → Lệnh giấy để xem từng mức giá đã ăn, độ sâu sổ lệnh và lý do bỏ qua.
+
+### Kèo bị hủy vì lệch giờ bắt đầu
+
+Giờ bắt đầu không cố định: mỗi bản tin của sàn mang giờ bắt đầu mới nhất (trận bị dời, giờ dự kiến → giờ thực tế, sàn sửa dữ liệu). Hệ thống kiểm tra lại mỗi khi có bản tin; hai bên lệch quá **Lệch giờ bắt đầu tối đa** (Cài đặt arbitrage, mặc định 20 phút) thì kèo bị hủy với lý do `start_time_mismatch`.
+
+Mỗi kèo lưu giờ bắt đầu từng chân **lúc phát**; khi hủy, hệ thống chụp giờ từng chân **lúc hủy**, độ lệch và ngưỡng. Xem ở:
+
+- **Kèo → Lịch sử → mở một kèo → Giờ bắt đầu**: bảng lúc phát / lúc hủy / bên nào dời bao nhiêu, và "lúc phát lệch X → lúc hủy lệch Y · cho phép ≤ Z".
+- **Bảng lịch sử và luồng kèo trực tiếp**: lý do kèm "lệch 45 phút (cho phép ≤ 20 phút)".
+- **Auto trade → Lệnh giấy → mở lệnh**: giờ từng chân lúc phát; nếu kèo bị hủy khi trader đang tính thì thêm giờ lúc hủy.
+- **Tin hủy trên Discord/Telegram/Slack**: trường "Giờ bắt đầu lúc hủy".
+
+Kèo phát trước khi có tính năng này không có giờ lúc phát.
 
 ## Khi thấy số liệu khác kỳ vọng
 

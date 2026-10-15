@@ -922,6 +922,8 @@ function history(search: string): ListResult<SignalHistoryItem> {
     const status = statuses[i % statuses.length]!;
     const ts = Object.keys(row.lines);
     const margin = 0.02 + rand(`hm${i}`) * 0.035;
+    const statusReason = status === 'cancelled' ? reasons[i % reasons.length]! : status === 'abandoned' ? 'app_restart' : null;
+    const start = Math.floor((issuedAt + 2 * 3_600_000) / (15 * MIN)) * 15 * MIN;
     return {
       signalId: `sig-h${i.toString(36)}`,
       room: row.room,
@@ -932,15 +934,27 @@ function history(search: string): ListResult<SignalHistoryItem> {
       phase: m.phase,
       margin,
       legs: [
-        { tenant: ts[0]!, side: 0, pick: row.picks[0], odds: row.lines[ts[0]!]!.odds[0], ref: row.lines[ts[0]!]!.ref },
-        { tenant: ts[1]!, side: 1, pick: row.picks[1], odds: row.lines[ts[1]!]!.odds[1], ref: row.lines[ts[1]!]!.ref },
+        { tenant: ts[0]!, side: 0, pick: row.picks[0], odds: row.lines[ts[0]!]!.odds[0], ref: row.lines[ts[0]!]!.ref, startsAt: start },
+        { tenant: ts[1]!, side: 1, pick: row.picks[1], odds: row.lines[ts[1]!]!.odds[1], ref: row.lines[ts[1]!]!.ref, startsAt: start },
       ],
       issuedAt,
       expiresAt: issuedAt + settings.signalTtlMs,
       status,
-      statusReason: status === 'cancelled' ? reasons[i % reasons.length]! : status === 'abandoned' ? 'app_restart' : null,
+      statusReason,
       supersededBy: status === 'superseded' ? `sig-h${(i + 1).toString(36)}` : null,
       endedAt: issuedAt + Math.floor(rand(`he${i}`) * 4 * MIN) + 10_000,
+      // mẫu: lệch giờ = chân đầu bị dời 45 phút
+      closeDetail:
+        statusReason === 'start_time_mismatch'
+          ? {
+              startTimes: [
+                { tenant: ts[0]!, startsAt: start + 45 * MIN },
+                { tenant: ts[1]!, startsAt: start },
+              ],
+              startDriftMs: 45 * MIN,
+              maxStartDriftMs: settings.maxStartDriftMs,
+            }
+          : null,
     };
   });
   const active: SignalHistoryItem[] = signals().map((s) => ({ ...s, status: 'active', statusReason: null, supersededBy: null, endedAt: null }));
@@ -1109,6 +1123,14 @@ export async function mockRequest(
   }
 
   if (method === 'POST') {
+    // mẫu: dữ liệu sinh lại mỗi lần nên chỉ trả số đếm giả định, không thật sự xóa
+    const purge = /^admin\/(audit|odds-transitions)\/purge$/.exec(path);
+    if (purge) {
+      const b = (body ?? {}) as { olderThanDays?: number; all?: boolean; dryRun?: boolean };
+      if (!b.all && !b.olderThanDays) return { status: 400, body: { message: 'PURGE_SCOPE_REQUIRED' } };
+      const matched = b.all ? 240 : Math.max(0, 200 - (b.olderThanDays ?? 0) * 6);
+      return ok({ target: purge[1], before: Date.now() - (b.olderThanDays ?? 0) * 86_400_000, matched, deleted: b.dryRun ? 0 : matched });
+    }
     const ack = /^admin\/incidents\/(.+)\/ack$/.exec(path);
     if (ack) {
       const key = decodeURIComponent(ack[1]!);

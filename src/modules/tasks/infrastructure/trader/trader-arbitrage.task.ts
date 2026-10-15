@@ -7,6 +7,7 @@ import {
 } from '../polymarket/polymarket-environment.js';
 import {
   ConsumerHubClient,
+  type HubCancel,
   type HubLeg,
   type HubSignal,
 } from './consumer-hub.client.js';
@@ -62,6 +63,7 @@ const bare = (l: HubLeg | undefined) =>
         odds: l.odds,
         // link trang trận trên sàn (để admin mở kiểm tra)
         url: l.ref.url ?? null,
+        startsAt: typeof l.startsAt === 'number' ? l.startsAt : null,
       }
     : null;
 
@@ -74,6 +76,8 @@ const bare = (l: HubLeg | undefined) =>
 export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
   private _config: TraderConfig | null = null;
   private readonly _inflight = new Map<string, AbortController>();
+  /** Lệnh hủy nhận được khi kèo đang tính (kể cả lý do được bỏ qua) → ghi vào lệnh. */
+  private readonly _cancels = new Map<string, HubCancel>();
 
   /** Thay được sổ phơi nhiễm (vd test nhiều trader dùng chung một sổ). */
   constructor(
@@ -140,6 +144,8 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
               ctx.warn(e),
             ),
           onCancel: (c) => {
+            if (this._inflight.has(c.signalId))
+              this._cancels.set(c.signalId, c);
             // vd better_opportunity: kèo cũ vẫn còn lãi, publisher chỉ thay bằng kèo tốt hơn → cứ vào tiếp
             if (this._config?.risk.ignoreCancelReasons.includes(c.reason))
               return;
@@ -219,8 +225,17 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         netMargin: number;
         detail: Record<string, unknown>;
       }> = {},
-    ) =>
-      ctx.emit(
+    ) => {
+      const c = this._cancels.get(s.signalId);
+      // kèo bị hủy khi đang tính: lý do + giờ bắt đầu từng chân lúc hủy (ignored = vẫn vào tiếp)
+      const cancel = c
+        ? {
+            reason: c.reason,
+            ignored: status !== 'cancelled',
+            detail: c.detail ?? null,
+          }
+        : undefined;
+      return ctx.emit(
         {
           ...base,
           status,
@@ -244,6 +259,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           detail: {
             signalAgeMs: startedAt - s.issuedAt,
             targetStake: pick?.stake ?? null,
+            ...(cancel ? { cancel } : {}),
             ...r.detail,
           },
           createdAt: Date.now(),
@@ -259,6 +275,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         },
         CH_TRADE,
       );
+    };
 
     if (!cfg.active) return emit('skipped', `INACTIVE: ${cfg.inactiveReason}`);
     if (deps.hub.paused) return emit('skipped', 'HUB_PAUSED');
@@ -270,6 +287,11 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       return emit(
         'skipped',
         `STALE_SIGNAL: ${startedAt - s.issuedAt}ms > ${cfg.risk.maxSignalAgeMs}ms`,
+      );
+    if (cfg.risk.markets && !cfg.risk.markets.includes(s.market))
+      return emit(
+        'skipped',
+        `MARKET_NOT_SELECTED: market ${s.market} không nằm trong các market profile được vào`,
       );
     if (!book || !poly)
       return emit('skipped', `UNSUPPORTED_COMBO: ${s.comboId}`);
@@ -452,8 +474,10 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         tokenId,
       });
     } finally {
-      if (this._inflight.get(s.signalId) === ac)
+      if (this._inflight.get(s.signalId) === ac) {
         this._inflight.delete(s.signalId);
+        this._cancels.delete(s.signalId);
+      }
     }
   }
 }

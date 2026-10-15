@@ -14,6 +14,7 @@ import { Panel } from '../ui/panel';
 import { Pill } from '../ui/status';
 import { Table, TD, TH, THead, TR } from '../ui/table';
 import { DrawerSection } from '../room-drawer';
+import { driftSummary, StartTimeDetail } from '../start-time-detail';
 
 export const TRADE_STATUS: Record<TradeAttempt['status'], { label: string; tone: 'ok' | 'muted' | 'warn' | 'critical' }> = {
   paper_filled: { label: 'Vào (giấy)', tone: 'ok' },
@@ -31,6 +32,7 @@ export const REASON_LABEL: Record<string, string> = {
   BELOW_MIN_ORDER: 'Dưới lệnh tối thiểu',
   NO_TIER: 'Không thuộc hạng nào',
   TIER_NOT_SELECTED: 'Hạng không được chọn',
+  MARKET_NOT_SELECTED: 'Market không được chọn',
   INACTIVE: 'Profile đứng yên',
   STALE_SIGNAL: 'Kèo quá cũ',
   SIGNAL_EXPIRED: 'Kèo hết hạn',
@@ -68,7 +70,8 @@ function explain(t: TradeAttempt, d: Detail): string {
         : '';
     case 'SIGNAL_CANCELLED': {
       const why = rest(t.reason);
-      return `Publisher hủy kèo (${CANCEL_REASONS[why] ?? why})${d.cancelledAfterMs !== undefined ? ` sau ${d.cancelledAfterMs}ms kể từ lúc trader nhận` : ''}, khi trader còn đang đọc sổ lệnh / tính lệnh nên dừng, không vào.`;
+      const drift = why === 'start_time_mismatch' ? driftSummary(d.cancel?.detail) : null;
+      return `Publisher hủy kèo (${CANCEL_REASONS[why] ?? why}${drift ? `: ${drift}` : ''})${d.cancelledAfterMs !== undefined ? ` sau ${d.cancelledAfterMs}ms kể từ lúc trader nhận` : ''}, khi trader còn đang đọc sổ lệnh / tính lệnh nên dừng, không vào.`;
     }
     case 'NO_EDGE':
       return `Ở giá ask tốt nhất (${d.bestAsk ?? '—'}), sau phí taker lãi ròng đã dưới ${minPct}, nên không có mức giá nào đáng mua.`;
@@ -140,6 +143,12 @@ export function TradeDetailPanel({
             {t.reason ? <div className="mb-1 text-body font-medium text-fg">{reasonText(t)}</div> : null}
             <p className="text-body text-muted-fg">{explain(t, d)}</p>
             {t.reason ? <p className="num mt-2 text-caption text-faint">{t.reason}</p> : null}
+            {d.cancel?.ignored ? (
+              <p className="mt-2 text-caption text-warn">
+                Kèo bị hủy khi đang tính ({CANCEL_REASONS[d.cancel.reason] ?? d.cancel.reason}
+                {d.cancel.reason === 'start_time_mismatch' && driftSummary(d.cancel.detail) ? `: ${driftSummary(d.cancel.detail)}` : ''}) nhưng profile được cấu hình vẫn vào tiếp với lý do này.
+              </p>
+            ) : null}
             {t.status === 'paper_filled' ? (
               <KV
                 className="mt-4"
@@ -244,6 +253,15 @@ export function TradeDetailPanel({
                 </tbody>
               </Table>
               {!d.depth.levels.length ? <p className="text-caption text-faint">Sổ lệnh bán trống.</p> : null}
+            </DrawerSection>
+          ) : null}
+
+          {t.book?.startsAt != null || t.polymarket?.startsAt != null || d.cancel?.detail ? (
+            <DrawerSection title="Giờ bắt đầu">
+              <StartTimeDetail
+                legs={[t.book, t.polymarket].filter((l): l is NonNullable<typeof l> => !!l)}
+                detail={d.cancel?.detail ?? null}
+              />
             </DrawerSection>
           ) : null}
 

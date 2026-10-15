@@ -20,6 +20,7 @@ import { Table, TD, TH, THead, TR } from '../ui/table';
 import { Tenant } from '../ui/tenant';
 import { JsonBlock, Mono } from '../ui/code';
 import { Teams } from '../domain';
+import { PurgeHistoryButton } from './purge-history';
 
 const RANGES = { '1h': 3_600_000, '24h': 86_400_000, '7d': 7 * 86_400_000, '30d': 30 * 86_400_000 } as const;
 type Range = keyof typeof RANGES;
@@ -46,7 +47,11 @@ export function AuditPage() {
 
   return (
     <div>
-      <PageHeader title="Audit" description="Mọi thao tác ghi (POST / PATCH / DELETE): ai, route nào, kết quả. Bí mật đã được che." />
+      <PageHeader
+        title="Audit"
+        description="Mọi thao tác ghi (POST / PATCH / DELETE): ai, route nào, kết quả. Bí mật đã được che."
+        actions={<PurgeHistoryButton target="audit" label="audit" onDone={() => void reload()} />}
+      />
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <SearchInput value={route} onChange={setRoute} placeholder="Lọc route…" className="w-full md:w-56" />
         <Select value={who} onChange={(e) => setWho(e.target.value)} className="w-36" aria-label="Người thực hiện">
@@ -171,7 +176,11 @@ export function OddsHistoryPage() {
 
   return (
     <div>
-      <PageHeader title="Lịch sử odds" description="Dòng kèo xuất hiện, mở ↔ tạm khóa, bị gỡ (kèm lý do). Giữ 7 ngày." />
+      <PageHeader
+        title="Lịch sử odds"
+        description="Dòng kèo xuất hiện, mở ↔ tạm khóa, bị gỡ (kèm lý do). Giữ 7 ngày."
+        actions={<PurgeHistoryButton target="odds-transitions" label="lịch sử odds" onDone={() => void reload()} />}
+      />
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <SearchInput value={q} onChange={setQ} placeholder="Lọc room / đội…" className="w-full md:w-60" />
         <Select value={tenant} onChange={(e) => setTenant(e.target.value)} className="w-36" aria-label="Tenant">

@@ -1,5 +1,6 @@
 import type { DomainEvent } from '../../../../shared/domain/domain-event.js';
 import type { ArbitrageSignal } from '../arbitrage-signal.js';
+import type { SignalCloseDetail } from '../signal-close-detail.js';
 import type { CancelReason } from '../signal-policy.js';
 
 export class ArbitrageSignalIssued implements DomainEvent {
@@ -28,6 +29,8 @@ export class ArbitrageSignalCancelled implements DomainEvent {
     public readonly room: string,
     public readonly comboId: string,
     public readonly reason: CancelReason,
+    /** Giờ bắt đầu từng chân + độ lệch lúc hủy. */
+    public readonly detail: SignalCloseDetail | null = null,
     public readonly occurredAt: Date = new Date(),
   ) {}
 }

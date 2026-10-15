@@ -17,6 +17,8 @@ const leg = z.object({
   odds: num,
   /** Trang trận trên sàn (để mở kiểm tra). */
   url: z.string().nullable().default(null),
+  /** Giờ bắt đầu trận theo sàn này lúc kèo phát (ms). */
+  startsAt: num.nullable().default(null),
 });
 
 /** Trạng thái một chân lệnh. Giấy = `simulated`; các trạng thái còn lại dành cho giao dịch thật. */

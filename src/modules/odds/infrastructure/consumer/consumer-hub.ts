@@ -149,6 +149,7 @@ export class ConsumerHub implements EventPublisher, ConsumerControl {
               room: e.room,
               comboId: e.comboId,
               reason: e.reason,
+              ...(e.detail ? { detail: e.detail } : {}),
             },
             Date.now() + (this._opts.cancelRetryWindowMs ?? 60_000),
           );

@@ -14,11 +14,12 @@ import {
   type TraderRuntimeConfig,
 } from '@/lib/trading-types';
 import { CANCEL_REASONS } from '@/lib/skip-reasons';
+import { MARKET_GROUPS, MARKET_TYPES, marketGroup, marketLabel } from '@/lib/markets';
 import { cn } from '@/lib/utils';
 import { useApi } from '@/hooks/use-api';
 import { useGuard, useMutate } from '../shell/shell-context';
 import { Button } from '../ui/button';
-import { Field, Input, Select, Switch } from '../ui/controls';
+import { Field, FilterChip, Input, Segmented, Select, Switch } from '../ui/controls';
 import { Section } from '../ui/layout';
 import { Menu, MenuItem, MenuSeparator } from '../ui/menu';
 import { Confirm, Panel } from '../ui/panel';
@@ -42,6 +43,7 @@ const INACTIVE_LABEL: Record<string, string> = {
   POLYMARKET_ACCOUNT_DISABLED: 'Ví Polymarket đang tắt',
   NO_STAKE_TIER: 'Bảng vốn không có hạng nào > 0$',
   NO_TIER_SELECTED: 'Chưa chọn hạng kèo nào để vào',
+  NO_MARKET_SELECTED: 'Chưa chọn market nào để vào',
   PROFILE_NOT_FOUND: 'Profile không tồn tại',
 };
 
@@ -135,6 +137,7 @@ export function TraderProfiles() {
                     {p.stakePlan.trend !== 'custom' ? <span className="num text-fg"> · {p.stakePlan.baseStake}$</span> : null}
                     {p.stakePlan.scaleWithinTier ? ' · tăng trong hạng' : ''}
                     {p.stakePlan.tierIds === null ? ' · mọi hạng' : ` · ${p.stakePlan.tierIds.length} hạng`}
+                    {!p.risk.markets ? ' · mọi market' : p.risk.markets.length <= 2 ? ` · ${p.risk.markets.map(marketLabel).join(', ') || '0 market'}` : ` · ${p.risk.markets.length} market`}
                   </span>
                   <span className="num block text-faint">
                     lãi ròng ≥ {+(p.risk.minNetMargin * 100).toFixed(2)}%{p.risk.matchCapUsd ? ` · ≤ ${p.risk.matchCapUsd}$/trận` : ''}
@@ -345,6 +348,8 @@ function ProfileForm({
           </Select>
         </Field>
 
+        <MarketPicker value={risk.markets} onChange={(markets) => setRisk({ ...risk, markets })} />
+
         <div className="h-px bg-line" />
         <StakePlanEditor value={plan} onChange={setPlan} />
         <div className="h-px bg-line" />
@@ -391,5 +396,60 @@ function ProfileForm({
         </Field>
       </div>
     </Panel>
+  );
+}
+
+/** Market profile được vào: mọi market (null) hoặc danh sách chọn. */
+function MarketPicker({ value, onChange }: { value: string[] | null; onChange: (v: string[] | null) => void }) {
+  const all = value === null;
+  const picked = value ?? [];
+  const toggle = (m: string) => onChange(picked.includes(m) ? picked.filter((x) => x !== m) : [...picked, m]);
+  return (
+    <Field
+      label="Market sẽ vào"
+      help={
+        all
+          ? 'Vào mọi market, kể cả market thêm sau. Chọn "Chỉ market đã chọn" để giới hạn, vd chỉ Thắng trận hoặc chỉ Chấp +1.5.'
+          : 'Kèo ở market không chọn bị bỏ qua (Market không được chọn). Market thêm sau không tự được chọn.'
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <Segmented<'all' | 'pick'>
+          value={all ? 'all' : 'pick'}
+          onChange={(v) => onChange(v === 'all' ? null : [])}
+          options={[
+            { value: 'all', label: 'Mọi market' },
+            { value: 'pick', label: 'Chỉ market đã chọn' },
+          ]}
+        />
+        {!all ? (
+          <div className="flex flex-col gap-2">
+            {MARKET_GROUPS.map((g) => {
+              const ms = MARKET_TYPES.filter((m) => marketGroup(m) === g.id);
+              if (!ms.length) return null;
+              return (
+                <div key={g.id} className="flex flex-wrap items-center gap-2">
+                  <span className="w-28 shrink-0 text-caption text-muted-fg">{g.label}</span>
+                  {ms.map((m) => (
+                    <Hint key={m} content={m}>
+                      <span>
+                        <FilterChip active={picked.includes(m)} onClick={() => toggle(m)}>
+                          {marketLabel(m)}
+                        </FilterChip>
+                      </span>
+                    </Hint>
+                  ))}
+                </div>
+              );
+            })}
+            <p className={cn('text-caption', picked.length ? 'text-muted-fg' : 'text-warn')}>
+              {picked.length
+                ? `Đã chọn ${picked.length} market: ${picked.map(marketLabel).join(', ')}.`
+                : 'Chưa chọn market nào: lưu lúc này thì profile đứng yên.'}
+            </p>
+          </div>
+        ) : null}
+      </div>
+    </Field>
   );
 }

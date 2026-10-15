@@ -1,6 +1,9 @@
 import {
+  BadRequestException,
+  Body,
   Controller,
   Get,
+  HttpCode,
   Inject,
   NotFoundException,
   Param,
@@ -11,7 +14,10 @@ import {
 import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
 import { queryDate } from '../../../shared/presentation/query-date.js';
-import { ApiZodQuery } from '../../../shared/presentation/openapi.js';
+import {
+  ApiZodBody,
+  ApiZodQuery,
+} from '../../../shared/presentation/openapi.js';
 import {
   CurrentPrincipal,
   RequirePermissions,
@@ -22,6 +28,10 @@ import { ListIncidentsHandler } from '../application/queries/list-incidents.quer
 import { ListAuditHandler } from '../application/queries/list-audit.query.js';
 import { ListOddsTransitionsHandler } from '../application/queries/list-odds-transitions.query.js';
 import { AcknowledgeIncidentHandler } from '../application/commands/acknowledge-incident.command.js';
+import {
+  PurgeHistoryHandler,
+  type PurgeTarget,
+} from '../application/commands/purge-history.command.js';
 import { WsTicketService } from '../../auth/application/ws-ticket.service.js';
 import type { Principal } from '../../auth/domain/principal.js';
 
@@ -56,6 +66,24 @@ const TransitionsQuery = z.object({
   ...page,
 });
 
+const PurgeBody = z.object({
+  /** Xóa bản ghi cũ hơn N ngày. */
+  olderThanDays: z.number().int().min(1).max(3650).optional(),
+  /** Xóa toàn bộ (không dùng chung với olderThanDays). */
+  all: z.boolean().default(false),
+  /** Chỉ đếm số bản ghi sẽ xóa. */
+  dryRun: z.boolean().default(false),
+});
+const PURGE_EXAMPLES = {
+  days30: { summary: 'Cũ hơn 30 ngày', value: { olderThanDays: 30 } },
+  days7: { summary: 'Cũ hơn 7 ngày', value: { olderThanDays: 7 } },
+  all: { summary: 'Xóa hết', value: { all: true } },
+  preview: {
+    summary: 'Đếm trước',
+    value: { olderThanDays: 30, dryRun: true },
+  },
+};
+
 /** Màn hình vận hành: toàn cảnh, sự cố, audit, lịch sử trạng thái odds. */
 @Controller('admin')
 @ApiTags('Admin')
@@ -71,7 +99,17 @@ export class AdminController {
     @Inject(ListOddsTransitionsHandler)
     private readonly _transitions: ListOddsTransitionsHandler,
     @Inject(WsTicketService) private readonly _tickets: WsTicketService,
+    @Inject(PurgeHistoryHandler) private readonly _purge: PurgeHistoryHandler,
   ) {}
+
+  private async _purgeOf(target: PurgeTarget, body: unknown) {
+    const r = await this._purge.execute({ target, ...PurgeBody.parse(body) });
+    if (r.status !== 'SUCEED')
+      throw new BadRequestException(
+        r.status === 'FAILED' ? r.reason : r.status,
+      );
+    return r.data;
+  }
 
   @Post('ws-ticket')
   @RequirePermissions(P.READ)
@@ -147,5 +185,31 @@ export class AdminController {
   @ApiZodQuery(TransitionsQuery)
   transitions(@Query() q: unknown) {
     return this._transitions.execute(TransitionsQuery.parse(q));
+  }
+
+  @Post('audit/purge')
+  @HttpCode(200)
+  @RequirePermissions(P.PURGE)
+  @ApiOperation({
+    summary: 'Xóa audit log',
+    description:
+      'Quyền: admin:purge. olderThanDays = xóa bản ghi cũ hơn N ngày; all = true = xóa hết. dryRun = true chỉ đếm. Trả { target, before, matched, deleted }. Chính yêu cầu xóa vẫn được ghi vào audit sau khi xóa.',
+  })
+  @ApiZodBody(PurgeBody, PURGE_EXAMPLES)
+  purgeAudit(@Body() body: unknown) {
+    return this._purgeOf('audit', body);
+  }
+
+  @Post('odds-transitions/purge')
+  @HttpCode(200)
+  @RequirePermissions(P.PURGE)
+  @ApiOperation({
+    summary: 'Xóa lịch sử odds',
+    description:
+      'Quyền: admin:purge. olderThanDays = xóa bản ghi cũ hơn N ngày; all = true = xóa hết. dryRun = true chỉ đếm. Trả { target, before, matched, deleted }.',
+  })
+  @ApiZodBody(PurgeBody, PURGE_EXAMPLES)
+  purgeOddsTransitions(@Body() body: unknown) {
+    return this._purgeOf('odds-transitions', body);
   }
 }

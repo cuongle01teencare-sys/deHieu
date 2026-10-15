@@ -91,6 +91,12 @@ const ProfileBody = z.object({
         .array(z.string().trim().min(1).max(60))
         .max(30)
         .default(['better_opportunity']),
+      /** Market được vào; null = mọi market; [] = chưa chọn (profile đứng yên). */
+      markets: z
+        .array(z.string().regex(/^[a-z0-9.-]{1,60}$/))
+        .max(100)
+        .nullable()
+        .default(null),
     })
     .default({
       minNetMargin: 0.01,
@@ -98,6 +104,7 @@ const ProfileBody = z.object({
       maxSignalAgeMs: 3_000,
       maxEntriesPerTier: 1,
       ignoreCancelReasons: ['better_opportunity'],
+      markets: null,
     }),
 });
 

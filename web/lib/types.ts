@@ -223,6 +223,15 @@ export interface ArbitrageLeg {
   pick: string;
   odds: number;
   ref: Record<string, string>;
+  /** Giờ bắt đầu trận theo tenant của chân này lúc phát kèo (ms). Kèo cũ không có. */
+  startsAt?: number;
+}
+
+/** Ảnh chụp lúc hủy kèo: giờ bắt đầu từng chân còn trong room, độ lệch, ngưỡng (ms). */
+export interface SignalCloseDetail {
+  startTimes: { tenant: string; startsAt: number }[];
+  startDriftMs: number | null;
+  maxStartDriftMs: number;
 }
 
 export interface ArbitrageSignal {
@@ -347,7 +356,11 @@ export interface SignalHistoryItem extends ArbitrageSignal {
   status: SignalStatus;
   statusReason: string | null;
   supersededBy: string | null;
-  endedAt: number | null;
+  endedAt?: number | null;
+  /** Backend trả closedAt (ISO). */
+  closedAt?: string | number | null;
+  /** Giờ bắt đầu từng chân + độ lệch lúc hủy. */
+  closeDetail?: SignalCloseDetail | null;
 }
 
 // ===================== Bí danh, audit, chuyển trạng thái odds =====================

@@ -159,7 +159,7 @@ export function mockTrading(method: string, path: string, search: string, body: 
     if (rc) {
       const prof = profiles.find((x) => x.id === decodeURIComponent(rc[1]!));
       const stakeTable = prof ? resolveStakeTable(prof.stakePlan, tiers()) : [];
-      const inactiveReason = !prof ? 'PROFILE_NOT_FOUND' : !prof.enabled ? 'PROFILE_DISABLED' : prof.stakePlan.tierIds?.length === 0 ? 'NO_TIER_SELECTED' : null;
+      const inactiveReason = !prof ? 'PROFILE_NOT_FOUND' : !prof.enabled ? 'PROFILE_DISABLED' : prof.stakePlan.tierIds?.length === 0 ? 'NO_TIER_SELECTED' : prof.risk.markets?.length === 0 ? 'NO_MARKET_SELECTED' : null;
       return ok({ profileId: rc[1], active: !inactiveReason, inactiveReason, stakeTable, matchExposureCapUsd });
     }
     const filtered = () =>

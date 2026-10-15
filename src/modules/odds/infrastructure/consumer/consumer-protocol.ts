@@ -1,5 +1,6 @@
 import type { ArbitrageSignal } from '../../domain/arbitrage-signal.js';
 import type { CancelReason } from '../../domain/signal-policy.js';
+import type { SignalCloseDetail } from '../../domain/signal-close-detail.js';
 
 export const CONSUMER_PROTOCOL_VERSION = 1 as const;
 
@@ -47,6 +48,8 @@ export type AppToConsumerFrame =
       readonly room: string;
       readonly comboId: string;
       readonly reason: CancelReason;
+      /** Giờ bắt đầu từng chân + độ lệch lúc hủy (consumer cũ bỏ qua được). */
+      readonly detail?: SignalCloseDetail;
     }
   | { readonly type: 'control'; readonly action: 'pause' | 'resume' }
   | { readonly type: 'heartbeat'; readonly at: number };

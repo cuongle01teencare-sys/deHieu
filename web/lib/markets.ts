@@ -1,3 +1,23 @@
+/**
+ * Market chuẩn của hệ thống — giữ khớp với MARKET_TYPES ở backend
+ * (src/modules/odds/domain/market-type.ts).
+ */
+export const MARKET_TYPES = [
+  'game-winner',
+  'map-handicap-m2.5',
+  'map-handicap-m1.5',
+  'map-handicap-p1.5',
+  'map-handicap-p2.5',
+  'total-maps-2.5',
+  'total-maps-3.5',
+  'total-maps-4.5',
+  'map-1-winner',
+  'map-2-winner',
+  'map-3-winner',
+  'map-4-winner',
+  'map-5-winner',
+] as const;
+
 /** Nhóm market cho ma trận Chi tiết trận (thứ tự hiển thị cố định). */
 export interface MarketGroup {
   id: 'winner' | 'map-winner' | 'handicap' | 'total' | 'other';

@@ -3,6 +3,7 @@ import { combinePhases } from './phase.js';
 import { pickOf } from './pick.js';
 import type { CancelReason, RemovalReason } from './removal-reason.js';
 import type { OddsLine } from './odds-line.js';
+import type { SignalCloseDetail } from './signal-close-detail.js';
 import {
   arbitrageMargin,
   type ArbitrageOpportunity,
@@ -45,6 +46,7 @@ export class OddsRoom {
               pick: pickOf(this.key, 0),
               odds: oddsA,
               ref: a.props.ref,
+              startsAt: a.props.startsAt,
             },
             {
               tenant: b.props.tenant,
@@ -52,6 +54,7 @@ export class OddsRoom {
               pick: pickOf(this.key, 1),
               odds: oddsB,
               ref: b.props.ref,
+              startsAt: b.props.startsAt,
             },
           ],
         });
@@ -77,6 +80,24 @@ export class OddsRoom {
     if (Math.abs(a.props.startsAt - b.props.startsAt) > maxStartDriftMs)
       return 'start_time_mismatch';
     return removal;
+  }
+
+  /** Giờ bắt đầu từng chân của tổ hợp lúc này + độ lệch (đính vào sự kiện hủy kèo). */
+  closeDetail(comboId: string, maxStartDriftMs: number): SignalCloseDetail {
+    const tenants = OddsRoom.tenantsOf(comboId) ?? [];
+    const startTimes = tenants.flatMap((tenant) => {
+      const l = this.lines.get(tenant);
+      return l ? [{ tenant, startsAt: l.props.startsAt }] : [];
+    });
+    const [a, b] = startTimes;
+    return {
+      startTimes,
+      startDriftMs:
+        startTimes.length === 2 && a && b
+          ? Math.abs(a.startsAt - b.startsAt)
+          : null,
+      maxStartDriftMs,
+    };
   }
 
   /** 'sptpub>0|polymarket>1' → ['sptpub', 'polymarket'] */

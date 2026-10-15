@@ -84,6 +84,7 @@ import { ListIncidentsHandler } from './application/queries/list-incidents.query
 import { ListAuditHandler } from './application/queries/list-audit.query.js';
 import { ListOddsTransitionsHandler } from './application/queries/list-odds-transitions.query.js';
 import { AcknowledgeIncidentHandler } from './application/commands/acknowledge-incident.command.js';
+import { PurgeHistoryHandler } from './application/commands/purge-history.command.js';
 import { DrizzleIncidentRepository } from './infrastructure/persistence/drizzle/drizzle-incident.repository.js';
 import { DrizzleAuditRepository } from './infrastructure/persistence/drizzle/drizzle-audit.repository.js';
 import { DrizzleOddsTransitionRepository } from './infrastructure/persistence/drizzle/drizzle-odds-transition.repository.js';
@@ -342,6 +343,12 @@ const ADMIN_QUEUE = Symbol('ADMIN_QUEUE');
       provide: AcknowledgeIncidentHandler,
       inject: [IncidentTracker],
       useFactory: (t: IncidentTracker) => new AcknowledgeIncidentHandler(t),
+    },
+    {
+      provide: PurgeHistoryHandler,
+      inject: [AUDIT_REPOSITORY, ODDS_TRANSITION_REPOSITORY],
+      useFactory: (audit: AuditRepository, odds: OddsTransitionRepository) =>
+        new PurgeHistoryHandler(audit, odds),
     },
     {
       provide: ListAuditHandler,

@@ -32,6 +32,11 @@ export interface RiskLimits {
    * để phát kèo tốt hơn — kèo cũ vẫn còn lãi nên cứ vào). Lý do khác → dừng.
    */
   readonly ignoreCancelReasons: readonly string[];
+  /**
+   * Market profile được vào (vd 'game-winner', 'map-handicap-p1.5'). null = mọi market
+   * (kể cả market thêm sau); [] = chưa chọn market nào → profile đứng yên.
+   */
+  readonly markets: readonly string[] | null;
 }
 
 export const DEFAULT_RISK_LIMITS: RiskLimits = {
@@ -40,7 +45,12 @@ export const DEFAULT_RISK_LIMITS: RiskLimits = {
   maxSignalAgeMs: 3_000,
   maxEntriesPerTier: 1,
   ignoreCancelReasons: ['better_opportunity'],
+  markets: null,
 };
+
+/** Profile có vào market này không. */
+export const marketSelected = (r: RiskLimits, market: string): boolean =>
+  r.markets === null || r.markets.includes(market);
 
 /** Một "trader": 1 tài khoản csgoempire + 1 tài khoản polymarket + kế hoạch vốn + chiến lược + giới hạn rủi ro. */
 export interface TraderProfile {
@@ -62,6 +72,8 @@ export function validateRiskLimits(r: RiskLimits): string | null {
   if (!(r.maxSignalAgeMs >= 0)) return 'maxSignalAgeMs phải ≥ 0';
   if (!(Number.isInteger(r.maxEntriesPerTier) && r.maxEntriesPerTier >= 1))
     return 'maxEntriesPerTier phải là số nguyên ≥ 1';
+  if (r.markets !== null && r.markets.length > 100)
+    return 'markets tối đa 100 market';
   return null;
 }
 

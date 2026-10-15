@@ -1,5 +1,6 @@
 import type { ArbitrageLeg } from './arbitrage-opportunity.js';
 import type { Phase } from './phase.js';
+import type { SignalCloseDetail } from './signal-close-detail.js';
 
 /**
  * Vòng đời một kèo trong lịch sử:
@@ -37,4 +38,6 @@ export interface SignalHistoryEntry {
   readonly closedAt: Date | null;
   /** Kèo mới đã ghi đè kèo này (khi superseded). */
   readonly supersededBy: string | null;
+  /** Giờ bắt đầu từng chân + độ lệch lúc hủy (khi cancelled). */
+  readonly closeDetail: SignalCloseDetail | null;
 }

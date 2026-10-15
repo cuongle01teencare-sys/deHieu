@@ -87,6 +87,7 @@ const config = (
     maxSignalAgeMs: 0,
     maxEntriesPerTier: 1,
     ignoreCancelReasons: ['better_opportunity'],
+    markets: null,
   },
   matchExposureCapUsd: 0,
   ...over,
@@ -108,6 +109,7 @@ const signal = (id: string, margin = 0.06) => ({
       pick: 'alpha',
       odds: 2,
       ref: { e: '1', url: 'https://csgoempire.com/match-betting?bt-path=x' },
+      startsAt: 1_000_000,
     },
     {
       tenant: 'polymarket',
@@ -354,6 +356,7 @@ describe('TraderArbitrageTask (giấy)', () => {
           maxSignalAgeMs: 0,
           maxEntriesPerTier: 2,
           ignoreCancelReasons: [],
+          markets: null,
         },
       }),
     );
@@ -413,6 +416,43 @@ describe('TraderArbitrageTask (giấy)', () => {
     await b.stop();
   });
 
+  it('kèo bị hủy vì lệch giờ khi đang tính → ghi giờ từng chân lúc hủy + giờ lúc phát', async () => {
+    let open!: () => void;
+    bookGate = new Promise<void>((r) => (open = r));
+    const t = start(new TraderArbitrageTask(), params('A'));
+    await t.command('config', config('A'));
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('s7') });
+    await new Promise((r) => setTimeout(r, 50));
+    const detail = {
+      startTimes: [
+        { tenant: 'sptpub', startsAt: 1_000_000 + 2_700_000 },
+        { tenant: 'polymarket', startsAt: 1_000_000 },
+      ],
+      startDriftMs: 2_700_000,
+      maxStartDriftMs: 1_200_000,
+    };
+    hub.broadcast({
+      type: 'cancel',
+      signalId: 's7',
+      room: 'room:lol:alpha~beta:match-winner',
+      comboId: 'x',
+      reason: 'start_time_mismatch',
+      detail,
+    });
+    await until(() => trades(t).length === 1);
+    expect(trades(t)[0]).toMatchObject({
+      status: 'cancelled',
+      book: { startsAt: 1_000_000 },
+      polymarket: { startsAt: null },
+      detail: {
+        cancel: { reason: 'start_time_mismatch', ignored: false, detail },
+      },
+    });
+    open();
+    await t.stop();
+  });
+
   it('kèo bị hủy khi đang đọc sổ lệnh → cancelled, không vào lệnh', async () => {
     let open!: () => void;
     bookGate = new Promise<void>((r) => (open = r));
@@ -453,6 +493,21 @@ describe('TraderArbitrageTask (giấy)', () => {
       tierName: 'Thường',
     });
     expect(trades(t)[0]?.reason).toMatch(/^TIER_NOT_SELECTED:/);
+    await t.stop();
+  });
+
+  it('market không được chọn trong profile → bỏ qua MARKET_NOT_SELECTED', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    const base = config('A');
+    await t.command(
+      'config',
+      config('A', { risk: { ...base.risk, markets: ['map-handicap-p1.5'] } }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('s6') });
+    await until(() => trades(t).length === 1);
+    expect(trades(t)[0]?.status).toBe('skipped');
+    expect(trades(t)[0]?.reason).toMatch(/^MARKET_NOT_SELECTED:/);
     await t.stop();
   });
 

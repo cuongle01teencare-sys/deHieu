@@ -229,6 +229,13 @@ export class TradingAdmin {
     const plan = profile.stakePlan;
     const clean: TraderProfile = {
       ...profile,
+      risk: {
+        ...profile.risk,
+        markets:
+          profile.risk.markets === null
+            ? null
+            : [...new Set(profile.risk.markets)],
+      },
       stakePlan: {
         ...plan,
         overrides: Object.fromEntries(

@@ -17,6 +17,7 @@ import type {
 } from '../../../application/signal-history.repository.js';
 import type { ArbitrageLeg } from '../../../domain/arbitrage-opportunity.js';
 import type { Phase } from '../../../domain/phase.js';
+import type { SignalCloseDetail } from '../../../domain/signal-close-detail.js';
 import type {
   SignalHistoryEntry,
   SignalStatus,
@@ -68,6 +69,7 @@ export class DrizzleSignalHistoryRepository implements SignalHistoryRepository {
     reason: string | null,
     at: Date,
     supersededBy?: string,
+    detail?: SignalCloseDetail | null,
   ): Promise<void> {
     await this._tx.executor
       .update(t)
@@ -76,6 +78,7 @@ export class DrizzleSignalHistoryRepository implements SignalHistoryRepository {
         statusReason: reason,
         closedAt: at,
         supersededBy: supersededBy ?? null,
+        closeDetail: detail ?? null,
       })
       .where(and(eq(t.signalId, signalId), eq(t.status, 'active')));
   }

@@ -27,8 +27,16 @@ const signal = (id: string, margin: number): ArbitrageSignal => ({
       pick: 'alliance',
       odds: 2.08,
       ref: { t0: 'tA' },
+      startsAt: 1_000,
     },
-    { tenant: 'sptpub', side: 1, pick: 'sinners', odds: 2.26, ref: { e: '1' } },
+    {
+      tenant: 'sptpub',
+      side: 1,
+      pick: 'sinners',
+      odds: 2.26,
+      ref: { e: '1' },
+      startsAt: 1_000,
+    },
   ],
   issuedAt: 1_000,
   expiresAt: 31_000,
@@ -72,6 +80,14 @@ describe('Lịch sử kèo (recorder + DrizzleSignalHistoryRepository)', () => {
         'room:cs2:alliance~sinners:game-winner',
         'polymarket>0|sptpub>1',
         'phase_disabled',
+        {
+          startTimes: [
+            { tenant: 'polymarket', startsAt: 1_000 },
+            { tenant: 'sptpub', startsAt: 2_701_000 },
+          ],
+          startDriftMs: 2_700_000,
+          maxStartDriftMs: 1_200_000,
+        },
       ),
     ]);
     await recorder.flush();
@@ -90,7 +106,10 @@ describe('Lịch sử kèo (recorder + DrizzleSignalHistoryRepository)', () => {
     expect(await repo.get('s2')).toMatchObject({
       status: 'cancelled',
       statusReason: 'phase_disabled',
+      closeDetail: { startDriftMs: 2_700_000, maxStartDriftMs: 1_200_000 },
     });
+    expect((await repo.get('s2'))?.legs[0].startsAt).toBe(1_000);
+    expect((await repo.get('s1'))?.closeDetail).toBeNull();
 
     const cancelled = await repo.list({
       status: 'cancelled',

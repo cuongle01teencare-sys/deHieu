@@ -7,6 +7,7 @@ import {
   text,
   timestamp,
 } from 'drizzle-orm/pg-core';
+import type { SignalCloseDetail } from '../../../domain/signal-close-detail.js';
 
 /** Lịch sử mọi kèo app đã phát và tình trạng hiện tại của từng kèo. */
 export const drizzleArbitrageSignalsTable = pgTable(
@@ -29,6 +30,8 @@ export const drizzleArbitrageSignalsTable = pgTable(
     statusReason: text('status_reason'),
     closedAt: timestamp('closed_at', { withTimezone: true }),
     supersededBy: text('superseded_by'),
+    /** Ảnh chụp lúc hủy: giờ bắt đầu từng chân, độ lệch, ngưỡng (xem SignalCloseDetail). */
+    closeDetail: jsonb('close_detail').$type<SignalCloseDetail>(),
   },
   (t) => [
     index('arbitrage_signals_issued_at_idx').on(t.issuedAt),

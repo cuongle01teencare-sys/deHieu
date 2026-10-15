@@ -5,6 +5,7 @@ import { InMemoryOddsRoomStore } from '../persistence/in-memory/in-memory-odds-r
 import { InMemorySignalStateStore } from '../persistence/in-memory/in-memory-signal-state.store.js';
 import { InMemoryArbitrageSettingsStore } from '../settings/in-memory-arbitrage-settings.store.js';
 import type { DomainEvent } from '../../../../shared/domain/domain-event.js';
+import { ArbitrageSignalCancelled } from '../../domain/events/arbitrage-signal.events.js';
 
 describe('ArbitrageEvaluator: moc margin cua lan phat moi', () => {
   it('refresh khong doi moc; giam tich luy du buoc thi huy va phat moi', async () => {
@@ -84,5 +85,66 @@ describe('ArbitrageEvaluator: moc margin cua lan phat moi', () => {
       (await signals.getCombos(key.toString())).get(first.comboId)
         ?.issuedMargin,
     ).toBeCloseTo(0.08, 12);
+  });
+
+  it('giờ bắt đầu bị dời quá ngưỡng → hủy start_time_mismatch kèm giờ từng chân và độ lệch', async () => {
+    const rooms = new InMemoryOddsRoomStore();
+    const signals = new InMemorySignalStateStore();
+    const events: DomainEvent[] = [];
+    const evaluator = new ArbitrageEvaluator(
+      rooms,
+      signals,
+      new InMemoryArbitrageSettingsStore(),
+      {
+        publish: (batch) => {
+          events.push(...batch);
+          return Promise.resolve();
+        },
+      },
+      () => 1_000,
+    );
+    const key = MatchKey.of({
+      sport: 'cs2',
+      teamX: 'a',
+      teamY: 'b',
+      market: 'game-winner',
+    });
+    const T = 10 * 3_600_000;
+    const line = (tenant: string, odds: [number, number], startsAt: number) =>
+      rooms.setLine(
+        key,
+        OddsLine.create({
+          tenant,
+          odds,
+          status: 'open',
+          phase: 'prematch',
+          startsAt,
+          updatedAt: 1_000,
+          ref: {},
+        }),
+      );
+    await line('a', [2.2, 1.01], T);
+    await line('b', [1.01, 2.2], T);
+    await evaluator.evaluate(key);
+    const [issued] = await signals.activeSignals();
+    expect(issued.legs.map((l) => l.startsAt)).toEqual([T, T]);
+
+    await line('a', [2.2, 1.01], T + 45 * 60_000); // a dời 45 phút
+    await evaluator.evaluate(key);
+    const cancel = events.find(
+      (e) =>
+        e instanceof ArbitrageSignalCancelled && e.signalId === issued.signalId,
+    );
+    expect(cancel).toMatchObject({
+      reason: 'start_time_mismatch',
+      detail: {
+        startTimes: [
+          { tenant: 'a', startsAt: T + 45 * 60_000 },
+          { tenant: 'b', startsAt: T },
+        ],
+        startDriftMs: 45 * 60_000,
+        maxStartDriftMs: 20 * 60_000,
+      },
+    });
   });
 });

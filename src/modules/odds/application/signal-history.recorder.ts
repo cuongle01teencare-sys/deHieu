@@ -66,6 +66,7 @@ export class SignalHistoryRecorder implements EventPublisher {
           statusReason: null,
           closedAt: null,
           supersededBy: null,
+          closeDetail: null,
         });
         if (e.supersedes)
           await this._repo.close(
@@ -85,7 +86,15 @@ export class SignalHistoryRecorder implements EventPublisher {
           at,
         );
     if (e instanceof ArbitrageSignalCancelled)
-      return () => this._repo.close(e.signalId, 'cancelled', e.reason, at);
+      return () =>
+        this._repo.close(
+          e.signalId,
+          'cancelled',
+          e.reason,
+          at,
+          undefined,
+          e.detail,
+        );
     return null;
   }
 

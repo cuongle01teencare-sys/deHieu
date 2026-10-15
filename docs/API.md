@@ -120,7 +120,7 @@ Mốc so sánh được đặt lại sau mỗi lần phát kèo mới ở cả h
 
 ### Lịch sử kèo
 
-`status`: `active` (đang sống) · `superseded` (bị kèo mới hơn của cùng tổ hợp ghi đè, có `supersededBy`) · `cancelled` (có `statusReason`) · `abandoned` (app khởi động lại khi kèo còn sống, `statusReason = app_restart`).
+`status`: `active` (đang sống) · `superseded` (bị kèo mới hơn của cùng tổ hợp ghi đè, có `supersededBy`) · `cancelled` (có `statusReason`, và `closeDetail` = giờ bắt đầu từng chân + độ lệch lúc hủy) · `abandoned` (app khởi động lại khi kèo còn sống, `statusReason = app_restart`). `legs[].startsAt` = giờ bắt đầu từng chân lúc phát.
 Lịch sử được ghi nền, không làm chậm việc gửi kèo.
 
 ## Bí danh tên đội
@@ -235,6 +235,8 @@ Private key ví Polymarket mã hóa AES-256-GCM bằng khóa chủ `TRADING_SECR
 | POST   | `/admin/ws-ticket`                                       | `admin:read`      | Vé dùng một lần, sống 60s, để trình duyệt mở admin stream: `{ ticket, expiresAt }`                                         |
 | GET    | `/admin/audit?principalId=&method=&route=&from=&to=`     | `admin:read`      | Mọi request POST/PUT/PATCH/DELETE: ai, route, params/body (đã che bí mật), kết quả                                         |
 | GET    | `/admin/odds-transitions?room=&tenant=&to=&from=&until=` | `admin:read`      | Dòng kèo xuất hiện (`from=null`), open↔suspended, bị gỡ (`to=removed` + reason). Giữ `ODDS_TRANSITION_RETENTION_DAYS` ngày |
+| POST   | `/admin/audit/purge`                                     | `admin:purge`     | Xóa audit: `{ "olderThanDays": 30 }` hoặc `{ "all": true }`; `dryRun: true` chỉ đếm → `{ target, before, matched, deleted }` |
+| POST   | `/admin/odds-transitions/purge`                          | `admin:purge`     | Xóa lịch sử odds, cùng body như trên                                                                                       |
 
 ### Sự cố (mức 1)
 
@@ -263,11 +265,14 @@ Kênh báo: luôn ghi log (`[Alerts]`); thêm Discord khi đặt `DISCORD_ALERT_
 consumer → { "type":"hello", "v":1, "consumerId":"trader-1", "role":"trader"|"discord"|"other", "token":"<CONSUMER_WS_TOKEN>" }
 app      → { "type":"welcome", "paused":false }            (+ gửi lại các kèo còn hiệu lực)
 app      → { "type":"signal", "deliveryId", "kind":"issued"|"refreshed", "signal":{...}, "supersedes"? }
-app      → { "type":"cancel", "deliveryId", "signalId", "room", "comboId", "reason": <xem bảng lý do> }
+app      → { "type":"cancel", "deliveryId", "signalId", "room", "comboId", "reason": <xem bảng lý do>, "detail"? }
 consumer → { "type":"ack", "deliveryId" }                  (bắt buộc; chưa ack app sẽ gửi lại mỗi 2s)
 app      → { "type":"control", "action":"pause"|"resume" }
 hai chiều: { "type":"heartbeat", "at": <ms> }
 ```
+
+Mỗi chân trong `signal.legs` có `startsAt` (ms): giờ bắt đầu trận theo tenant đó lúc tính kèo. `cancel.detail` (consumer cũ bỏ qua được) chụp lúc hủy:
+`{ "startTimes": [{ "tenant", "startsAt" }], "startDriftMs": <ms|null>, "maxStartDriftMs": <ms> }`. Chân đã bị gỡ khỏi room thì không có trong `startTimes`. Dùng để biết kèo `start_time_mismatch` lệch bao nhiêu và bên nào dời giờ.
 
 Lý do hủy (`reason`):
 

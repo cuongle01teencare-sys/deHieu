@@ -116,7 +116,13 @@ export class ArbitrageEvaluator {
         this._stats.cancelledByReason[d.reason] =
           (this._stats.cancelledByReason[d.reason] ?? 0) + 1;
         events.push(
-          new ArbitrageSignalCancelled(d.signalId, roomId, d.comboId, d.reason),
+          new ArbitrageSignalCancelled(
+            d.signalId,
+            roomId,
+            d.comboId,
+            d.reason,
+            room.closeDetail(d.comboId, settings.maxStartDriftMs),
+          ),
         );
       } else if (d.type === 'issue') {
         const signal = this._toSignal(

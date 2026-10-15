@@ -67,10 +67,11 @@ const signal = (id: string, margin: number): ArbitrageSignal => ({
   phase: 'prematch',
   margin,
   legs: [
-    { tenant: 'sptpub', side: 0, pick: 'a', odds: 2.2, ref: {} },
+    { tenant: 'sptpub', side: 0, pick: 'a', odds: 2.2, ref: {}, startsAt: 0 },
     {
       tenant: 'polymarket',
       side: 1,
+      startsAt: 0,
       pick: 'b',
       odds: 2.2,
       ref: { url: 'https://polymarket.com/event/x' },
@@ -165,6 +166,32 @@ describe('SignalNotifier — phân kênh theo hạng kèo admin tự đặt', ()
     expect(t.sender.sent.map((x) => x.message.title)).toEqual([
       'Kèo mới · Kim cương · +6.00%',
       'Kèo cập nhật · Kim cương · +7.00%',
+    ]);
+  });
+
+  it('hủy vì có kèo tốt hơn → kênh không nhận tin hủy; kèo mới hiện "Kèo cập nhật"', async () => {
+    const t = await setup();
+    await t.add('vip', [t.vip.id]);
+    const s1 = signal('s1', 0.06);
+    await t.notifier.publish([new ArbitrageSignalIssued(s1)]);
+    await t.notifier.publish([
+      new ArbitrageSignalCancelled(
+        's1',
+        s1.room,
+        s1.comboId,
+        'better_opportunity',
+      ),
+      new ArbitrageSignalIssued(signal('s2', 0.07)),
+    ]);
+    // lý do khác vẫn báo hủy
+    await t.notifier.publish([
+      new ArbitrageSignalCancelled('s2', s1.room, s1.comboId, 'leg_removed'),
+    ]);
+    await t.notifier.drain();
+    expect(t.sender.sent.map((x) => x.message.title)).toEqual([
+      'Kèo mới · Kim cương · +6.00%',
+      'Kèo cập nhật · Kim cương · +7.00%',
+      'Kèo đã hủy',
     ]);
   });
 

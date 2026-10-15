@@ -47,7 +47,21 @@ export type OpsEvent =
     >
   | Base<
       'signal.cancelled',
-      { signalId: string; room: string; comboId: string; reason: string }
+      {
+        signalId: string;
+        room: string;
+        comboId: string;
+        reason: string;
+        /** Giờ bắt đầu từng chân + độ lệch lúc hủy. */
+        detail?: {
+          readonly startTimes: readonly {
+            readonly tenant: string;
+            readonly startsAt: number;
+          }[];
+          readonly startDriftMs: number | null;
+          readonly maxStartDriftMs: number;
+        } | null;
+      }
     >
   /** Mọi thay đổi dòng kèo — CHỈ gửi cho ai subscribe đúng room (topic room:{id}). */
   | Base<

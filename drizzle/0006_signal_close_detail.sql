@@ -1,0 +1,1 @@
+ALTER TABLE "arbitrage_signals" ADD COLUMN "close_detail" jsonb;

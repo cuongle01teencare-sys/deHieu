@@ -3,6 +3,7 @@ import type {
   SignalHistoryEntry,
   SignalStatus,
 } from '../domain/signal-history.js';
+import type { SignalCloseDetail } from '../domain/signal-close-detail.js';
 
 export interface SignalHistoryQuery {
   readonly status?: SignalStatus;
@@ -24,6 +25,7 @@ export interface SignalHistoryRepository {
     reason: string | null,
     at: Date,
     supersededBy?: string,
+    detail?: SignalCloseDetail | null,
   ): Promise<void>;
   /** Đóng mọi kèo còn 'active' (dùng khi app khởi động lại). Trả về số kèo bị đóng. */
   abandonActive(reason: string, at: Date): Promise<number>;

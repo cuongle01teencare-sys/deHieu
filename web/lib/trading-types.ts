@@ -76,9 +76,11 @@ export interface RiskLimits {
   maxEntriesPerTier: number;
   /** Lý do hủy kèo mà trader vẫn vào tiếp lệnh đang tính. */
   ignoreCancelReasons: string[];
+  /** Market được vào (vd 'game-winner'). null = mọi market; [] = chưa chọn (profile đứng yên). */
+  markets: string[] | null;
 }
 
-export const DEFAULT_RISK: RiskLimits = { minNetMargin: 0.01, matchCapUsd: 0, maxSignalAgeMs: 3_000, maxEntriesPerTier: 1, ignoreCancelReasons: ['better_opportunity'] };
+export const DEFAULT_RISK: RiskLimits = { minNetMargin: 0.01, matchCapUsd: 0, maxSignalAgeMs: 3_000, maxEntriesPerTier: 1, ignoreCancelReasons: ['better_opportunity'], markets: null };
 
 export interface TraderProfile {
   id: string;
@@ -114,6 +116,8 @@ export interface TradeLeg {
   odds: number;
   /** Trang trận trên sàn. */
   url?: string | null;
+  /** Giờ bắt đầu trận theo sàn này lúc kèo phát (ms). */
+  startsAt?: number | null;
 }
 
 /** Một mức giá của sổ lệnh Polymarket lúc quyết định. */
@@ -145,6 +149,8 @@ export interface TradeDetail {
   sizing?: { targetStake: number; minStake: number; minShares: number; minNetMargin: number };
   cancelledAfterMs?: number;
   bookAt?: number | null;
+  /** Kèo bị hủy khi trader đang tính. ignored = lý do được bỏ qua nên vẫn vào tiếp. */
+  cancel?: { reason: string; ignored: boolean; detail: import('./types').SignalCloseDetail | null };
 }
 
 export interface TradeAttempt {

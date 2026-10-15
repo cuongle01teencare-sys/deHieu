@@ -69,6 +69,15 @@ export class SignalNotifier implements EventPublisher {
   private _tiers: SignalTier[] = [];
   private _channels: NotifyChannel[] = [];
   private readonly _delivered = new Map<string, Delivered>();
+  /**
+   * Kèo cũ bị hủy vì có kèo tốt hơn (room|comboId → kèo cũ + sự kiện hủy), chờ kèo mới cùng tổ hợp
+   * (evaluator phát hủy + kèo mới trong CÙNG một lô). Kênh nhận kèo mới: không gửi tin hủy, kèo mới
+   * hiện "Kèo cập nhật". Kênh không nhận kèo mới (khác hạng): vẫn báo hủy để không treo kèo cũ.
+   */
+  private readonly _replaced = new Map<
+    string,
+    { readonly d: Delivered; readonly e: ArbitrageSignalCancelled }
+  >();
   private readonly _queues = new Map<string, Promise<void>>();
   private readonly _status = new Map<string, NotifyChannelStatus>();
   private readonly _opts: SignalNotifierOptions;
@@ -116,6 +125,9 @@ export class SignalNotifier implements EventPublisher {
         if (d) d.signal = e.signal; // gia hạn: giữ dấu vết lâu hơn
       } else if (e instanceof ArbitrageSignalCancelled) this._onCancelled(e);
     }
+    // kèo tốt hơn không tới trong lô này → báo hủy như thường
+    for (const { d, e } of this._replaced.values()) this._sendCancel(d, e);
+    this._replaced.clear();
     return Promise.resolve();
   }
 
@@ -127,7 +139,12 @@ export class SignalNotifier implements EventPublisher {
   // ---------------------------------------------------------------- internals
 
   private _onIssued(e: ArbitrageSignalIssued) {
-    const previous = e.supersedes ? this._delivered.get(e.supersedes) : null;
+    const comboKey = `${e.signal.room}|${e.signal.comboId}`;
+    const replaced = this._replaced.get(comboKey);
+    this._replaced.delete(comboKey);
+    const previous = e.supersedes
+      ? this._delivered.get(e.supersedes)
+      : replaced?.d;
     if (e.supersedes) this._delivered.delete(e.supersedes);
     const channelIds: string[] = [];
     for (const ch of this._channels) {
@@ -139,13 +156,36 @@ export class SignalNotifier implements EventPublisher {
     }
     if (channelIds.length)
       this._delivered.set(e.signal.signalId, { signal: e.signal, channelIds });
+    // kênh đã nhận kèo cũ nhưng kèo mới không tới (khác hạng) → báo hủy kèo cũ
+    if (replaced) {
+      const rest = replaced.d.channelIds.filter(
+        (id) => !channelIds.includes(id),
+      );
+      if (rest.length)
+        this._sendCancel({ ...replaced.d, channelIds: rest }, replaced.e);
+    }
   }
 
   private _onCancelled(e: ArbitrageSignalCancelled) {
     const d = this._delivered.get(e.signalId);
     if (!d) return; // kênh nào cũng chưa nhận kèo này → không báo hủy
     this._delivered.delete(e.signalId);
-    const msg = cancelledMessage(d.signal, e.signalId, e.reason);
+    // có kèo tốt hơn: sự kiện hủy vẫn phát cho consumer/lịch sử; kênh thông báo chờ kèo mới (xem _replaced)
+    if (e.reason === 'better_opportunity') {
+      this._replaced.set(`${e.room}|${e.comboId}`, { d, e });
+      return;
+    }
+    this._sendCancel(d, e);
+  }
+
+  private _sendCancel(d: Delivered, e: ArbitrageSignalCancelled) {
+    const msg = cancelledMessage(
+      d.signal,
+      e.signalId,
+      e.reason,
+      e.occurredAt.getTime(),
+      e.detail,
+    );
     for (const id of d.channelIds) {
       const ch = this._channels.find((c) => c.id === id && c.enabled);
       if (ch) this._enqueue(ch, msg);

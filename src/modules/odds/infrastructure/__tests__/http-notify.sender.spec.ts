@@ -4,7 +4,11 @@ import {
 } from '../notify/http-notify.sender.js';
 import type { NotifyChannel } from '../../domain/notify-channel.js';
 
-import { issuedMessage } from '../../application/notify/signal-message.js';
+import {
+  cancelledMessage,
+  fmtDrift,
+  issuedMessage,
+} from '../../application/notify/signal-message.js';
 import type { NotifyMessage } from '../../application/notify/notify.ports.js';
 import type { ArbitrageSignal } from '../../domain/arbitrage-signal.js';
 
@@ -61,10 +65,18 @@ describe('HttpNotifySender', () => {
       phase: 'prematch',
       margin: 1 / (1 / 2.2 + 1 / 2.2) - 1,
       legs: [
-        { tenant: 'sptpub', side: 0, pick: 'a', odds: 2.2, ref: {} },
+        {
+          tenant: 'sptpub',
+          side: 0,
+          pick: 'a',
+          odds: 2.2,
+          ref: {},
+          startsAt: 0,
+        },
         {
           tenant: 'polymarket',
           side: 1,
+          startsAt: 0,
           pick: 'b',
           odds: 2.2,
           ref: { url: 'https://polymarket.com/event/x' },
@@ -105,6 +117,60 @@ describe('HttpNotifySender', () => {
     expect(both.fields[0]?.value).toContain(
       '[Mở trang sptpub](https://csgoempire.com/x)',
     );
+  });
+
+  it('kèo hủy vì lệch giờ: ghi giờ từng bên lúc hủy, giờ lúc phát nếu đổi, độ lệch', () => {
+    const t0 = Date.UTC(2026, 9, 15, 3, 0); // 10:00 giờ VN
+    const sig: ArbitrageSignal = {
+      signalId: 's1',
+      room: 'room:cs2:a~b:game-winner',
+      sport: 'cs2',
+      market: 'game-winner',
+      teams: ['a', 'b'],
+      comboId: 'sptpub>0|polymarket>1',
+      phase: 'prematch',
+      margin: 0.03,
+      legs: [
+        {
+          tenant: 'sptpub',
+          side: 0,
+          pick: 'a',
+          odds: 2.2,
+          ref: {},
+          startsAt: t0,
+        },
+        {
+          tenant: 'polymarket',
+          side: 1,
+          pick: 'b',
+          odds: 2.2,
+          ref: {},
+          startsAt: t0,
+        },
+      ],
+      issuedAt: 0,
+      expiresAt: 30_000,
+    };
+    const detail = {
+      startTimes: [
+        { tenant: 'sptpub', startsAt: t0 + 45 * 60_000 },
+        { tenant: 'polymarket', startsAt: t0 },
+      ],
+      startDriftMs: 45 * 60_000,
+      maxStartDriftMs: 20 * 60_000,
+    };
+    const m = cancelledMessage(sig, 's1', 'start_time_mismatch', 0, detail);
+    const f = m.fields.find((x) => x.name === 'Giờ bắt đầu lúc hủy');
+    expect(f?.value).toContain(
+      'sptpub: **10:45 15/10** (lúc phát 10:00 15/10)',
+    );
+    expect(f?.value).toContain('polymarket: **10:00 15/10**');
+    expect(f?.value).toContain('Lệch **45 phút** · cho phép ≤ 20 phút');
+    // lý do khác: không kèm giờ
+    expect(
+      cancelledMessage(sig, 's1', 'below_threshold', 0, detail).fields,
+    ).toHaveLength(1);
+    expect(fmtDrift(80 * 60_000)).toBe('1 giờ 20 phút');
   });
 
   it('telegram: gọi Bot API sendMessage; 429 → chờ retry_after rồi thử lại', async () => {

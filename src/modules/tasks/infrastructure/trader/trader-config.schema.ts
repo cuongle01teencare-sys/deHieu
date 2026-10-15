@@ -42,6 +42,8 @@ export const TraderConfigSchema = z.object({
     maxSignalAgeMs: nonNeg,
     maxEntriesPerTier: z.number().int().min(1).default(1),
     ignoreCancelReasons: z.array(z.string()).default([]),
+    // null = mọi market (app cũ không gửi)
+    markets: z.array(z.string()).nullable().default(null),
   }),
   matchExposureCapUsd: nonNeg,
 });

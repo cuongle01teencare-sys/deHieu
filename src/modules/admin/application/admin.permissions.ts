@@ -2,4 +2,5 @@
 export const ADMIN_PERMISSIONS = {
   READ: 'admin:read', // snapshot, sự cố, audit, lịch sử odds, stream
   INCIDENTS_ACK: 'admin:incidents', // xác nhận (tắt nhắc lại) sự cố
+  PURGE: 'admin:purge', // xóa tay audit / lịch sử odds
 } as const;

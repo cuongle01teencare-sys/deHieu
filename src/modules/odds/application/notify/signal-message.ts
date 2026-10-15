@@ -1,5 +1,6 @@
 import type { ArbitrageSignal } from '../../domain/arbitrage-signal.js';
 import type { CancelReason } from '../../domain/signal-policy.js';
+import type { SignalCloseDetail } from '../../domain/signal-close-detail.js';
 import type { SignalTier } from '../../domain/notify-channel.js';
 import type { NotifyMessage } from './notify.ports.js';
 
@@ -41,6 +42,51 @@ const time = (ms: number) =>
     timeZone: 'Asia/Ho_Chi_Minh',
     hour12: false,
   });
+
+/** Giờ + ngày theo giờ Việt Nam, vd "10:45 15/10". */
+const CLOCK = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Ho_Chi_Minh',
+  hourCycle: 'h23',
+  hour: '2-digit',
+  minute: '2-digit',
+  day: '2-digit',
+  month: '2-digit',
+});
+const clock = (ms: number) => {
+  const p = Object.fromEntries(
+    CLOCK.formatToParts(new Date(ms)).map((x) => [x.type, x.value]),
+  );
+  return `${p.hour}:${p.minute} ${p.day}/${p.month}`;
+};
+
+/** ms → "45 phút" / "1 giờ 20 phút" / "30 giây". */
+export const fmtDrift = (ms: number): string => {
+  const min = Math.round(ms / 60_000);
+  if (min < 1) return `${Math.round(ms / 1000)} giây`;
+  const h = Math.floor(min / 60);
+  return h ? `${h} giờ${min % 60 ? ` ${min % 60} phút` : ''}` : `${min} phút`;
+};
+
+/**
+ * Dòng giờ bắt đầu cho tin hủy: lúc phát (theo kèo) → lúc hủy (theo room), kèm độ lệch.
+ * Không có dữ liệu thì trả null.
+ */
+export function startTimesField(
+  s: ArbitrageSignal | undefined,
+  d: SignalCloseDetail | null | undefined,
+): { name: string; value: string } | null {
+  if (!d?.startTimes.length) return null;
+  const lines = d.startTimes.map((t) => {
+    const before = s?.legs.find((l) => l.tenant === t.tenant)?.startsAt;
+    const moved = before !== undefined && before !== t.startsAt;
+    return `${t.tenant}: **${clock(t.startsAt)}**${moved ? ` (lúc phát ${clock(before)})` : ''}`;
+  });
+  if (d.startDriftMs !== null)
+    lines.push(
+      `Lệch **${fmtDrift(d.startDriftMs)}** · cho phép ≤ ${fmtDrift(d.maxStartDriftMs)}`,
+    );
+  return { name: 'Giờ bắt đầu lúc hủy', value: lines.join('\n') };
+}
 
 const matchLine = (s: ArbitrageSignal) =>
   `**${SPORT[s.sport] ?? s.sport}** · **${s.teams[0]}** vs **${s.teams[1]}**`;
@@ -117,7 +163,11 @@ export function cancelledMessage(
   signalId: string,
   reason: CancelReason,
   at: number = Date.now(),
+  detail: SignalCloseDetail | null = null,
 ): NotifyMessage {
+  // chỉ kèm giờ khi lý do liên quan tới giờ (tránh làm rối tin hủy thường)
+  const times =
+    reason === 'start_time_mismatch' ? startTimesField(s, detail) : null;
   return {
     kind: 'cancelled',
     title: 'Kèo đã hủy',
@@ -127,7 +177,10 @@ export function cancelledMessage(
           `${marketLabel(s.market)} · ${phaseLabel(s)} · trước đó +${pct(s.margin)}`,
         ].join('\n')
       : '',
-    fields: [{ name: 'Lý do', value: CANCEL[reason] ?? reason }],
+    fields: [
+      { name: 'Lý do', value: CANCEL[reason] ?? reason },
+      ...(times ? [times] : []),
+    ],
     links: [],
     footer: `id ${signalId}`,
     at,

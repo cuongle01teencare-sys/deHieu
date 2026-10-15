@@ -47,6 +47,7 @@ export class OpsSignalRelay implements EventPublisher {
             room: e.room,
             comboId: e.comboId,
             reason: e.reason,
+            detail: e.detail,
           },
         });
       }

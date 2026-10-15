@@ -17,6 +17,8 @@ export interface HubLeg {
   readonly pick: string;
   readonly odds: number;
   readonly ref: Readonly<Record<string, string>>;
+  /** Giờ bắt đầu trận theo tenant của chân này lúc phát (app cũ không gửi). */
+  readonly startsAt?: number;
 }
 
 export interface HubSignal {
@@ -38,6 +40,15 @@ export interface HubCancel {
   readonly room: string;
   readonly comboId: string;
   readonly reason: string;
+  /** Giờ bắt đầu từng chân + độ lệch lúc hủy (app cũ không gửi). */
+  readonly detail?: {
+    readonly startTimes: readonly {
+      readonly tenant: string;
+      readonly startsAt: number;
+    }[];
+    readonly startDriftMs: number | null;
+    readonly maxStartDriftMs: number;
+  };
 }
 
 export interface ConsumerHubHandlers {

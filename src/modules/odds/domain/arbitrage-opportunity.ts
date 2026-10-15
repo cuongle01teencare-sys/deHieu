@@ -8,6 +8,8 @@ export interface ArbitrageLeg {
   readonly pick: string;
   readonly odds: number;
   readonly ref: Readonly<Record<string, string>>;
+  /** Giờ bắt đầu trận theo tenant của chân này, lúc tính tổ hợp (ms). */
+  readonly startsAt: number;
 }
 
 /** Một tổ hợp: cược side 0 ở legs[0].tenant và side 1 ở legs[1].tenant. */

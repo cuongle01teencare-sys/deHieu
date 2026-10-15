@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Zap, History } from 'lucide-react';
 import { api } from '@/lib/api';
-import type { ArbitrageSignal, ListResult, SignalHistoryItem, SignalStatus } from '@/lib/types';
+import type { ArbitrageSignal, ListResult, SignalCloseDetail, SignalHistoryItem, SignalStatus } from '@/lib/types';
 import { fmtAge, fmtClock, fmtStamp, timeLeft } from '@/lib/format';
 import { marketLabel } from '@/lib/markets';
 import { CANCEL_REASONS } from '@/lib/skip-reasons';
@@ -15,6 +15,7 @@ import { useIsMobile } from '@/hooks/use-media';
 import { useConsoleData } from '../console-data';
 import { RoomDrawer, DrawerSection } from '../room-drawer';
 import { SignalLegs } from '../signal-legs';
+import { driftSummary, StartTimeDetail } from '../start-time-detail';
 import { PhasePill, Teams } from '../domain';
 import { Segmented, Select } from '../ui/controls';
 import { KV, PageHeader } from '../ui/layout';
@@ -26,7 +27,15 @@ import { LiveStamp, Margin } from '../ui/values';
 import { JsonBlock, Mono } from '../ui/code';
 import { Button } from '../ui/button';
 
-type FeedItem = ArbitrageSignal & { gone?: { at: number; reason: string | null } };
+type FeedItem = ArbitrageSignal & { gone?: { at: number; reason: string | null; detail?: SignalCloseDetail | null } };
+
+/** Nhãn lý do hủy; lệch giờ thì kèm độ lệch. */
+const cancelText = (reason: string | null, detail?: SignalCloseDetail | null) => {
+  if (!reason) return 'Đã hủy';
+  const label = CANCEL_REASONS[reason] ?? reason;
+  const drift = reason === 'start_time_mismatch' ? driftSummary(detail) : null;
+  return drift ? `${label} · ${drift}` : label;
+};
 const FADE_MS = 6_000;
 
 export function SignalsPage() {
@@ -63,7 +72,7 @@ function LiveFeed() {
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [room, setRoom] = useState<string | null>(null);
-  const reasons = useRef(new Map<string, string>());
+  const reasons = useRef(new Map<string, { reason: string; detail: SignalCloseDetail | null }>());
   const seen = useRef(new Set<string>());
 
   const merge = (fresh: ArbitrageSignal[]) => {
@@ -72,7 +81,7 @@ function LiveFeed() {
       const ids = new Set(fresh.map((s) => s.signalId));
       const gone = old
         .filter((o) => !ids.has(o.signalId))
-        .map((o) => o.gone ? o : { ...o, gone: { at: now, reason: reasons.current.get(o.signalId) ?? null } })
+        .map((o) => (o.gone ? o : { ...o, gone: { at: now, reason: reasons.current.get(o.signalId)?.reason ?? null, detail: reasons.current.get(o.signalId)?.detail ?? null } }))
         .filter((o) => now - o.gone!.at < FADE_MS);
       return [...fresh, ...gone].sort((a, b) => b.issuedAt - a.issuedAt);
     });
@@ -92,7 +101,8 @@ function LiveFeed() {
     void load();
     const t = setInterval(load, 2_000);
     const off = onEvent((e) => {
-      if (e.type === 'signal.cancelled') reasons.current.set(String(e.data.signalId), String(e.data.reason ?? ''));
+      if (e.type === 'signal.cancelled')
+        reasons.current.set(String(e.data.signalId), { reason: String(e.data.reason ?? ''), detail: (e.data.detail as SignalCloseDetail | null | undefined) ?? null });
       if (e.topic === 'signals') void load();
     });
     return () => {
@@ -155,12 +165,12 @@ function FeedRow({ s, isNew, minMargin, onOpen }: { s: FeedItem; isNew: boolean;
           <div className="mt-0.5 truncate text-caption text-muted-fg">
             {marketLabel(s.market)} <span className="num hidden text-faint md:inline">· {s.market}</span>
           </div>
-          {gone ? <div className="mt-0.5 text-caption text-muted-fg md:hidden">{s.gone!.reason ? CANCEL_REASONS[s.gone!.reason] ?? s.gone!.reason : 'Đã hủy'}</div> : null}
+          {gone ? <div className="mt-0.5 text-caption text-muted-fg md:hidden">{cancelText(s.gone!.reason, s.gone!.detail)}</div> : null}
         </div>
         <SignalLegs legs={s.legs} className="hidden min-w-0 flex-[1.3] md:flex" />
         <div className="hidden w-24 shrink-0 text-right md:block">
           {gone ? (
-            <span className="text-caption text-muted-fg">{s.gone!.reason ? CANCEL_REASONS[s.gone!.reason] ?? s.gone!.reason : 'Đã hủy'}</span>
+            <span className="text-caption text-muted-fg">{cancelText(s.gone!.reason, s.gone!.detail)}</span>
           ) : (
             <span className="num text-caption text-muted-fg">còn {fmtAge(left)}</span>
           )}
@@ -269,7 +279,7 @@ function HistoryTab() {
                   <TD>
                     <Pill tone={STATUS[s.status].tone}>{STATUS[s.status].label}</Pill>
                   </TD>
-                  <TD className="text-caption text-muted-fg">{s.statusReason ? CANCEL_REASONS[s.statusReason] ?? s.statusReason : s.supersededBy ? 'Kèo mới hơn' : '—'}</TD>
+                  <TD className="text-caption text-muted-fg">{s.statusReason ? cancelText(s.statusReason, s.closeDetail) : s.supersededBy ? 'Kèo mới hơn' : '—'}</TD>
                   <TD>
                     <SignalLegs legs={s.legs} className="text-caption" />
                   </TD>
@@ -297,14 +307,19 @@ function HistoryTab() {
             <DrawerSection title="Hai chân">
               <SignalLegs legs={open.legs} stacked />
             </DrawerSection>
+            {open.legs.some((l) => l.startsAt != null) || open.closeDetail ? (
+              <DrawerSection title="Giờ bắt đầu">
+                <StartTimeDetail legs={open.legs} detail={open.status === 'cancelled' ? open.closeDetail : null} />
+              </DrawerSection>
+            ) : null}
             <DrawerSection title="Vòng đời">
               <KV
                 items={[
                   ['Market', `${marketLabel(open.market)} (${open.market})`],
                   ['Kênh', open.phase === 'live' ? 'Live' : 'Trước trận'],
                   ['Phát lúc', <span key="i" className="num">{fmtStamp(open.issuedAt)}</span>],
-                  ['Kết thúc', open.endedAt ? <span key="e" className="num">{fmtStamp(open.endedAt)}</span> : '—'],
-                  ['Lý do', open.statusReason ? `${CANCEL_REASONS[open.statusReason] ?? ''} (${open.statusReason})` : '—'],
+                  ['Kết thúc', (open.closedAt ?? open.endedAt) ? <span key="e" className="num">{fmtStamp(new Date(open.closedAt ?? open.endedAt!).getTime())}</span> : '—'],
+                  ['Lý do', open.statusReason ? `${cancelText(open.statusReason, open.closeDetail)} (${open.statusReason})` : '—'],
                   ['Ghi đè bởi', open.supersededBy ? <Mono key="s">{open.supersededBy}</Mono> : '—'],
                   ['Tổ hợp', <Mono key="c">{open.comboId}</Mono>],
                   ['Room', <Mono key="r" copy>{open.room}</Mono>],

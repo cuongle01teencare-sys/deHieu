@@ -64,6 +64,7 @@ export function buildTraderConfig(input: {
         maxSignalAgeMs: 0,
         maxEntriesPerTier: 1,
         ignoreCancelReasons: [],
+        markets: [],
       },
       matchExposureCapUsd: settings.matchExposureCapUsd,
     };
@@ -86,9 +87,11 @@ export function buildTraderConfig(input: {
             ? 'POLYMARKET_ACCOUNT_DISABLED'
             : p.stakePlan.tierIds?.length === 0
               ? 'NO_TIER_SELECTED'
-              : !stakeTable.some((r) => r.enabled !== false && r.stake > 0)
-                ? 'NO_STAKE_TIER'
-                : null;
+              : p.risk.markets?.length === 0
+                ? 'NO_MARKET_SELECTED'
+                : !stakeTable.some((r) => r.enabled !== false && r.stake > 0)
+                  ? 'NO_STAKE_TIER'
+                  : null;
   return {
     v: TRADER_CONFIG_VERSION,
     profileId: p.id,
