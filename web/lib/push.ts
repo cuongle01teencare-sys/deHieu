@@ -16,9 +16,13 @@ type OneSignalLike = {
   Notifications: { requestPermission: () => Promise<void>; permission: boolean };
   User: {
     addTags: (t: Record<string, string>) => void | Promise<void>;
-    PushSubscription: { id?: string; optedIn: boolean; optIn: () => Promise<void> };
+    onesignalId?: string;
+    PushSubscription: { id?: string; token?: string; optedIn: boolean; optIn: () => Promise<void> };
   };
 };
+
+/** Lỗi gần nhất khi bật / đăng ký (để chẩn đoán). */
+let lastError: string | null = null;
 declare global {
   interface Window {
     OneSignal?: OneSignalLike;
@@ -39,6 +43,59 @@ export function pushConfigured(): boolean {
 
 export function pushSdkState(): PushSdkState {
   return pushConfigured() ? sdkState : 'disabled';
+}
+
+export interface PushDiagnostics {
+  sdk: PushSdkState;
+  permission: NotificationPermission | 'unsupported';
+  standalone: boolean;
+  /** Người dùng OneSignal (tạo khi SDK nói chuyện được với máy chủ OneSignal). */
+  onesignalId: string | null;
+  /** Mã đăng ký (subscription) OneSignal của thiết bị. */
+  subscriptionId: string | null;
+  optedIn: boolean;
+  /** OneSignal đã nhận token push của trình duyệt. */
+  hasToken: boolean;
+  /** Service worker đã đăng ký: scope, đang chạy, có đăng ký push của trình duyệt không. */
+  workers: { scope: string; active: boolean; push: boolean }[];
+  lastError: string | null;
+  origin: string;
+}
+
+/**
+ * Chẩn đoán đăng ký thông báo trên thiết bị này:
+ *  - không có worker /push/onesignal/ hoặc worker đó không có đăng ký push → lỗi ở trình duyệt / iOS
+ *  - có đăng ký push của trình duyệt nhưng không có onesignalId / subscriptionId → máy chủ OneSignal
+ *    không nhận (Site URL lệch, cấu hình Web)
+ */
+export async function pushDiagnostics(): Promise<PushDiagnostics> {
+  const workers: PushDiagnostics['workers'] = [];
+  try {
+    for (const r of (await navigator.serviceWorker?.getRegistrations()) ?? []) {
+      let push = false;
+      try {
+        push = !!(await r.pushManager?.getSubscription());
+      } catch {
+        /* bỏ qua */
+      }
+      workers.push({ scope: r.scope.replace(window.location.origin, ''), active: !!r.active, push });
+    }
+  } catch {
+    /* bỏ qua */
+  }
+  const u = sdk?.User;
+  return {
+    sdk: pushSdkState(),
+    permission: pushPermission(),
+    standalone: isStandalone(),
+    onesignalId: u?.onesignalId ?? null,
+    subscriptionId: u?.PushSubscription.id ?? null,
+    optedIn: !!u?.PushSubscription.optedIn,
+    hasToken: !!u?.PushSubscription.token,
+    workers,
+    lastError,
+    origin: window.location.origin,
+  };
 }
 
 /** Mã đăng ký OneSignal của thiết bị này (để backend gửi thử đúng thiết bị). */
@@ -127,7 +184,13 @@ export async function requestPush(): Promise<NotificationPermission | 'unsupport
   if (!sdk) throw new Error('Thông báo chưa sẵn sàng. Vui lòng tải lại trang và thử lại.');
   if (pushPermission() !== 'granted') await sdk.Notifications.requestPermission();
   if (pushPermission() === 'granted') {
-    await sdk.User.PushSubscription.optIn();
+    try {
+      await sdk.User.PushSubscription.optIn();
+      lastError = null;
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
+      throw e;
+    }
     syncPrefs(loadPrefs());
   }
   return pushPermission();

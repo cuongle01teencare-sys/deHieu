@@ -3,7 +3,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { BellRing, Check, Copy, Send, Share2, Smartphone } from 'lucide-react';
 import { toast } from 'sonner';
-import { loadPrefs, pushPermission, pushSubscriptionId, requestPush, savePrefs } from '@/lib/push';
+import { loadPrefs, pushDiagnostics, pushPermission, pushSubscriptionId, requestPush, savePrefs, type PushDiagnostics } from '@/lib/push';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { Button } from '../ui/button';
@@ -36,6 +36,58 @@ export function PushSetupButton({ label = 'Cài đặt thông báo', variant = '
     <Button variant={variant} size="sm" onClick={openPushSetup}>
       <BellRing aria-hidden /> {label}
     </Button>
+  );
+}
+
+const yes = (v: boolean) => (v ? 'có' : 'không');
+
+/** Số liệu đăng ký thật trên thiết bị + kết luận bị chặn ở đâu (chép gửi cho người hỗ trợ). */
+function Diagnostics() {
+  const [d, setD] = useState<PushDiagnostics | null>(null);
+  useEffect(() => {
+    let live = true;
+    const run = () => void pushDiagnostics().then((x) => live && setD(x));
+    run();
+    const t = setInterval(run, 2_000);
+    return () => {
+      live = false;
+      clearInterval(t);
+    };
+  }, []);
+  if (!d) return null;
+  const os = d.workers.find((w) => w.scope.startsWith('/push/onesignal'));
+  const verdict = !os
+    ? 'Chưa có service worker của OneSignal (/push/onesignal/) → trình duyệt chưa cài được worker. Tải lại trang; nếu vẫn vậy, file /push/onesignal/OneSignalSDKWorker.js có thể không tải được.'
+    : !os.push
+      ? 'Worker OneSignal đã cài nhưng trình duyệt chưa tạo đăng ký push → lỗi ở phía trình duyệt / iOS. Bấm "Đăng ký lại"; nếu vẫn vậy: xóa Arb Ops khỏi Màn hình chính, thêm lại, mở lại.'
+      : !d.onesignalId || !d.subscriptionId
+        ? 'Trình duyệt đã có đăng ký push nhưng máy chủ OneSignal chưa nhận → kiểm tra Site URL ở OneSignal (Web → Settings) khớp đúng ' + d.origin + ' và kiểu tích hợp là Custom Code.'
+        : !d.optedIn
+          ? 'Đã có mã nhưng chưa opt-in → bấm "Đăng ký lại".'
+          : 'Đăng ký ổn.';
+  const lines = [
+    `origin ${d.origin} · standalone ${yes(d.standalone)} · sdk ${d.sdk} · quyền ${d.permission}`,
+    `OneSignal user ${d.onesignalId ?? '—'} · subscription ${d.subscriptionId ?? '—'} · optedIn ${yes(d.optedIn)} · token ${yes(d.hasToken)}`,
+    `workers: ${d.workers.map((w) => `${w.scope} (chạy ${yes(w.active)}, push ${yes(w.push)})`).join(' · ') || 'không có'}`,
+    d.lastError ? `lỗi gần nhất: ${d.lastError}` : null,
+  ].filter((x): x is string => !!x);
+  return (
+    <div className="mt-2 rounded-[8px] border border-line p-2">
+      <div className="text-fg">Chẩn đoán: {verdict}</div>
+      <pre className="num mt-1 whitespace-pre-wrap break-all text-[11px] text-faint">{lines.join('\n')}</pre>
+      <button
+        type="button"
+        className="mt-1 text-accent-text hover:underline"
+        onClick={() =>
+          void navigator.clipboard
+            .writeText(`${verdict}\n${lines.join('\n')}`)
+            .then(() => toast.success('Đã chép chẩn đoán'))
+            .catch(() => toast.error('Không chép được'))
+        }
+      >
+        Chép chẩn đoán
+      </button>
+    </div>
   );
 }
 
@@ -138,6 +190,16 @@ export function PushSetupSheet({ open, onOpenChange }: { open: boolean; onOpenCh
         </span>
       }
     >
+      {s.sdkState === 'disabled' ? (
+        <p className="mb-3 rounded-[8px] border border-warn/40 bg-warn/10 p-3 text-caption text-warn">
+          Bản web này chưa có <span className="num">NEXT_PUBLIC_ONESIGNAL_APP_ID</span> nên không bật được thông báo. Thêm biến này (App ID OneSignal) vào env của web — trên Vercel: Project Settings →
+          Environment Variables — rồi build / deploy lại (biến NEXT_PUBLIC_* được gắn lúc build, chỉ restart không đủ).
+        </p>
+      ) : s.sdkState === 'error' ? (
+        <p className="mb-3 rounded-[8px] border border-critical/40 bg-critical/10 p-3 text-caption text-critical">
+          Không tải được OneSignal (mạng, trình chặn quảng cáo hoặc Site URL trong OneSignal không khớp địa chỉ web). Tải lại trang để thử lại.
+        </p>
+      ) : null}
       <p>Thông báo gắn với từng thiết bị, không gắn với tài khoản. Nhiều người hoặc nhiều điện thoại dùng chung một tài khoản đều nhận được, miễn là mỗi máy làm các bước dưới đây một lần.</p>
       <ol className="mt-3">
         {s.ios ? (
@@ -169,7 +231,17 @@ export function PushSetupSheet({ open, onOpenChange }: { open: boolean; onOpenCh
               size="sm"
               variant="primary"
               loading={busy === 'enable'}
-              disabledReason={needsInstall ? 'Thêm vào Màn hình chính trước' : !ready ? 'Đang tải OneSignal…' : null}
+              disabledReason={
+                needsInstall
+                  ? 'Thêm vào Màn hình chính trước'
+                  : s.sdkState === 'disabled'
+                    ? 'Web chưa cấu hình OneSignal'
+                    : s.sdkState === 'error'
+                      ? 'Không tải được OneSignal'
+                      : !ready
+                        ? 'Đang tải OneSignal…'
+                        : null
+              }
               onClick={() => void enable()}
             >
               <BellRing aria-hidden /> Bật thông báo
@@ -193,6 +265,7 @@ export function PushSetupSheet({ open, onOpenChange }: { open: boolean; onOpenCh
                 Đăng ký lại
               </button>{' '}
               hoặc tải lại trang.
+              <Diagnostics />
             </>
           ) : (
             'Tự đăng ký sau khi cho phép thông báo.'
