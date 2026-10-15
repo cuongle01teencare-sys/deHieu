@@ -15,6 +15,8 @@ export interface StakeRow {
   readonly maxStake: number;
   /** Tăng dần trong hạng: margin ở cận dưới → stake, ở cận trên → maxStake. */
   readonly scaleWithinTier: boolean;
+  /** false = profile không vào hạng này (kèo thuộc hạng bị bỏ qua). Không có = vào. */
+  readonly enabled?: boolean;
 }
 
 export const round2 = (n: number) => Math.round(n * 100) / 100;

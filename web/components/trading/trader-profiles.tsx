@@ -41,6 +41,7 @@ const INACTIVE_LABEL: Record<string, string> = {
   POLYMARKET_ACCOUNT_MISSING: 'Thiếu ví Polymarket',
   POLYMARKET_ACCOUNT_DISABLED: 'Ví Polymarket đang tắt',
   NO_STAKE_TIER: 'Bảng vốn không có hạng nào > 0$',
+  NO_TIER_SELECTED: 'Chưa chọn hạng kèo nào để vào',
   PROFILE_NOT_FOUND: 'Profile không tồn tại',
 };
 
@@ -133,6 +134,7 @@ export function TraderProfiles() {
                     Vốn {TREND_SHORT[p.stakePlan.trend]}
                     {p.stakePlan.trend !== 'custom' ? <span className="num text-fg"> · {p.stakePlan.baseStake}$</span> : null}
                     {p.stakePlan.scaleWithinTier ? ' · tăng trong hạng' : ''}
+                    {p.stakePlan.tierIds === null ? ' · mọi hạng' : ` · ${p.stakePlan.tierIds.length} hạng`}
                   </span>
                   <span className="num block text-faint">
                     lãi ròng ≥ {+(p.risk.minNetMargin * 100).toFixed(2)}%{p.risk.matchCapUsd ? ` · ≤ ${p.risk.matchCapUsd}$/trận` : ''}
@@ -259,7 +261,7 @@ function ProfileForm({
     setEnabled(e?.enabled ?? true);
     setEmpire(e?.csgoempireAccountId ?? empires[0]?.id ?? '');
     setPoly(e?.polymarketAccountId ?? polys[0]?.id ?? '');
-    setPlan(e?.stakePlan ?? DEFAULT_STAKE_PLAN);
+    setPlan(e ? { ...DEFAULT_STAKE_PLAN, ...e.stakePlan, tierIds: e.stakePlan.tierIds ?? null } : DEFAULT_STAKE_PLAN);
     setStrategy(e?.strategy.id ?? 'arb-taker');
     setRisk({ ...DEFAULT_RISK, ...e?.risk });
   }, [value]);

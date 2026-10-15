@@ -27,7 +27,7 @@ function resolveStakeTable(plan: StakePlan, tiers: SignalTier[]): StakeRow[] {
       const stake = round2(plan.trend === 'custom' ? (o.stake ?? 0) : auto);
       const minStake = round2(o.minStake ?? stake * plan.minStakeRatio);
       const maxStake = round2(Math.max(stake, o.maxStake ?? stake * plan.maxStakeRatio));
-      return { tierId: t.id, tierName: t.name, minMargin: t.minMargin, maxMargin: t.maxMargin, stake, minStake: Math.min(minStake, stake), maxStake, scaleWithinTier: plan.scaleWithinTier };
+      return { tierId: t.id, tierName: t.name, minMargin: t.minMargin, maxMargin: t.maxMargin, stake, minStake: Math.min(minStake, stake), maxStake, scaleWithinTier: plan.scaleWithinTier, enabled: plan.tierIds == null || plan.tierIds.includes(t.id) };
     });
 }
 
@@ -53,7 +53,7 @@ let profiles: TraderProfile[] = [
     mode: 'paper',
     csgoempireAccountId: 'acc-empire-1',
     polymarketAccountId: 'acc-poly-1',
-    stakePlan: { ...DEFAULT_STAKE_PLAN, trend: 'up', baseStake: 40, stepPct: 0.5, maxStakeRatio: 1.5, scaleWithinTier: true },
+    stakePlan: { ...DEFAULT_STAKE_PLAN, trend: 'up', baseStake: 40, stepPct: 0.5, maxStakeRatio: 1.5, scaleWithinTier: true, tierIds: null },
     strategy: { id: 'arb-taker', params: {} },
     risk: { ...DEFAULT_RISK },
   },
@@ -159,7 +159,8 @@ export function mockTrading(method: string, path: string, search: string, body: 
     if (rc) {
       const prof = profiles.find((x) => x.id === decodeURIComponent(rc[1]!));
       const stakeTable = prof ? resolveStakeTable(prof.stakePlan, tiers()) : [];
-      return ok({ profileId: rc[1], active: !!prof?.enabled, inactiveReason: prof ? (prof.enabled ? null : 'PROFILE_DISABLED') : 'PROFILE_NOT_FOUND', stakeTable, matchExposureCapUsd });
+      const inactiveReason = !prof ? 'PROFILE_NOT_FOUND' : !prof.enabled ? 'PROFILE_DISABLED' : prof.stakePlan.tierIds?.length === 0 ? 'NO_TIER_SELECTED' : null;
+      return ok({ profileId: rc[1], active: !inactiveReason, inactiveReason, stakeTable, matchExposureCapUsd });
     }
     const filtered = () =>
       trades

@@ -225,23 +225,21 @@ export class TradingAdmin {
     if (venueOf(profile.polymarketAccountId) !== 'polymarket')
       return fail('POLYMARKET_ACCOUNT_INVALID: chọn một tài khoản polymarket');
     const tiers = new Set((await this._tiers.listTiers()).map((t) => t.id));
-    const unknown = Object.keys(profile.stakePlan.overrides).filter(
-      (t) => !tiers.has(t),
-    );
-    // hạng đã bị xóa ở module odds: bỏ ghi đè mồ côi thay vì báo lỗi
-    const clean: TraderProfile = unknown.length
-      ? {
-          ...profile,
-          stakePlan: {
-            ...profile.stakePlan,
-            overrides: Object.fromEntries(
-              Object.entries(profile.stakePlan.overrides).filter(([t]) =>
-                tiers.has(t),
-              ),
-            ),
-          },
-        }
-      : profile;
+    // hạng đã bị xóa ở module odds: bỏ ghi đè / lựa chọn mồ côi thay vì báo lỗi
+    const plan = profile.stakePlan;
+    const clean: TraderProfile = {
+      ...profile,
+      stakePlan: {
+        ...plan,
+        overrides: Object.fromEntries(
+          Object.entries(plan.overrides).filter(([t]) => tiers.has(t)),
+        ),
+        tierIds:
+          plan.tierIds === null
+            ? null
+            : [...new Set(plan.tierIds)].filter((t) => tiers.has(t)),
+      },
+    };
     await this._profiles.save(clean);
     await this._sync.pushAll();
     return { status: 'SUCEED', data: clean };

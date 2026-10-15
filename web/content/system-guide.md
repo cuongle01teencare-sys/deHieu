@@ -415,11 +415,15 @@ Mỗi profile trader có một **bảng tiền theo hạng**: kèo thuộc hạn
 
 ### Mọi số tiền là USD cược bên csgoempire
 
-Cột **Tiền mục tiêu**, **Tối thiểu**, **Tối đa** đều là **USD cược ở chân csgoempire** cho một kèo, không phải số share Polymarket. Số share do worker tự tính:
+Cột **Tiền mục tiêu**, **Tiền mục tiêu tối thiểu**, **Tiền mục tiêu tối đa** đều là **USD cược ở chân csgoempire** cho một kèo, không phải số share Polymarket. Số share do worker tự tính:
 
 - Cược `S` USD ở odds `O` bên csgoempire → thắng nhận `S × O`.
 - Mua `N` share cửa ngược lại bên Polymarket → thắng nhận `N` USD (mỗi share 1$).
 - Cân hai chân: `N = S × O`, nên cửa nào thắng cũng nhận về như nhau.
+
+### Chọn hạng profile sẽ vào
+
+Ô tick đầu mỗi dòng của bảng chọn hạng profile được vào; lựa chọn lưu trong profile nên task trader khởi động lại vẫn chạy đúng như vậy. Profile mới chưa chọn hạng nào và đứng yên (`NO_TIER_SELECTED`) cho tới khi chọn. Kèo thuộc hạng không được chọn bị bỏ qua với lý do `TIER_NOT_SELECTED`. Hạng mới admin thêm sau không tự được chọn. Profile tạo trước khi có tính năng này vẫn vào mọi hạng cho tới khi sửa lựa chọn.
 
 ### Bảng được tính từ đâu
 

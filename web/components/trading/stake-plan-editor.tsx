@@ -21,6 +21,25 @@ const TREND_HELP: Record<StakeTrend, string> = {
 
 const money = (n: number) => `${+n.toFixed(2)}$`;
 
+/** Profile có vào hạng này không (null = mọi hạng). */
+const tierSelected = (plan: StakePlan, tierId: string) => plan.tierIds == null || plan.tierIds.includes(tierId);
+
+function TierCheck({ label, checked, indeterminate, onChange }: { label: string; checked: boolean; indeterminate?: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <input
+      type="checkbox"
+      aria-label={label}
+      title={label}
+      className="size-4 cursor-pointer accent-[var(--accent)]"
+      checked={checked}
+      ref={(el) => {
+        if (el) el.indeterminate = !!indeterminate;
+      }}
+      onChange={(e) => onChange(e.target.checked)}
+    />
+  );
+}
+
 /** Số trong ô nhập: rỗng = undefined (dùng giá trị tự tính). */
 const parseNum = (s: string): number | undefined => {
   if (!s.trim()) return undefined;
@@ -63,6 +82,13 @@ export function StakePlanEditor({ value, onChange }: { value: StakePlan; onChang
   }, [value]);
 
   const custom = value.trend === 'custom';
+  const rows = preview?.rows ?? [];
+  const selectedCount = rows.filter((r) => tierSelected(value, r.tierId)).length;
+  // profile cũ (null = mọi hạng): bấm bỏ một hạng → chuyển sang danh sách cụ thể
+  const toggleTier = (tierId: string, on: boolean) => {
+    const cur = value.tierIds ?? rows.map((r) => r.tierId);
+    set({ tierIds: on ? [...new Set([...cur, tierId])] : cur.filter((t) => t !== tierId) });
+  };
   return (
     <div className="flex flex-col gap-6">
       <Field label="Xu hướng tiền giữa các hạng" help={TREND_HELP[value.trend]}>
@@ -115,7 +141,6 @@ export function StakePlanEditor({ value, onChange }: { value: StakePlan; onChang
         <p className="mb-3 text-caption text-muted-fg">
           Mọi số trong bảng là <span className="text-fg">USD cược bên csgoempire</span> cho một kèo, không phải số share. Số share Polymarket worker tự tính = tiền × odds csgoempire.
         </p>
-        <HowItWorks />
         {error ? <p className="mb-2 text-caption text-critical">{error}</p> : null}
         {preview && !preview.rows.length ? (
           <Empty icon={Layers}>Chưa có hạng kèo. Thêm hạng ở trang Consumer → Hạng kèo; trader chỉ vào lệnh với kèo thuộc một hạng.</Empty>
@@ -123,23 +148,35 @@ export function StakePlanEditor({ value, onChange }: { value: StakePlan; onChang
           <Table>
             <THead>
               <tr>
+                <TH className="w-10">
+                  <TierCheck
+                    label="Chọn mọi hạng"
+                    checked={rows.length > 0 && rows.every((r) => tierSelected(value, r.tierId))}
+                    indeterminate={rows.some((r) => tierSelected(value, r.tierId)) && !rows.every((r) => tierSelected(value, r.tierId))}
+                    onChange={(on) => set({ tierIds: on ? rows.map((r) => r.tierId) : [] })}
+                  />
+                </TH>
                 <TH>Hạng</TH>
                 <TH numeric>
                   <HeadHint label="Tiền mục tiêu ($)" hint={COL_HINT.target} />
                 </TH>
                 <TH numeric>
-                  <HeadHint label="Tối thiểu ($)" hint={COL_HINT.min} />
+                  <HeadHint label="Tiền mục tiêu tối thiểu ($)" hint={COL_HINT.min} />
                 </TH>
                 <TH numeric>
-                  <HeadHint label="Tối đa ($)" hint={COL_HINT.max} />
+                  <HeadHint label="Tiền mục tiêu tối đa ($)" hint={COL_HINT.max} />
                 </TH>
               </tr>
             </THead>
             <tbody>
-              {(preview?.rows ?? []).map((r) => {
+              {rows.map((r) => {
                 const o = value.overrides[r.tierId] ?? {};
+                const on = tierSelected(value, r.tierId);
                 return (
-                  <TR key={r.tierId}>
+                  <TR key={r.tierId} className={cn(!on && '[&>td:not(:first-child)]:opacity-45')}>
+                    <TD>
+                      <TierCheck label={`Vào hạng ${r.tierName}`} checked={on} onChange={(v) => toggleTier(r.tierId, v)} />
+                    </TD>
                     <TD>
                       <span className="block text-fg">{r.tierName}</span>
                       <span className="num block text-caption text-muted-fg">{tierRange({ id: r.tierId, name: r.tierName, minMargin: r.minMargin, maxMargin: r.maxMargin })}</span>
@@ -161,10 +198,10 @@ export function StakePlanEditor({ value, onChange }: { value: StakePlan; onChang
                       )}
                     </TD>
                     <TD numeric>
-                      <CellInput label={`Tối thiểu ${r.tierName}`} value={o.minStake} placeholder={String(r.minStake)} onValue={(minStake) => setOverride(r.tierId, { minStake })} />
+                      <CellInput label={`Tiền mục tiêu tối thiểu ${r.tierName}`} value={o.minStake} placeholder={String(r.minStake)} onValue={(minStake) => setOverride(r.tierId, { minStake })} />
                     </TD>
                     <TD numeric>
-                      <CellInput label={`Tối đa ${r.tierName}`} value={o.maxStake} placeholder={String(r.maxStake)} onValue={(maxStake) => setOverride(r.tierId, { maxStake })} />
+                      <CellInput label={`Tiền mục tiêu tối đa ${r.tierName}`} value={o.maxStake} placeholder={String(r.maxStake)} onValue={(maxStake) => setOverride(r.tierId, { maxStake })} />
                     </TD>
                   </TR>
                 );
@@ -172,6 +209,14 @@ export function StakePlanEditor({ value, onChange }: { value: StakePlan; onChang
             </tbody>
           </Table>
         )}
+        {rows.length ? (
+          <p className={cn('mt-2 text-caption', selectedCount ? 'text-muted-fg' : 'text-warn')}>
+            {selectedCount
+              ? `Profile vào ${selectedCount}/${rows.length} hạng. Kèo thuộc hạng không chọn sẽ bị bỏ qua (Hạng không được chọn).`
+              : 'Chưa chọn hạng nào: tick ô đầu dòng các hạng profile sẽ vào. Lưu khi chưa chọn → profile đứng yên.'}
+          </p>
+        ) : null}
+        <Mechanism />
       </div>
     </div>
   );
@@ -181,7 +226,7 @@ const COL_HINT = {
   target:
     'Tiền cược bên csgoempire mà worker muốn vào cho một kèo của hạng này (mức cao nhất, không bao giờ vào hơn). Từ đó worker cần mua tiền × odds share Polymarket, ví dụ 50$ @ 2.0 → 100 share. Sổ Polymarket chỉ có 80 share còn lãi → csgoempire vào 80 ÷ 2.0 = 40$. Bật Tăng dần trong hạng thì đây là mục tiêu ở cận dưới của hạng.',
   min: 'Tiền cược csgoempire thấp nhất chấp nhận được, so với TỔNG share mua được ở mọi mức giá cộng lại (không phải từng người bán). Ví dụ mục tiêu 50$, tối thiểu 35$: mua được 80 share → 40$ ≥ 35$ thì vào 40$; chỉ 60 share → 30$ thì bỏ qua cả hai chân. Giữ nguyên cho mọi margin trong hạng, kể cả khi bật Tăng dần trong hạng.',
-  max: 'Chỉ dùng khi bật Tăng dần trong hạng: tiền mục tiêu tăng đều từ cột Tiền mục tiêu (ở cận dưới) lên số này (ở cận trên), theo margin của kèo. Dòng dưới tên hạng ghi rõ mỗi 0,1% margin tăng bao nhiêu. Tắt thì cột này không có tác dụng.',
+  max: 'Chỉ có tác dụng khi bật Tăng dần trong hạng. Khi bật: tiền mục tiêu tăng đều từ cột Tiền mục tiêu (ở cận dưới của hạng) lên số này (ở cận trên), theo margin của kèo.',
 } as const;
 
 /** Tăng dần trong hạng: mục tiêu tăng thêm bao nhiêu $ mỗi 0,1% margin (null = không tăng). */
@@ -202,32 +247,52 @@ function HeadHint({ label, hint }: { label: string; hint: string }) {
   );
 }
 
-/** Giải thích ngắn cách worker dùng bảng (chi tiết ở Tài liệu hệ thống). */
-function HowItWorks() {
+/** Giải thích cơ chế vào lệnh (luôn thu gọn lúc đầu; chi tiết ở Tài liệu hệ thống). */
+function Mechanism() {
+  const b = (t: string) => <b className="font-medium text-fg">{t}</b>;
   return (
-    <details className="group mb-4 rounded-[8px] bg-hover/50 px-3 py-2">
+    <details className="group mt-4 rounded-[8px] px-3 py-2 shadow-[inset_0_0_0_1px_var(--line)]">
       <summary className="cursor-pointer list-none text-caption font-medium text-muted-fg hover:text-fg">
-        <span className="group-open:hidden">Worker dùng bảng này thế nào? ▸</span>
-        <span className="hidden group-open:inline">Worker dùng bảng này thế nào? ▾</span>
+        <span className="group-open:hidden">▸ Cơ chế vào lệnh và tăng dần tiền mục tiêu</span>
+        <span className="hidden group-open:inline">▾ Cơ chế vào lệnh và tăng dần tiền mục tiêu</span>
       </summary>
-      <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-caption text-muted-fg">
-        <li>
-          Kèo đến → xếp vào hạng theo margin (nhiều hạng khớp thì lấy hạng có cận dưới cao nhất) → lấy <b className="text-fg">Tiền mục tiêu</b> của hạng.
-        </li>
-        <li>
-          Cần mua <b className="text-fg">tiền × odds</b> share Polymarket để hai cửa nhận về như nhau (vd 50$ @ 2.0 → 100 share).
-        </li>
-        <li>
-          Chiến lược taker ăn lệnh bán từ <b className="text-fg">giá rẻ nhất lên</b>; dừng khi đủ share, hết sổ, hết hạn mức theo trận, hoặc tới mức giá làm lãi ròng (sau phí) dưới ngưỡng lãi tối thiểu của profile.
-        </li>
-        <li>
-          Không đủ share → <b className="text-fg">vào nhỏ lại</b>: tiền csgoempire = số share mua được ÷ odds. Kết quả nhỏ hơn <b className="text-fg">Tối thiểu</b>, hoặc dưới số share tối thiểu của market → bỏ qua, không vào chân nào.
-        </li>
-        <li>
-          Tiền vào không bao giờ vượt <b className="text-fg">Tiền mục tiêu</b> của hạng (hoặc mức tăng dần tới <b className="text-fg">Tối đa</b> khi bật Tăng dần trong hạng).
-        </li>
-      </ol>
-      <p className="mt-2 text-caption text-faint">Ví dụ và chi tiết: Tài liệu hệ thống → mục Auto trade.</p>
+      <div className="mt-3 space-y-3 text-caption text-muted-fg">
+        <ol className="list-decimal space-y-1.5 pl-5">
+          <li>
+            {b('Chọn hạng.')} Kèo đến → xếp vào hạng theo margin (nhiều hạng khớp thì lấy hạng có cận dưới cao nhất). Hạng không được tick → bỏ qua (Hạng không được chọn).
+          </li>
+          <li>
+            {b('Tính số share cần mua.')} Hệ thống luôn lấy {b('Tiền mục tiêu')} của hạng: share cần mua bên Polymarket = tiền mục tiêu × odds csgoempire. Ví dụ 50$ @ 2.0 → 100 share. Mỗi share trả 1$ nếu thắng nên hai chân nhận về bằng nhau.
+          </li>
+          <li>
+            {b('Gom share trên Polymarket')} (taker): mua lệnh bán từ giá rẻ nhất lên, cộng dồn mọi người bán. Dừng khi đủ share, hết sổ lệnh, mức giá kế tiếp làm lãi ròng (sau phí) dưới {b('Lãi ròng tối thiểu')}, hoặc hết hạn mức theo trận.
+          </li>
+          <li>
+            {b('Đủ share')} → vào đúng tiền mục tiêu bên csgoempire.
+          </li>
+          <li>
+            {b('Sổ lệnh mỏng, thiếu share')} → hạ tiền bên csgoempire xuống cho khớp: {b('tiền csgoempire = số share Polymarket mua được ÷ odds csgoempire')}. Ví dụ chỉ gom được 80 share → 80 ÷ 2.0 = 40$.
+            <ul className="mt-1 list-disc space-y-0.5 pl-4">
+              <li>Số tiền đã hạ ≥ {b('Tiền mục tiêu tối thiểu')} → vào với số tiền đó (40$ ≥ 35$ → vào 40$).</li>
+              <li>Nhỏ hơn → bỏ qua cả hai chân (Sổ lệnh mỏng), không bao giờ vào csgoempire mà thiếu chân Polymarket.</li>
+            </ul>
+          </li>
+          <li>
+            {b('Các kết quả bỏ qua khác:')} Hết lãi sau phí (giá rẻ nhất đã không đủ lãi) · Dưới lệnh tối thiểu (ít hơn số share tối thiểu của market) · Hết hạn mức trận · Cửa này đã vào (đủ số lệnh mỗi hạng) · Kèo quá cũ / hết hạn · Kèo bị hủy khi đang tính.
+          </li>
+        </ol>
+        <div>
+          <p className="mb-1">{b('Tăng dần tiền mục tiêu trong hạng')} (chỉ khi bật Tăng dần trong hạng):</p>
+          <ul className="list-disc space-y-0.5 pl-4">
+            <li>Trong CÙNG một hạng, kèo margin cao hơn có tiền mục tiêu cao hơn: cận dưới → Tiền mục tiêu, cận trên → Tiền mục tiêu tối đa, ở giữa tăng đều (không theo bậc).</li>
+            <li className="num">mục tiêu = tiền mục tiêu + (tối đa − tiền mục tiêu) × (margin − cận dưới) ÷ (cận trên − cận dưới)</li>
+            <li>Ví dụ hạng 1,5–3%, 50$ → 100$: 1,5% → 50$, 2% → 66,67$, 2,5% → 83,33$ (+3,33$ mỗi 0,1%). Mức tăng của từng hạng ghi dưới tên hạng trong bảng.</li>
+            <li>Tiền mục tiêu tối thiểu giữ nguyên cho cả hạng. Hạng không có cận trên luôn dùng Tiền mục tiêu.</li>
+            <li>Khác với Bước mỗi hạng: bước là chênh lệch tiền GIỮA các hạng.</li>
+          </ul>
+        </div>
+        <p className="text-faint">Chi tiết và ví dụ sổ lệnh: Tài liệu hệ thống → mục Auto trade.</p>
+      </div>
     </details>
   );
 }

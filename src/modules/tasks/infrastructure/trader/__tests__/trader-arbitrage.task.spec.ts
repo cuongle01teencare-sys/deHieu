@@ -77,6 +77,7 @@ const config = (
       minStake: 5,
       maxStake: 25,
       scaleWithinTier: false,
+      enabled: true,
     },
   ],
   strategy: { id: 'arb-taker', params: {} },
@@ -313,6 +314,7 @@ describe('TraderArbitrageTask (giấy)', () => {
       minStake: 5,
       maxStake: 25,
       scaleWithinTier: false,
+      enabled: true,
     };
     const std = {
       ...vip,
@@ -431,6 +433,26 @@ describe('TraderArbitrageTask (giấy)', () => {
     expect(trades(t)[0]).toMatchObject({ status: 'cancelled' });
     expect(String(trades(t)[0].reason)).toContain('margin_decreased');
     open();
+    await t.stop();
+  });
+
+  it('hạng không được chọn trong profile → bỏ qua TIER_NOT_SELECTED', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    const base = config('A');
+    await t.command(
+      'config',
+      config('A', {
+        stakeTable: base.stakeTable.map((r) => ({ ...r, enabled: false })),
+      }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('s5') });
+    await until(() => trades(t).length === 1);
+    expect(trades(t)[0]).toMatchObject({
+      status: 'skipped',
+      tierName: 'Thường',
+    });
+    expect(trades(t)[0]?.reason).toMatch(/^TIER_NOT_SELECTED:/);
     await t.stop();
   });
 

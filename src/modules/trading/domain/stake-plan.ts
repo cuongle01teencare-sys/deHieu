@@ -46,6 +46,11 @@ export interface StakePlan {
   readonly scaleWithinTier: boolean;
   /** tierId → ghi đè. */
   readonly overrides: Readonly<Record<string, TierStakeOverride>>;
+  /**
+   * Hạng kèo profile được vào (tierId). [] = chưa chọn hạng nào → profile đứng yên.
+   * null = mọi hạng (profile tạo trước khi có tính năng chọn hạng).
+   */
+  readonly tierIds: readonly string[] | null;
 }
 
 export const DEFAULT_STAKE_PLAN: StakePlan = {
@@ -56,7 +61,13 @@ export const DEFAULT_STAKE_PLAN: StakePlan = {
   maxStakeRatio: 1,
   scaleWithinTier: false,
   overrides: {},
+  // bản ghi cũ không có trường này → mọi hạng (giữ nguyên hành vi trước đây)
+  tierIds: null,
 };
+
+/** Profile có vào hạng này không. */
+export const tierSelected = (plan: StakePlan, tierId: string): boolean =>
+  plan.tierIds === null || plan.tierIds.includes(tierId);
 
 /** Hạng sắp theo minMargin tăng dần (thứ tự này quyết định xu hướng lên/xuống). */
 export const sortTiers = <T extends StakeTier>(tiers: readonly T[]): T[] =>
@@ -92,6 +103,7 @@ export function resolveStakeTable(
       minStake: Math.min(minStake, stake),
       maxStake,
       scaleWithinTier: plan.scaleWithinTier,
+      enabled: tierSelected(plan, t.id),
     };
   });
 }
@@ -105,6 +117,8 @@ export function validateStakePlan(plan: StakePlan): string | null {
     return 'minStakeRatio phải trong [0, 1]';
   if (!(plan.maxStakeRatio >= 1 && plan.maxStakeRatio <= 100))
     return 'maxStakeRatio phải trong [1, 100]';
+  if (plan.tierIds !== null && plan.tierIds.length > 200)
+    return 'tierIds tối đa 200 hạng';
   for (const [id, o] of Object.entries(plan.overrides)) {
     for (const v of [o.stake, o.minStake, o.maxStake])
       if (v !== undefined && !(v >= 0))

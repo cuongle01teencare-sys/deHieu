@@ -279,6 +279,11 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       return emit('skipped', 'MISSING_REF: thiếu token/conditionId polymarket');
     if (!pick)
       return emit('skipped', `NO_TIER: margin ${(s.margin * 100).toFixed(2)}%`);
+    if (!pick.row.enabled)
+      return emit(
+        'skipped',
+        `TIER_NOT_SELECTED: hạng ${pick.row.tierName} không nằm trong các hạng profile được vào`,
+      );
     // mỗi hạng kèo tính riêng: cùng cửa ở hạng này đã đủ số lệnh → bỏ qua (kèo phát lại = signalId mới, vẫn cửa cũ)
     const max = cfg.risk.maxEntriesPerTier;
     const entryKey = `entry:${profileId}:${s.room}:${s.comboId}:${pick.row.tierId}`;

@@ -34,6 +34,8 @@ export interface StakePlan {
   maxStakeRatio: number;
   scaleWithinTier: boolean;
   overrides: Record<string, TierStakeOverride>;
+  /** Hạng profile được vào. [] = chưa chọn (profile đứng yên); null = mọi hạng (profile cũ). */
+  tierIds: string[] | null;
 }
 
 export const DEFAULT_STAKE_PLAN: StakePlan = {
@@ -44,6 +46,8 @@ export const DEFAULT_STAKE_PLAN: StakePlan = {
   maxStakeRatio: 1,
   scaleWithinTier: false,
   overrides: {},
+  // profile mới: chưa chọn hạng nào, người tạo tự chọn
+  tierIds: [],
 };
 
 export interface StakeRow {
@@ -55,6 +59,8 @@ export interface StakeRow {
   minStake: number;
   maxStake: number;
   scaleWithinTier: boolean;
+  /** false = profile không vào hạng này. */
+  enabled?: boolean;
 }
 
 export interface StakePreview {

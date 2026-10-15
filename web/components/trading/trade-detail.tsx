@@ -30,6 +30,7 @@ export const REASON_LABEL: Record<string, string> = {
   CAP_REACHED: 'Hết hạn mức trận',
   BELOW_MIN_ORDER: 'Dưới lệnh tối thiểu',
   NO_TIER: 'Không thuộc hạng nào',
+  TIER_NOT_SELECTED: 'Hạng không được chọn',
   INACTIVE: 'Profile đứng yên',
   STALE_SIGNAL: 'Kèo quá cũ',
   SIGNAL_EXPIRED: 'Kèo hết hạn',

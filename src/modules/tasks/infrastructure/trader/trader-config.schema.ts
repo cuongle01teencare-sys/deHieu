@@ -28,6 +28,8 @@ export const TraderConfigSchema = z.object({
       minStake: nonNeg,
       maxStake: nonNeg,
       scaleWithinTier: z.boolean(),
+      // app cũ không gửi → vào hạng
+      enabled: z.boolean().default(true),
     }),
   ),
   strategy: z.object({

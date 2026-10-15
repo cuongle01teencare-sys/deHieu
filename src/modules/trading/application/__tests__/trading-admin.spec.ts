@@ -270,6 +270,43 @@ describe('TradingAdmin + TraderConfigSync', () => {
     expect(gateway.pushed.at(-1)!.config.matchExposureCapUsd).toBe(0);
   });
 
+  it('chọn hạng: [] → đứng yên; chọn VIP → chỉ VIP enabled; bỏ hạng không tồn tại; null = mọi hạng', async () => {
+    const { empire, poly } = await addAccounts();
+    const base = profileInput(empire.id, poly.id);
+    const none = await admin.saveProfile(null, {
+      ...base,
+      stakePlan: { ...base.stakePlan, tierIds: [] },
+    });
+    if (none.status !== 'SUCEED') throw new Error('profile');
+    expect(await admin.runtimeConfig(none.data.id)).toMatchObject({
+      active: false,
+      inactiveReason: 'NO_TIER_SELECTED',
+    });
+
+    const vip = await admin.saveProfile(none.data.id, {
+      ...base,
+      stakePlan: { ...base.stakePlan, tierIds: ['vip', 'vip', 'gone'] },
+    });
+    if (vip.status !== 'SUCEED') throw new Error('profile');
+    expect(vip.data.stakePlan.tierIds).toEqual(['vip']);
+    const cfg = await admin.runtimeConfig(none.data.id);
+    expect(cfg.active).toBe(true);
+    expect(cfg.stakeTable.map((x) => [x.tierId, x.enabled])).toEqual([
+      ['std', false],
+      ['vip', true],
+    ]);
+
+    await admin.saveProfile(none.data.id, {
+      ...base,
+      stakePlan: { ...base.stakePlan, tierIds: null },
+    });
+    expect(
+      (await admin.runtimeConfig(none.data.id)).stakeTable.every(
+        (x) => x.enabled,
+      ),
+    ).toBe(true);
+  });
+
   it('tài khoản tắt → worker nhận active=false kèm lý do', async () => {
     const { empire, poly } = await addAccounts();
     const r = await admin.saveProfile(null, profileInput(empire.id, poly.id));

@@ -62,6 +62,8 @@ const StakePlanBody = z.object({
       }),
     )
     .default({}),
+  /** Hạng profile được vào; [] (mặc định) = chưa chọn → profile đứng yên; null = mọi hạng. */
+  tierIds: z.array(z.string().min(1).max(100)).max(200).nullable().default([]),
 });
 
 const ProfileBody = z.object({

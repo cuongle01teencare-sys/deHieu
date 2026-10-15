@@ -21,7 +21,7 @@ export interface TraderRuntimeConfig {
   readonly profileId: string;
   readonly profileName: string;
   readonly active: boolean;
-  /** Lý do không hoạt động (profile tắt, tài khoản tắt/thiếu, chưa có hạng...). */
+  /** Lý do không hoạt động (profile tắt, tài khoản tắt/thiếu, chưa chọn hạng, chưa có hạng...). */
   readonly inactiveReason: string | null;
   readonly mode: TraderMode;
   readonly accounts: {
@@ -84,9 +84,11 @@ export function buildTraderConfig(input: {
           ? 'POLYMARKET_ACCOUNT_MISSING'
           : !poly.enabled
             ? 'POLYMARKET_ACCOUNT_DISABLED'
-            : !stakeTable.some((r) => r.stake > 0)
-              ? 'NO_STAKE_TIER'
-              : null;
+            : p.stakePlan.tierIds?.length === 0
+              ? 'NO_TIER_SELECTED'
+              : !stakeTable.some((r) => r.enabled !== false && r.stake > 0)
+                ? 'NO_STAKE_TIER'
+                : null;
   return {
     v: TRADER_CONFIG_VERSION,
     profileId: p.id,
