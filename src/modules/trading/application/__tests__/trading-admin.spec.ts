@@ -53,6 +53,70 @@ class FakeGateway implements TraderTaskGateway {
   };
 }
 
+describe('TradingAdmin: xóa lệnh', () => {
+  const calls: { op: string; f: unknown }[] = [];
+  const trades = {
+    count: (f: unknown) => {
+      calls.push({ op: 'count', f });
+      return Promise.resolve(5);
+    },
+    purge: (f: unknown) => {
+      calls.push({ op: 'purge', f });
+      return Promise.resolve(5);
+    },
+    delete: (id: string) => Promise.resolve(id === 'have'),
+  } as unknown as TradeAttemptRepository;
+  const admin = new TradingAdmin(
+    new MemRepo<TradingAccount>(),
+    new MemRepo<TraderProfile>(),
+    trades,
+    {} as TradingSettingsStore,
+    { listTiers: () => Promise.resolve(TIERS) },
+    fakeCipher(true),
+    {} as TraderConfigSync,
+  );
+  beforeEach(() => (calls.length = 0));
+
+  it('bắt buộc chọn trạng thái hoặc all; không cho cả hai', async () => {
+    expect(await admin.purgeTrades({})).toMatchObject({ status: 'FAILED' });
+    expect(await admin.purgeTrades({ statuses: [] })).toMatchObject({
+      status: 'FAILED',
+    });
+    expect(
+      await admin.purgeTrades({ all: true, statuses: ['skipped'] }),
+    ).toMatchObject({ status: 'FAILED' });
+    expect(calls).toEqual([]);
+  });
+
+  it('kết hợp nhiều trạng thái (bỏ trùng) + profile; all = không lọc trạng thái', async () => {
+    expect(
+      await admin.purgeTrades({
+        statuses: ['skipped', 'error', 'skipped'],
+        profileId: 'p1',
+      }),
+    ).toEqual({ status: 'SUCEED', data: { matched: 5, deleted: 5 } });
+    expect(calls[1]).toEqual({
+      op: 'purge',
+      f: { statuses: ['skipped', 'error'], profileId: 'p1' },
+    });
+    calls.length = 0;
+    await admin.purgeTrades({ all: true });
+    expect(calls[1]).toEqual({ op: 'purge', f: {} });
+  });
+
+  it('dryRun chỉ đếm', async () => {
+    expect(
+      await admin.purgeTrades({ statuses: ['paper_filled'], dryRun: true }),
+    ).toEqual({ status: 'SUCEED', data: { matched: 5, deleted: 0 } });
+    expect(calls.map((c) => c.op)).toEqual(['count']);
+  });
+
+  it('xóa một lệnh', async () => {
+    expect((await admin.deleteTrade('have')).status).toBe('SUCEED');
+    expect((await admin.deleteTrade('none')).status).toBe('NOT_FOUND');
+  });
+});
+
 describe('TradingAdmin + TraderConfigSync', () => {
   let accounts: MemRepo<TradingAccount>;
   let profiles: MemRepo<TraderProfile>;

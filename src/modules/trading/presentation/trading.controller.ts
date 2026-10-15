@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Inject,
   Param,
   Post,
@@ -105,6 +106,21 @@ const TradesQuery = z.object({
   status: z.enum(TRADE_STATUSES).optional(),
   before: z.coerce.number().int().positive().optional(),
   limit: z.coerce.number().int().min(1).max(500).default(100),
+});
+
+const PurgeBody = z.object({
+  /** Một hoặc nhiều trạng thái (OR). */
+  statuses: z
+    .array(z.enum(TRADE_STATUSES))
+    .max(TRADE_STATUSES.length)
+    .optional(),
+  /** true = mọi trạng thái. Không dùng chung với statuses. */
+  all: z.boolean().default(false),
+  profileId: z.string().min(1).optional(),
+  /** Chỉ xóa lệnh có createdAt < before (ms). */
+  before: z.number().int().positive().optional(),
+  /** true = chỉ đếm số lệnh sẽ xóa. */
+  dryRun: z.boolean().default(false),
 });
 
 const StatsQuery = z.object({
@@ -325,6 +341,43 @@ export class TradingController {
   })
   stats(@Query() q: unknown) {
     return this._admin.tradeStats(StatsQuery.parse(q));
+  }
+
+  @Post('trades/purge')
+  @HttpCode(200)
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Xóa lệnh trong sổ',
+    description:
+      'Quyền: trading:manage. Xóa theo một/nhiều trạng thái (statuses, kết hợp OR) hoặc toàn bộ (all = true); có thể giới hạn thêm theo profileId và before. Xóa cả các chân lệnh. dryRun = true chỉ trả số lệnh sẽ xóa. Trả { matched, deleted }.',
+  })
+  @ApiZodBody(PurgeBody, {
+    statuses: {
+      summary: 'Xóa lệnh bỏ qua + lỗi',
+      value: { statuses: ['skipped', 'error'] },
+    },
+    filled: {
+      summary: 'Xóa lệnh đã vào của một profile',
+      value: { statuses: ['paper_filled'], profileId: 'prof-1' },
+    },
+    all: { summary: 'Xóa toàn bộ', value: { all: true } },
+    preview: {
+      summary: 'Đếm trước khi xóa',
+      value: { statuses: ['cancelled'], dryRun: true },
+    },
+  })
+  async purgeTrades(@Body() body: unknown) {
+    return unwrap(await this._admin.purgeTrades(PurgeBody.parse(body)));
+  }
+
+  @Delete('trades/:id')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Xóa một lệnh',
+    description: 'Quyền: trading:manage. Xóa lệnh kèm các chân.',
+  })
+  async deleteTrade(@Param('id') id: string) {
+    return unwrap(await this._admin.deleteTrade(id));
   }
 
   @Get('trades/:id')

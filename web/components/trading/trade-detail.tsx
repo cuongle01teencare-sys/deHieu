@@ -1,12 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { ExternalLink } from 'lucide-react';
+import { ExternalLink, Trash2 } from 'lucide-react';
 import { fmtMargin, fmtStamp } from '@/lib/format';
 import { roomHref, tenantHref } from '@/lib/match-links';
 import { CANCEL_REASONS } from '@/lib/skip-reasons';
 import type { TradeAttempt, TradeDetail as Detail } from '@/lib/trading-types';
 import { cn } from '@/lib/utils';
+import { Button } from '../ui/button';
 import { JsonBlock } from '../ui/code';
 import { KV } from '../ui/layout';
 import { Panel } from '../ui/panel';
@@ -97,7 +98,20 @@ function SourceLink({ url, label }: { url: string | null | undefined; label: str
   );
 }
 
-export function TradeDetailPanel({ trade, profileName, onClose }: { trade: TradeAttempt | null; profileName: (id: string) => string; onClose: () => void }) {
+export function TradeDetailPanel({
+  trade,
+  profileName,
+  onClose,
+  onDelete,
+  deleteDisabledReason,
+}: {
+  trade: TradeAttempt | null;
+  profileName: (id: string) => string;
+  onClose: () => void;
+  /** Có = hiện nút xóa lệnh ở chân panel. */
+  onDelete?: (t: TradeAttempt) => void;
+  deleteDisabledReason?: string | null;
+}) {
   const t = trade;
   const d = (t?.detail ?? {}) as Detail;
   const tm = t?.timing;
@@ -111,6 +125,13 @@ export function TradeDetailPanel({ trade, profileName, onClose }: { trade: Trade
       eyebrow={t ? `${t.sport} · ${t.market} · ${t.phase}` : undefined}
       title={t ? `${t.teams[0]} vs ${t.teams[1]}` : ''}
       actions={st ? <Pill tone={st.tone}>{st.label}</Pill> : null}
+      footer={
+        t && onDelete ? (
+          <Button variant="danger-ghost" size="sm" disabledReason={deleteDisabledReason} onClick={() => onDelete(t)}>
+            <Trash2 aria-hidden /> Xóa lệnh này
+          </Button>
+        ) : undefined
+      }
     >
       {t ? (
         <div>

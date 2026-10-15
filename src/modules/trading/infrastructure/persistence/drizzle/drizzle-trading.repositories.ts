@@ -35,6 +35,7 @@ import type {
   TradeAttemptQuery,
   TradeLeg,
   TradeLegStatus,
+  TradePurgeFilter,
   TradeStats,
   TradeStatus,
 } from '../../../application/trade-attempt.js';
@@ -374,6 +375,58 @@ export class DrizzleTradeAttemptRepository implements TradeAttemptRepository {
       else s.errors += r.n;
     }
     return s;
+  }
+
+  private _purgeWhere(f: TradePurgeFilter): SQL | undefined {
+    const where: SQL[] = [];
+    if (f.statuses?.length) where.push(inArray(trades.status, [...f.statuses]));
+    if (f.profileId) where.push(eq(trades.profileId, f.profileId));
+    if (f.before) where.push(lt(trades.createdAt, new Date(f.before)));
+    return where.length ? and(...where) : undefined;
+  }
+
+  async count(f: TradePurgeFilter): Promise<number> {
+    const [r] = await this._tx.executor
+      .select({ n: sql<number>`count(*)::int` })
+      .from(trades)
+      .where(this._purgeWhere(f));
+    return r?.n ?? 0;
+  }
+
+  /** Chân trước, lệnh sau, trong MỘT transaction (không có khóa ngoại cascade). */
+  purge(f: TradePurgeFilter): Promise<number> {
+    return this._tx.run(async () => {
+      const where = this._purgeWhere(f);
+      if (where)
+        await this._tx.executor
+          .delete(legs)
+          .where(
+            inArray(
+              legs.attemptId,
+              this._tx.executor
+                .select({ id: trades.id })
+                .from(trades)
+                .where(where),
+            ),
+          );
+      else await this._tx.executor.delete(legs);
+      const rows = await this._tx.executor
+        .delete(trades)
+        .where(where)
+        .returning({ id: trades.id });
+      return rows.length;
+    });
+  }
+
+  delete(id: string): Promise<boolean> {
+    return this._tx.run(async () => {
+      await this._tx.executor.delete(legs).where(eq(legs.attemptId, id));
+      const rows = await this._tx.executor
+        .delete(trades)
+        .where(eq(trades.id, id))
+        .returning({ id: trades.id });
+      return rows.length > 0;
+    });
   }
 }
 

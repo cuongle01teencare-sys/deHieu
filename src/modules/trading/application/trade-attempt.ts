@@ -137,6 +137,24 @@ export interface TradeAttemptQuery {
   readonly limit: number;
 }
 
+/**
+ * Phạm vi xóa lệnh. Các điều kiện kết hợp bằng AND; trong `statuses` là OR
+ * (vd. skipped HOẶC error). Không có điều kiện nào = xóa toàn bộ sổ lệnh.
+ */
+export interface TradePurgeFilter {
+  readonly statuses?: readonly TradeStatus[];
+  readonly profileId?: string;
+  /** Chỉ xóa lệnh có createdAt < before. */
+  readonly before?: number;
+}
+
+export interface TradePurgeResult {
+  /** Số lệnh khớp phạm vi lúc xóa. */
+  readonly matched: number;
+  /** Số lệnh đã xóa (0 khi dryRun). */
+  readonly deleted: number;
+}
+
 export interface TradeStats {
   readonly attempts: number;
   readonly filled: number;

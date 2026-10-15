@@ -5,6 +5,7 @@ import type { TradingSettings } from '../domain/trading-settings.js';
 import type {
   TradeAttempt,
   TradeAttemptQuery,
+  TradePurgeFilter,
   TradeStats,
 } from './trade-attempt.js';
 import type { TraderRuntimeConfig } from './trader-config.js';
@@ -31,6 +32,12 @@ export interface TradeAttemptRepository {
   get(id: string): Promise<TradeAttempt | null>;
   list(q: TradeAttemptQuery): Promise<TradeAttempt[]>;
   stats(q: { profileId?: string; since?: number }): Promise<TradeStats>;
+  /** Số lệnh khớp phạm vi xóa. */
+  count(f: TradePurgeFilter): Promise<number>;
+  /** Xóa lệnh (kèm các chân) khớp phạm vi; trả số lệnh đã xóa. */
+  purge(f: TradePurgeFilter): Promise<number>;
+  /** Xóa một lệnh (kèm các chân). false = không có. */
+  delete(id: string): Promise<boolean>;
 }
 export const TRADE_ATTEMPT_REPOSITORY = Symbol('TRADE_ATTEMPT_REPOSITORY');
 

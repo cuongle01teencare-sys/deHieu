@@ -29,7 +29,10 @@ import {
 import type {
   TradeAttempt,
   TradeAttemptQuery,
+  TradePurgeFilter,
+  TradePurgeResult,
   TradeStats,
+  TradeStatus,
 } from './trade-attempt.js';
 import type { TraderConfigSync } from './trader-config.sync.js';
 import type { TraderRuntimeConfig } from './trader-config.js';
@@ -71,6 +74,17 @@ export interface ProfileInput {
   readonly stakePlan: StakePlan;
   readonly strategy: StrategyRef;
   readonly risk: RiskLimits;
+}
+
+/** Yêu cầu xóa lệnh: chọn trạng thái (một hoặc nhiều) HOẶC all = true. */
+export interface TradePurgeInput {
+  readonly statuses?: readonly TradeStatus[];
+  /** Xóa mọi trạng thái (vẫn áp profileId/before nếu có). */
+  readonly all?: boolean;
+  readonly profileId?: string;
+  readonly before?: number;
+  /** Chỉ đếm, không xóa. */
+  readonly dryRun?: boolean;
 }
 
 export interface StakePreview {
@@ -291,6 +305,41 @@ export class TradingAdmin {
 
   tradeStats(q: { profileId?: string; since?: number }): Promise<TradeStats> {
     return this._trades.stats(q);
+  }
+
+  /**
+   * Xóa lệnh theo trạng thái (kết hợp nhiều trạng thái), theo profile/thời điểm, hoặc toàn bộ.
+   * Bắt buộc chọn rõ trạng thái hoặc all = true để không lỡ tay xóa sạch.
+   * Lưu ý: không trả lại hạn mức theo trận đã giữ trong sổ phơi nhiễm (tự hết hạn theo TTL).
+   */
+  async purgeTrades(
+    input: TradePurgeInput,
+  ): Promise<OperationStatus<TradePurgeResult>> {
+    const statuses = [...new Set(input.statuses ?? [])];
+    if (input.all && statuses.length)
+      return fail(
+        'TRADE_PURGE_SCOPE_CONFLICT: chọn statuses hoặc all, không chọn cả hai',
+      );
+    if (!input.all && !statuses.length)
+      return fail(
+        'TRADE_PURGE_SCOPE_REQUIRED: chọn ít nhất một trạng thái hoặc all = true',
+      );
+    const filter: TradePurgeFilter = {
+      ...(statuses.length ? { statuses } : {}),
+      ...(input.profileId ? { profileId: input.profileId } : {}),
+      ...(input.before ? { before: input.before } : {}),
+    };
+    const matched = await this._trades.count(filter);
+    if (input.dryRun || !matched)
+      return { status: 'SUCEED', data: { matched, deleted: 0 } };
+    const deleted = await this._trades.purge(filter);
+    return { status: 'SUCEED', data: { matched, deleted } };
+  }
+
+  async deleteTrade(id: string): Promise<OperationStatus<true>> {
+    return (await this._trades.delete(id))
+      ? { status: 'SUCEED', data: true }
+      : { status: 'NOT_FOUND' };
   }
 
   private _view(

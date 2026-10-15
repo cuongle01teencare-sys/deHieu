@@ -198,6 +198,8 @@ Polymarket thật → mua các mức giá còn lãi ròng ≥ ngưỡng → gi�
 | GET    | `/trading/trades`                       | `trading:read`   | Lệnh giấy mới nhất; lọc `profileId`, `status`; phân trang `before` + `limit`                   |
 | GET    | `/trading/trades/stats`                 | `trading:read`   | Số lần vào/bỏ qua/hủy/lỗi, tổng tiền, lãi giả định, lý do bỏ qua; lọc `profileId`, `since`     |
 | GET    | `/trading/trades/:id`                   | `trading:read`   | Một lệnh kèm từng chân (`legs`) và mốc thời gian (`timing`)                                   |
+| POST   | `/trading/trades/purge`                 | `trading:manage` | Xóa lệnh: `statuses` (một/nhiều, OR) **hoặc** `all: true`; thêm `profileId`, `before`; `dryRun` chỉ đếm → `{ matched, deleted }` |
+| DELETE | `/trading/trades/:id`                   | `trading:manage` | Xóa một lệnh kèm các chân                                                                      |
 
 ```jsonc
 // stakePlan: xu hướng tiền giữa các hạng (hạng = hạng kèo của kênh thông báo, sắp theo minMargin)

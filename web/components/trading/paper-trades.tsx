@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Receipt } from 'lucide-react';
+import { Receipt, Trash2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { fmtMargin, fmtSince, fmtStamp } from '@/lib/format';
 import type { TradeAttempt, TradeStats, TradeStatus, TraderProfile } from '@/lib/trading-types';
@@ -9,8 +9,10 @@ import { cn } from '@/lib/utils';
 import { useApi } from '@/hooks/use-api';
 import { useIsMobile } from '@/hooks/use-media';
 import { useNow } from '@/hooks/use-now';
+import { useGuard, useMutate } from '../shell/shell-context';
 import { Button } from '../ui/button';
 import { Segmented, Select } from '../ui/controls';
+import { Confirm } from '../ui/panel';
 import { Section } from '../ui/layout';
 import { Empty, ErrorState, SkeletonRows } from '../ui/states';
 import { Stat, StatStrip } from '../ui/stats';
@@ -18,6 +20,7 @@ import { Pill } from '../ui/status';
 import { ListRow, Table, TD, TH, THead, TR } from '../ui/table';
 import { Hint } from '../ui/tooltip';
 import { REASON_LABEL, reasonText, TRADE_STATUS, TradeDetailPanel } from './trade-detail';
+import { PurgeTradesDialog } from './trade-purge';
 
 const STATUS = TRADE_STATUS;
 const REASON = REASON_LABEL;
@@ -47,7 +50,18 @@ export function PaperTrades() {
   const [older, setOlder] = useState<TradeAttempt[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [selected, setSelected] = useState<TradeAttempt | null>(null);
+  const [purging, setPurging] = useState(false);
+  const [removing, setRemoving] = useState<TradeAttempt | null>(null);
+  const [busy, setBusy] = useState(false);
+  const manage = useGuard('trading:manage');
+  const mutate = useMutate();
   useEffect(() => setOlder([]), [profileId, status]);
+
+  const refresh = () => {
+    setOlder([]);
+    void page.reload();
+    void stats.reload();
+  };
 
   const rows = useMemo(() => {
     const seen = new Set<string>();
@@ -115,14 +129,19 @@ export function PaperTrades() {
         title="Lệnh giấy"
         description="Mỗi dòng = một profile xử lý một kèo. Giá và phí lấy từ sổ lệnh Polymarket thật lúc nhận kèo; không có lệnh nào được đặt."
         actions={
-          <Select value={status} onChange={(e) => setStatus(e.target.value as TradeStatus | '')} className="w-40" aria-label="Trạng thái">
-            <option value="">Mọi trạng thái</option>
-            {(Object.keys(STATUS) as TradeStatus[]).map((k) => (
-              <option key={k} value={k}>
-                {STATUS[k].label}
-              </option>
-            ))}
-          </Select>
+          <div className="flex items-center gap-2">
+            <Select value={status} onChange={(e) => setStatus(e.target.value as TradeStatus | '')} className="w-40" aria-label="Trạng thái">
+              <option value="">Mọi trạng thái</option>
+              {(Object.keys(STATUS) as TradeStatus[]).map((k) => (
+                <option key={k} value={k}>
+                  {STATUS[k].label}
+                </option>
+              ))}
+            </Select>
+            <Button variant="danger-ghost" size="sm" disabledReason={manage} onClick={() => setPurging(true)}>
+              <Trash2 aria-hidden /> Xóa lệnh…
+            </Button>
+          </div>
         }
       >
         {page.error && !page.data ? <ErrorState message={page.error} onRetry={page.reload} /> : null}
@@ -249,7 +268,44 @@ export function PaperTrades() {
           </div>
         ) : null}
       </Section>
-      <TradeDetailPanel trade={selected} profileName={name} onClose={() => setSelected(null)} />
+      <TradeDetailPanel
+        trade={selected}
+        profileName={name}
+        onClose={() => setSelected(null)}
+        onDelete={setRemoving}
+        deleteDisabledReason={manage}
+      />
+      <PurgeTradesDialog
+        open={purging}
+        onOpenChange={setPurging}
+        profileId={profileId}
+        profileName={profileId ? name(profileId) : null}
+        initialStatus={status}
+        onDone={() => {
+          setSelected(null);
+          refresh();
+        }}
+      />
+      <Confirm
+        open={!!removing}
+        onOpenChange={(v) => !v && setRemoving(null)}
+        tone="danger"
+        title="Xóa lệnh này?"
+        description={removing ? `${removing.teams[0]} vs ${removing.teams[1]} · ${STATUS[removing.status].label} · ${fmtStamp(removing.createdAt)}. Xóa vĩnh viễn kèm các chân lệnh.` : undefined}
+        confirmLabel="Xóa lệnh"
+        loading={busy}
+        onConfirm={async () => {
+          if (!removing) return;
+          setBusy(true);
+          const r = await mutate(`trading/trades/${encodeURIComponent(removing.id)}`, { method: 'DELETE' }, 'Đã xóa lệnh');
+          setBusy(false);
+          if (r !== null) {
+            setRemoving(null);
+            setSelected(null);
+            refresh();
+          }
+        }}
+      />
     </>
   );
 }

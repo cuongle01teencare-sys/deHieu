@@ -164,6 +164,72 @@ describe('Postgres: auto trade', () => {
     });
   });
 
+  it('xóa lệnh: theo nhiều trạng thái, profile, mốc thời gian, một lệnh, toàn bộ (kèm chân)', async () => {
+    const r = new DrizzleTradeAttemptRepository(tx);
+    const t0 = Date.now() - 10_000;
+    const leg = {
+      venue: 'csgoempire',
+      accountId: null,
+      side: 0,
+      pick: 'a',
+      signalPrice: 2,
+      requestedPrice: 2,
+      requestedAmount: 25,
+      filledAmount: 25,
+      avgPrice: 2,
+      fee: 0,
+      cost: 25,
+      status: 'simulated' as const,
+      marketRef: null,
+      orderRef: null,
+      sentAt: null,
+      ackedAt: null,
+      filledAt: null,
+      error: null,
+      raw: {},
+    };
+    await r.record(trade('f1', { createdAt: t0, legs: [leg] }));
+    await r.record(
+      trade('f2', { profileId: 'p2', createdAt: t0 + 1, legs: [leg] }),
+    );
+    await r.record(trade('s1', { status: 'skipped', createdAt: t0 + 2 }));
+    await r.record(trade('s2', { status: 'skipped', createdAt: t0 + 3 }));
+    await r.record(trade('c1', { status: 'cancelled', createdAt: t0 + 4 }));
+    await r.record(trade('e1', { status: 'error', createdAt: t0 + 5 }));
+    const ids = async () => (await r.list({ limit: 50 })).map((x) => x.id);
+
+    // skipped HOẶC error
+    const f = { statuses: ['skipped', 'error'] as const };
+    expect(await r.count(f)).toBe(3);
+    expect(await r.purge(f)).toBe(3);
+    expect(await ids()).toEqual(['c1', 'f2', 'f1']);
+
+    // lệnh đã vào của một profile, chân lệnh bị xóa theo
+    expect(await r.purge({ statuses: ['paper_filled'], profileId: 'p2' })).toBe(
+      1,
+    );
+    expect(await r.get('f2')).toBeNull();
+    expect((await r.get('f1'))?.legs).toHaveLength(1);
+
+    // mốc thời gian
+    expect(await r.purge({ before: t0 + 1 })).toBe(1);
+    expect(await ids()).toEqual(['c1']);
+
+    // một lệnh
+    expect(await r.delete('c1')).toBe(true);
+    expect(await r.delete('c1')).toBe(false);
+
+    // toàn bộ
+    await r.record(trade('x1', { legs: [leg] }));
+    await r.record(trade('x2', { status: 'skipped' }));
+    expect(await r.purge({})).toBe(2);
+    expect(await r.count({})).toBe(0);
+    const left = await client.query<{ n: number }>(
+      'select count(*)::int as n from trade_legs',
+    );
+    expect(left.rows[0]?.n).toBe(0);
+  });
+
   it('lệnh vào: lưu từng chân + mốc thời gian, đọc lại đủ', async () => {
     const r = new DrizzleTradeAttemptRepository(tx);
     const now = Date.now();

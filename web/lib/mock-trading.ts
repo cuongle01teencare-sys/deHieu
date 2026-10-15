@@ -70,7 +70,7 @@ const MATCHES: [string, [string, string], string][] = [
 ];
 const SKIPS = ['NO_EDGE: giá tốt nhất 0.47 → lãi 0.62% < 1.00%', 'INSUFFICIENT_DEPTH: chỉ vào được 12.40$ < tối thiểu 20$', 'NO_TIER: margin 1.40%', 'CAP_REACHED: giới hạn tổng theo trận vừa bị trader khác dùng hết'];
 
-const trades: TradeAttempt[] = Array.from({ length: 48 }, (_, i) => {
+let trades: TradeAttempt[] = Array.from({ length: 48 }, (_, i) => {
   const [sport, teams, market] = MATCHES[i % MATCHES.length]!;
   const filled = i % 3 !== 1;
   const odds = 1.9 + ((i * 7) % 9) / 20;
@@ -234,6 +234,24 @@ export function mockTrading(method: string, path: string, search: string, body: 
   if (method === 'DELETE' && profileId) {
     profiles = profiles.filter((x) => x.id !== profileId);
     return ok(true);
+  }
+  if (method === 'POST' && p === 'trades/purge') {
+    const statuses = Array.isArray(b.statuses) ? (b.statuses as string[]) : [];
+    if (b.all && statuses.length) return bad('TRADE_PURGE_SCOPE_CONFLICT');
+    if (!b.all && !statuses.length) return bad('TRADE_PURGE_SCOPE_REQUIRED');
+    const hit = (t: TradeAttempt) =>
+      (!statuses.length || statuses.includes(t.status)) &&
+      (!b.profileId || t.profileId === b.profileId) &&
+      (!b.before || t.createdAt < Number(b.before));
+    const matched = trades.filter(hit).length;
+    if (!b.dryRun) trades = trades.filter((t) => !hit(t));
+    return ok({ matched, deleted: b.dryRun ? 0 : matched });
+  }
+  const tradeId = /^trades\/([^/]+)$/.exec(p)?.[1];
+  if (method === 'DELETE' && tradeId) {
+    const before = trades.length;
+    trades = trades.filter((t) => t.id !== decodeURIComponent(tradeId));
+    return trades.length < before ? ok(true) : { status: 404, body: { message: 'Not Found' } };
   }
   if (method === 'PUT' && p === 'settings') {
     matchExposureCapUsd = Number(b.matchExposureCapUsd ?? 0);
