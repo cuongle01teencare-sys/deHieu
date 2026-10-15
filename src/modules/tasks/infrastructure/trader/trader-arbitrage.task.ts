@@ -65,40 +65,35 @@ const CONFIG_SKIPS: Readonly<Record<string, (c: TraderConfig) => unknown>> = {
   ],
 };
 const reasonCode = (r: string | null) => (r ?? '').split(':')[0].trim();
-/**
- * Phiên bản cách quyết định. Tăng khi đổi logic làm kết quả "bỏ qua vì cấu hình" có thể khác
- * (vd 2 = loại hạng không tick TRƯỚC khi chọn hạng) → kèo còn sống được xét lại một lần sau deploy.
- */
-const DECISION_VERSION = 2;
 const configKey = (reason: string | null, c: TraderConfig): string | null => {
   const f = CONFIG_SKIPS[reasonCode(reason)];
-  return f ? JSON.stringify([DECISION_VERSION, f(c)]) : null;
+  return f ? JSON.stringify(f(c)) : null;
 };
-/** Dấu cũ ('1', chưa lưu kết quả) → coi như bỏ qua vì cấu hình chưa rõ → xét lại một lần. */
-const LEGACY_KEY = 'legacy';
+/**
+ * Bỏ qua TẠM THỜI: do lúc giao kèo, không do kèo/cấu hình (vd hub gửi lại bản lưu lúc làm mới
+ * gần nhất sau khi trader nối lại → "quá cũ"). Lần hub giao kế tiếp (dữ liệu mới) xét lại.
+ */
+const TRANSIENT_SKIPS = new Set([
+  'STALE_SIGNAL',
+  'SIGNAL_EXPIRED',
+  'HUB_PAUSED',
+]);
 
-/** Kết quả lưu kèm dấu "đã xử lý" trong sổ (Redis) → task khởi động lại vẫn biết. */
-const parseNote = (v: string | null): LiveSignal['last'] & { n: number } => {
-  if (v === null || v === '1')
-    return { status: 'skipped', reason: null, configKey: LEGACY_KEY, n: 1 };
-  try {
-    const o = JSON.parse(v) as {
-      s: Status;
-      r: string | null;
-      k: string | null;
-      n: number;
-    };
-    return { status: o.s, reason: o.r, configKey: o.k, n: o.n || 1 };
-  } catch {
-    return { status: 'skipped', reason: null, configKey: LEGACY_KEY, n: 1 };
-  }
-};
-
-/** Kết quả lần trước là "bỏ qua vì cấu hình" mà phần cấu hình đó (hoặc logic) đã đổi. */
-const needsRedo = (last: LiveSignal['last'], c: TraderConfig): boolean =>
+/**
+ * Có xét lại kèo đã xử lý không:
+ * - lần trước bị bỏ qua vì cấu hình mà phần cấu hình đó (hoặc logic) đã đổi;
+ * - lần trước bị bỏ qua tạm thời và đây là lần hub giao lại kèo (`delivered`).
+ */
+const needsRedo = (
+  last: LiveSignal['last'],
+  c: TraderConfig,
+  delivered: boolean,
+): boolean =>
   !!last &&
-  last.configKey !== null &&
-  last.configKey !== configKey(last.reason, c);
+  ((delivered &&
+    last.status === 'skipped' &&
+    TRANSIENT_SKIPS.has(reasonCode(last.reason))) ||
+    (last.configKey !== null && last.configKey !== configKey(last.reason, c)));
 
 /** Kèo còn sống đã nhận từ hub (bản mới nhất) + kết quả lần xử lý gần nhất trong phiên task này. */
 interface LiveSignal {
@@ -287,9 +282,12 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       }
       if (this._handling.has(id)) continue;
       n++;
-      void this._handle(run.ctx, l.signal, run, force).catch((e) =>
-        run.ctx.warn(e),
-      );
+      void this._handle(
+        run.ctx,
+        l.signal,
+        run,
+        force ? 'force' : 'config',
+      ).catch((e) => run.ctx.warn(e));
     }
     return n;
   }
@@ -303,7 +301,10 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       hub: ConsumerHubClient;
     },
     /** Xét lại kèo đã xử lý (đổi cấu hình / xóa lệnh): bỏ qua dấu "đã xử lý". */
-    redo = false,
+    /**
+     * hub = hub vừa giao kèo; config = xét lại sau khi đổi cấu hình; force = bỏ hẳn dấu "đã xử lý".
+     */
+    source: 'hub' | 'config' | 'force' = 'hub',
   ): Promise<void> {
     const startedAt = Date.now();
     const cfg = this._config;
@@ -313,21 +314,23 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     if (this._handling.has(s.signalId)) return;
     // hub giao "ít nhất một lần" và gửi lại kèo còn hiệu lực khi nối lại → mỗi kèo xử lý MỘT lần
     const ttl = Math.max(0, s.expiresAt - startedAt) + 3_600_000;
-    if (!redo && !(await deps.ledger.claim(profileId, s.signalId, ttl))) {
-      // đã xử lý trước đó (có thể trước khi task khởi động lại): đọc kết quả lần trước từ sổ;
-      // bị bỏ qua vì cấu hình mà cấu hình/logic đã đổi → xét lại, không thì thôi
+    if (
+      source !== 'force' &&
+      !(await deps.ledger.claim(profileId, s.signalId, ttl))
+    ) {
+      // đã xử lý trước đó. Kết quả lần trước chỉ nhớ trong phiên task này (không lưu Redis):
+      // bị bỏ qua vì cấu hình mà cấu hình đã đổi / bỏ qua tạm thời → xét lại, không thì thôi
       if (!live) return;
-      if (!live.last) {
-        const prev = parseNote(await deps.ledger.recall(profileId, s.signalId));
-        live.last = prev;
-        live.attempts = Math.max(live.attempts, prev.n);
-      }
       live.attempts = Math.max(live.attempts, 1);
-      if (!needsRedo(live.last, cfg) || this._handling.has(s.signalId)) return;
+      if (
+        !needsRedo(live.last, cfg, source === 'hub') ||
+        this._handling.has(s.signalId)
+      )
+        return;
     }
     this._handling.add(s.signalId);
     try {
-      await this._decide(ctx, s, deps, cfg, startedAt, live, ttl);
+      await this._decide(ctx, s, deps, cfg, startedAt, live);
     } finally {
       this._handling.delete(s.signalId);
     }
@@ -344,7 +347,6 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     cfg: TraderConfig,
     startedAt: number,
     live: LiveSignal | undefined,
-    ttl: number,
   ): Promise<void> {
     const profileId = ctx.params.profileId;
     const attempt = live ? ++live.attempts : 1;
@@ -396,22 +398,8 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         detail: Record<string, unknown>;
       }> = {},
     ) => {
-      const last = { status, reason, configKey: configKey(reason, cfg) };
-      if (live) live.last = last;
-      // lưu kết quả vào sổ: task khởi động lại vẫn biết kèo này bị bỏ qua vì cấu hình hay không
-      void deps.ledger
-        .note(
-          profileId,
-          s.signalId,
-          JSON.stringify({
-            s: status,
-            r: reason,
-            k: last.configKey,
-            n: attempt,
-          }),
-          ttl,
-        )
-        .catch((e: unknown) => ctx.warn(e));
+      if (live)
+        live.last = { status, reason, configKey: configKey(reason, cfg) };
       const c = this._cancels.get(s.signalId);
       // kèo bị hủy khi đang tính: lý do + giờ bắt đầu từng chân lúc hủy (ignored = vẫn vào tiếp)
       const cancel = c

@@ -1,0 +1,114 @@
+import type { OperationStatus } from '../../../shared/domain/domain-repository.js';
+import type { TraderProfile } from '../domain/trader-profile.js';
+import type { EntryRef, ExposureLedgerReader } from './exposure.ports.js';
+import type {
+  StakeTierSource,
+  TraderProfileRepository,
+  TradingSettingsStore,
+} from './trading.ports.js';
+
+export interface MatchUsageView {
+  readonly match: string;
+  readonly usedUsd: number;
+  /** Giới hạn chung (0 = tắt). */
+  readonly capUsd: number;
+  readonly ttlMs: number | null;
+  readonly profiles: readonly {
+    readonly profileId: string;
+    readonly profileName: string | null;
+    readonly usedUsd: number;
+    /** Giới hạn riêng của profile (0 = không có). */
+    readonly capUsd: number;
+    readonly ttlMs: number | null;
+  }[];
+}
+
+export interface EntryUsageView extends EntryRef {
+  readonly profileName: string | null;
+  readonly tierName: string | null;
+  readonly count: number;
+  /** Số lệnh tối đa hiện cấu hình cho cửa này ở hạng này. */
+  readonly max: number | null;
+  readonly ttlMs: number | null;
+}
+
+export interface ExposureView {
+  /** false = không đọc được Redis (xem error). */
+  readonly available: boolean;
+  readonly error: string | null;
+  readonly matches: readonly MatchUsageView[];
+  readonly entries: readonly EntryUsageView[];
+}
+
+/** Xem / đặt lại sổ phơi nhiễm thật (Redis) mà trader dùng để quyết định. */
+export class ExposureAdmin {
+  constructor(
+    private readonly _reader: ExposureLedgerReader,
+    private readonly _profiles: TraderProfileRepository,
+    private readonly _tiers: StakeTierSource,
+    private readonly _settings: TradingSettingsStore,
+  ) {}
+
+  async view(): Promise<ExposureView> {
+    const [profiles, tiers, settings] = await Promise.all([
+      this._profiles.list(),
+      this._tiers.listTiers(),
+      this._settings.get(),
+    ]);
+    let snap;
+    try {
+      snap = await this._reader.snapshot();
+    } catch (e: unknown) {
+      return {
+        available: false,
+        error: e instanceof Error ? e.message : String(e),
+        matches: [],
+        entries: [],
+      };
+    }
+    const prof = new Map<string, TraderProfile>(profiles.map((p) => [p.id, p]));
+    const tierName = new Map(tiers.map((t) => [t.id, t.name]));
+    return {
+      available: true,
+      error: null,
+      matches: snap.matches.map((m) => ({
+        match: m.match,
+        usedUsd: m.usedUsd ?? 0,
+        capUsd: settings.matchExposureCapUsd,
+        ttlMs: m.ttlMs,
+        profiles: m.byProfile.map((b) => ({
+          ...b,
+          profileName: prof.get(b.profileId)?.name ?? null,
+          capUsd: prof.get(b.profileId)?.risk.matchCapUsd ?? 0,
+        })),
+      })),
+      entries: snap.entries.map((e) => {
+        const p = prof.get(e.profileId);
+        return {
+          ...e,
+          profileName: p?.name ?? null,
+          tierName: tierName.get(e.tierId) ?? null,
+          max: p
+            ? (p.stakePlan.overrides[e.tierId]?.maxEntries ??
+              p.risk.maxEntriesPerTier)
+            : null,
+        };
+      }),
+    };
+  }
+
+  async resetMatch(match: string): Promise<OperationStatus<{ keys: number }>> {
+    if (!match.trim()) return { status: 'FAILED', reason: 'MATCH_REQUIRED' };
+    return {
+      status: 'SUCEED',
+      data: { keys: await this._reader.resetMatch(match) },
+    };
+  }
+
+  async resetEntry(e: EntryRef): Promise<OperationStatus<{ keys: number }>> {
+    return {
+      status: 'SUCEED',
+      data: { keys: await this._reader.resetEntry(e) },
+    };
+  }
+}

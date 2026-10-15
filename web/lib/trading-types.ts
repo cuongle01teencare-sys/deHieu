@@ -223,3 +223,34 @@ export interface TradeStats {
 
 /** Kind task trader (danh mục task backend). */
 export const TRADER_KIND = 'trader.arbitrage';
+
+// ===================== Sổ phơi nhiễm thật (Redis) — GET /trading/exposure =====================
+
+export interface ExposureMatchView {
+  /** `cs2:a~b`. */
+  match: string;
+  usedUsd: number;
+  /** Giới hạn chung; 0 = tắt. */
+  capUsd: number;
+  ttlMs: number | null;
+  profiles: { profileId: string; profileName: string | null; usedUsd: number; capUsd: number; ttlMs: number | null }[];
+}
+
+export interface ExposureEntryView {
+  profileId: string;
+  profileName: string | null;
+  room: string;
+  comboId: string;
+  tierId: string;
+  tierName: string | null;
+  count: number;
+  max: number | null;
+  ttlMs: number | null;
+}
+
+export interface ExposureView {
+  available: boolean;
+  error: string | null;
+  matches: ExposureMatchView[];
+  entries: ExposureEntryView[];
+}

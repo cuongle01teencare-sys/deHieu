@@ -628,56 +628,6 @@ describe('TraderArbitrageTask (giấy)', () => {
     await t.stop();
   });
 
-  it('task khởi động lại vẫn biết kết quả cũ (lưu trong sổ): đổi cấu hình → xét lại, không đổi → im', async () => {
-    const ledger = new InMemoryExposureLedger();
-    const base = config('A');
-    const closed = config('A', {
-      risk: { ...base.risk, markets: ['map-handicap-p1.5'] },
-    });
-    const t1 = start(new TraderArbitrageTask({ ledger }), params('A'));
-    await t1.command('config', closed);
-    await until(() => hub.consumers.has('trader:A'));
-    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('s11') });
-    await until(() => trades(t1).length === 1);
-    expect(trades(t1)[0]?.reason).toMatch(/^MARKET_NOT_SELECTED/);
-    await t1.stop();
-    hub.consumers.delete('trader:A'); // hub giả không tự gỡ consumer đã ngắt
-
-    // khởi động lại, cấu hình y hệt → hub gửi lại kèo → không xét lại
-    const t2 = start(new TraderArbitrageTask({ ledger }), params('A'));
-    await t2.command('config', closed);
-    await until(() => hub.consumers.has('trader:A'));
-    hub.broadcast({ type: 'signal', kind: 'refreshed', signal: signal('s11') });
-    await new Promise((r) => setTimeout(r, 80));
-    expect(trades(t2)).toHaveLength(0);
-    // mở market → xét lại ngay theo kết quả đọc từ sổ, id tiếp theo
-    await t2.command('config', base);
-    await until(() => trades(t2).length === 1);
-    expect(trades(t2)[0]).toMatchObject({
-      id: 'A:s11:2',
-      status: 'paper_filled',
-    });
-    await t2.stop();
-  });
-
-  it('dấu cũ chưa có kết quả (trước bản này) → xét lại một lần rồi thôi', async () => {
-    const ledger = new InMemoryExposureLedger();
-    await ledger.claim('A', 's12', 60_000); // dấu "1" do bản cũ ghi
-    const t = start(new TraderArbitrageTask({ ledger }), params('A'));
-    await t.command('config', config('A'));
-    await until(() => hub.consumers.has('trader:A'));
-    hub.broadcast({ type: 'signal', kind: 'refreshed', signal: signal('s12') });
-    await until(() => trades(t).length === 1);
-    expect(trades(t)[0]).toMatchObject({
-      id: 'A:s12:2',
-      status: 'paper_filled',
-    });
-    hub.broadcast({ type: 'signal', kind: 'refreshed', signal: signal('s12') });
-    await new Promise((r) => setTimeout(r, 80));
-    expect(trades(t)).toHaveLength(1);
-    await t.stop();
-  });
-
   it('reset_seen (app xóa toàn bộ lệnh) → xét lại mọi kèo còn sống', async () => {
     const t = start(new TraderArbitrageTask(), params('A'));
     await t.command('config', config('A'));
@@ -693,6 +643,36 @@ describe('TraderArbitrageTask (giấy)', () => {
     // đã vào ở hạng này rồi → lần xét lại báo cửa đã vào, không vào trùng
     expect(trades(t)[1]).toMatchObject({ id: 'A:s10:2', status: 'skipped' });
     expect(String(trades(t)[1]?.reason)).toMatch(/^ALREADY_ENTERED/);
+    await t.stop();
+  });
+
+  it('"quá cũ" là tạm thời: hub gửi lại bản cũ khi nối lại → lần làm mới kế tiếp vẫn được xét', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    const base = config('A');
+    await t.command(
+      'config',
+      config('A', { risk: { ...base.risk, maxSignalAgeMs: 3_000 } }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    // bản lưu lúc làm mới 13 giây trước (hub gửi lại sau khi trader nối lại)
+    hub.broadcast({
+      type: 'signal',
+      kind: 'refreshed',
+      signal: { ...signal('s13'), issuedAt: Date.now() - 13_000 },
+    });
+    await until(() => trades(t).length === 1);
+    expect(trades(t)[0]?.reason).toMatch(/^STALE_SIGNAL/);
+    // hub làm mới kèo (cùng mã, mốc mới) → xét lại
+    hub.broadcast({ type: 'signal', kind: 'refreshed', signal: signal('s13') });
+    await until(() => trades(t).length === 2);
+    expect(trades(t)[1]).toMatchObject({
+      id: 'A:s13:2',
+      status: 'paper_filled',
+    });
+    // làm mới tiếp → đã vào, không xét nữa
+    hub.broadcast({ type: 'signal', kind: 'refreshed', signal: signal('s13') });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(trades(t)).toHaveLength(2);
     await t.stop();
   });
 

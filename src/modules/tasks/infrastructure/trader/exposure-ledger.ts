@@ -7,15 +7,6 @@ import { Redis } from 'ioredis';
 export interface ExposureLedger {
   /** Đánh dấu kèo đã xử lý (chống xử lý lại khi hub gửi lại sau khi task khởi động lại). false = đã có. */
   claim(profileId: string, signalId: string, ttlMs: number): Promise<boolean>;
-  /** Ghi kết quả lần xử lý vào dấu "đã xử lý" (để task khởi động lại vẫn biết). Chỉ khi dấu còn. */
-  note(
-    profileId: string,
-    signalId: string,
-    value: string,
-    ttlMs: number,
-  ): Promise<void>;
-  /** Kết quả đã ghi; '1' = dấu cũ chưa có kết quả; null = chưa xử lý. */
-  recall(profileId: string, signalId: string): Promise<string | null>;
   /** Đã dùng bao nhiêu (USD) ở từng khóa. */
   used(keys: readonly string[]): Promise<number[]>;
   /** Giữ `amount` trên mọi khóa nếu không khóa nào vượt giới hạn (cap ≤ 0 = không giới hạn). Nguyên tử. */
@@ -90,25 +81,6 @@ export class RedisExposureLedger implements ExposureLedger {
     return r === 'OK';
   }
 
-  async note(
-    profileId: string,
-    signalId: string,
-    value: string,
-    ttlMs: number,
-  ) {
-    await this._redis.set(
-      `${this._ns}:done:${profileId}:${signalId}`,
-      value,
-      'PX',
-      Math.max(1_000, Math.round(ttlMs)),
-      'XX',
-    );
-  }
-
-  recall(profileId: string, signalId: string) {
-    return this._redis.get(`${this._ns}:done:${profileId}:${signalId}`);
-  }
-
   async acquire(key: string, max: number, ttlMs: number) {
     const r = await this._redis.eval(
       ACQUIRE_LUA,
@@ -157,7 +129,7 @@ export class RedisExposureLedger implements ExposureLedger {
 
 export class InMemoryExposureLedger implements ExposureLedger {
   private readonly _v = new Map<string, { amount: number; until: number }>();
-  private readonly _done = new Map<string, { until: number; value: string }>();
+  private readonly _done = new Map<string, number>();
   private readonly _slots = new Map<string, { n: number; until: number }>();
 
   acquire(key: string, max: number, ttlMs: number) {
@@ -180,22 +152,10 @@ export class InMemoryExposureLedger implements ExposureLedger {
   claim(profileId: string, signalId: string, ttlMs: number) {
     const k = `${profileId}:${signalId}`;
     const now = Date.now();
-    for (const [x, d] of this._done) if (d.until <= now) this._done.delete(x);
+    for (const [x, until] of this._done) if (until <= now) this._done.delete(x);
     if (this._done.has(k)) return Promise.resolve(false);
-    this._done.set(k, { until: now + ttlMs, value: '1' });
+    this._done.set(k, now + ttlMs);
     return Promise.resolve(true);
-  }
-
-  note(profileId: string, signalId: string, value: string, ttlMs: number) {
-    const k = `${profileId}:${signalId}`;
-    if (this._done.has(k))
-      this._done.set(k, { until: Date.now() + ttlMs, value });
-    return Promise.resolve();
-  }
-
-  recall(profileId: string, signalId: string) {
-    const d = this._done.get(`${profileId}:${signalId}`);
-    return Promise.resolve(d && d.until > Date.now() ? d.value : null);
   }
 
   private _slot(key: string) {

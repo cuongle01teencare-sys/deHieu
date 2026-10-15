@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { ApiZodBody } from '../../../shared/presentation/openapi.js';
 import { RequirePermissions } from '../../auth/presentation/auth.decorators.js';
 import { TradingAdmin } from '../application/trading-admin.js';
+import { ExposureAdmin } from '../application/exposure-admin.js';
 import { TRADING_PERMISSIONS as P } from '../application/trading.permissions.js';
 import { TRADE_STATUSES } from '../application/trade-attempt.js';
 import { STAKE_TRENDS } from '../domain/stake-plan.js';
@@ -134,6 +135,18 @@ const PurgeBody = z.object({
   dryRun: z.boolean().default(false),
 });
 
+const ExposureResetBody = z.union([
+  z.object({ match: z.string().trim().min(1).max(300) }),
+  z.object({
+    entry: z.object({
+      profileId: z.string().min(1).max(100),
+      room: z.string().min(1).max(300),
+      comboId: z.string().min(1).max(100),
+      tierId: z.string().min(1).max(100),
+    }),
+  }),
+]);
+
 const StatsQuery = z.object({
   profileId: z.string().optional(),
   since: z.coerce.number().int().positive().optional(),
@@ -146,7 +159,10 @@ const StatsQuery = z.object({
 @Controller('trading')
 @ApiTags('Auto trade')
 export class TradingController {
-  constructor(@Inject(TradingAdmin) private readonly _admin: TradingAdmin) {}
+  constructor(
+    @Inject(TradingAdmin) private readonly _admin: TradingAdmin,
+    @Inject(ExposureAdmin) private readonly _exposure: ExposureAdmin,
+  ) {}
 
   // ------------------------------------------------------------- tài khoản
 
@@ -364,6 +380,42 @@ export class TradingController {
   })
   stats(@Query() q: unknown) {
     return this._admin.tradeStats(StatsQuery.parse(q));
+  }
+
+  // ------------------------------------------------------------- sổ phơi nhiễm (Redis)
+
+  @Get('exposure')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Sổ phơi nhiễm thật (Redis)',
+    description:
+      'Quyền: trading:read. Số liệu trader dùng để quyết định, đọc thẳng từ Redis: tiền đã dùng theo trận (chung + riêng profile) và số lệnh đã vào mỗi cửa mỗi hạng, kèm TTL. Không phụ thuộc lịch sử lệnh trong DB (xóa lệnh không đổi sổ này). Chỉ có khi task trader bật sharedExposure (mặc định).',
+  })
+  exposure() {
+    return this._exposure.view();
+  }
+
+  @Post('exposure/reset')
+  @HttpCode(200)
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Đặt lại sổ phơi nhiễm',
+    description:
+      'Quyền: trading:manage. { match } = xóa tiền đã dùng của trận (chung + mọi profile); { entry: {profileId, room, comboId, tierId} } = xóa bộ đếm số lệnh của cửa + hạng đó. Trả { keys } = số khóa đã xóa.',
+  })
+  @ApiZodBody(ExposureResetBody, {
+    match: {
+      summary: 'Trả lại hạn mức trận',
+      value: { match: 'cs2:aurora~ninjasinpyjamas' },
+    },
+  })
+  async resetExposure(@Body() body: unknown) {
+    const b = ExposureResetBody.parse(body);
+    return unwrap(
+      'match' in b
+        ? await this._exposure.resetMatch(b.match)
+        : await this._exposure.resetEntry(b.entry),
+    );
   }
 
   @Post('trades/purge')

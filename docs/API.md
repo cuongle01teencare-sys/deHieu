@@ -197,6 +197,9 @@ Polymarket thật → mua các mức giá còn lãi ròng ≥ ngưỡng → gi�
 | PUT    | `/trading/settings`                     | `trading:manage` | `{ "matchExposureCapUsd": 500 }`                                                               |
 | GET    | `/trading/trades`                       | `trading:read`   | Lệnh giấy mới nhất; lọc `profileId`, `status`; phân trang `before` + `limit`                   |
 | GET    | `/trading/trades/stats`                 | `trading:read`   | Số lần vào/bỏ qua/hủy/lỗi, tổng tiền, lãi giả định, lý do bỏ qua; lọc `profileId`, `since`     |
+| GET    | `/trading/exposure`                     | `trading:read`   | Sổ phơi nhiễm thật (Redis): tiền đã dùng theo trận (chung + riêng profile), số lệnh đã vào mỗi cửa mỗi hạng, TTL. Không phụ thuộc lịch sử lệnh |
+| POST   | `/trading/exposure/reset`               | `trading:manage` | `{ "match": "cs2:a~b" }` trả lại hạn mức trận; `{ "entry": { profileId, room, comboId, tierId } }` đặt lại số lệnh của cửa |
+| POST   | `/trading/profiles/:id/reevaluate`      | `trading:manage` | Task trader của profile xét lại mọi kèo còn sống (không xóa lệnh) |
 | GET    | `/trading/trades/:id`                   | `trading:read`   | Một lệnh kèm từng chân (`legs`) và mốc thời gian (`timing`)                                   |
 | POST   | `/trading/trades/purge`                 | `trading:manage` | Xóa lệnh: `statuses` (một/nhiều, OR) **hoặc** `all: true`; thêm `profileId`, `before`; `dryRun` chỉ đếm → `{ matched, deleted }` |
 | DELETE | `/trading/trades/:id`                   | `trading:manage` | Xóa một lệnh kèm các chân                                                                      |

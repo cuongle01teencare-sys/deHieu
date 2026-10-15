@@ -506,12 +506,22 @@ Trader xử lý mỗi kèo **một lần theo mã kèo**; kèo làm mới địn
 - **Xóa toàn bộ lệnh giấy** (Xóa lệnh… → Toàn bộ, không giới hạn thời điểm) của một profile hoặc mọi profile → trader quên dấu "đã xử lý" và xét lại mọi kèo còn sống.
 
 - **Bấm "Xét lại kèo đang sống"** (menu ⋯ của profile): xét lại mọi kèo còn sống, không xóa lệnh.
+- **Lần trước bị bỏ qua tạm thời** (Kèo quá cũ, Kèo hết hạn, Consumer bị tạm dừng): lần hub giao lại kèo kế tiếp được xét lại. Hay gặp ngay sau khi trader khởi động lại: hub gửi lại các kèo còn sống đúng bản lưu ở lần làm mới gần nhất (có thể đã 10–30 giây) nên lần đầu báo "Kèo quá cũ", lần làm mới sau (dữ liệu mới) mới xét thật.
 
-Kết quả mỗi lần xử lý được lưu kèm dấu "đã xử lý" trong Redis, nên task khởi động lại (deploy, restart) vẫn biết kèo nào bị bỏ qua vì cấu hình. Khi logic quyết định đổi (phiên bản trong code tăng), các kèo bị bỏ qua vì cấu hình được xét lại một lần sau deploy. Dấu do bản cũ ghi (chưa có kết quả) được xét lại một lần.
+Dấu "đã xử lý" trong Redis chỉ ghi giá trị `1` (không kèm kết quả) và **bền qua khởi động lại**: task trader khởi động lại vẫn bỏ qua im lặng mọi kèo đã có dấu. Kết quả lần xử lý (để xét lại khi đổi cấu hình / bỏ qua tạm thời) chỉ nhớ trong phiên task; sau khởi động lại muốn xét lại thì bấm "Xét lại kèo đang sống".
 
 Lần xét lại ghi lệnh mới với id có hậu tố (`profile:signal:2`). Số lệnh mỗi cửa mỗi hạng và hạn mức theo trận vẫn giữ, nên cửa đã vào sẽ hiện "Cửa này đã vào" thay vì vào trùng.
 
 Nhiều dòng giống hệt nhau trong cùng một phút thường là **nhiều kèo khác mã** của cùng một cửa: odds bị khóa ↔ mở lại liên tục làm kèo bị hủy rồi phát lại với mã mới; mỗi mã được xử lý một lần.
+
+### Sổ phơi nhiễm (Redis) và thống kê Lệnh giấy
+
+Hai nguồn số liệu khác nhau:
+
+- **Thống kê ở Lệnh giấy** (lãi giả định, tiền vào, số lệnh…) tính từ **lịch sử lệnh còn lưu trong database**. Xóa lệnh thì số này giảm.
+- **Sổ phơi nhiễm** là bộ đếm trong **Redis** mà trader dùng để quyết định: tiền đã dùng theo trận (chung + riêng profile) và số lệnh đã vào mỗi cửa mỗi hạng. Xóa lệnh **không** đổi sổ này; mỗi lệnh vào mới gia hạn 12 giờ.
+
+Xem sổ ở **Auto trade → Giới hạn chung → Sổ phơi nhiễm (Redis)**: còn bao nhiêu hạn mức mỗi trận, cửa nào đã đủ số lệnh, bao lâu nữa hết hạn. Nút **Trả lại** xóa bộ đếm tiền của một trận; **Đặt lại** đếm lại số lệnh của một cửa. Khi "Hết hạn mức trận" hay "Cửa này đã vào" trông vô lý so với Lệnh giấy, xem ở đây trước.
 
 ### Kèo bị hủy vì lệch giờ bắt đầu
 

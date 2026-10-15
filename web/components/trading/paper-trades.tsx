@@ -113,6 +113,9 @@ export function PaperTrades() {
         <Stat label="Lệnh vào" value={s ? s.filled : '—'} sub={s ? `/ ${s.attempts} kèo` : undefined} />
         <Stat label="Bỏ qua" value={s ? s.skipped : '—'} sub={s && (s.cancelled || s.errors) ? `· ${s.cancelled} hủy · ${s.errors} lỗi` : undefined} />
       </StatStrip>
+      <p className="-mt-6 mb-6 text-caption text-faint">
+        Thống kê tính từ lịch sử lệnh còn lưu. Hạn mức và số lệnh trader thật sự dùng (Redis): tab Giới hạn chung → Sổ phơi nhiễm.
+      </p>
       {topSkips.length ? (
         <p className="-mt-6 mb-10 text-caption text-muted-fg">
           Lý do bỏ qua nhiều nhất:{' '}

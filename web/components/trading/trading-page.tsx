@@ -9,6 +9,7 @@ import { Button } from '../ui/button';
 import { Field, Segmented } from '../ui/controls';
 import { PageHeader, Section } from '../ui/layout';
 import { Pill } from '../ui/status';
+import { ExposureLedger } from './exposure-ledger';
 import { PaperTrades } from './paper-trades';
 import { NumInput } from './stake-plan-editor';
 import { TraderProfiles } from './trader-profiles';
@@ -50,7 +51,12 @@ export function TradingPage() {
       {tab === 'trades' ? <PaperTrades /> : null}
       {tab === 'profiles' ? <TraderProfiles /> : null}
       {tab === 'accounts' ? <TradingAccounts secretKeyConfigured={settings.data?.secretKeyConfigured ?? null} /> : null}
-      {tab === 'settings' ? <GlobalLimits settings={settings.data} onSaved={() => void settings.reload()} /> : null}
+      {tab === 'settings' ? (
+        <>
+          <GlobalLimits settings={settings.data} onSaved={() => void settings.reload()} />
+          <ExposureLedger />
+        </>
+      ) : null}
     </div>
   );
 }

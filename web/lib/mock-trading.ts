@@ -170,6 +170,18 @@ export function mockTrading(method: string, path: string, search: string, body: 
       const before = Number(q.get('before') ?? Infinity);
       return ok(filtered().filter((t) => t.createdAt < before).slice(0, Number(q.get('limit') ?? 100)));
     }
+    if (p === 'exposure')
+      return ok({
+        available: true,
+        error: null,
+        matches: [
+          { match: 'cs2:aurora~ninjasinpyjamas', usedUsd: 496.39, capUsd: matchExposureCapUsd, ttlMs: 11 * 3_600_000, profiles: [{ profileId: 'prof-a', profileName: 'Trader A', usedUsd: 48.31, capUsd: 0, ttlMs: 11 * 3_600_000 }] },
+          { match: 'cs2:mindfreak~rooster', usedUsd: 60.42, capUsd: matchExposureCapUsd, ttlMs: 12 * 3_600_000, profiles: [] },
+        ],
+        entries: [
+          { profileId: 'prof-a', profileName: 'Trader A', room: 'room:cs2:aurora~ninjasinpyjamas:map-2-winner', comboId: 'sptpub>0|polymarket>1', tierId: 't-auto', tierName: 'Phổ thông cho giao dịch tự động', count: 1, max: 1, ttlMs: 11 * 3_600_000 },
+        ],
+      });
     if (p === 'trades/stats') {
       const since = Number(q.get('since') ?? 0);
       const list = filtered().filter((t) => t.createdAt >= since);
@@ -237,6 +249,7 @@ export function mockTrading(method: string, path: string, search: string, body: 
     profiles = profiles.filter((x) => x.id !== profileId);
     return ok(true);
   }
+  if (method === 'POST' && p === 'exposure/reset') return ok({ keys: 1 });
   if (method === 'POST' && p === 'trades/purge') {
     const statuses = Array.isArray(b.statuses) ? (b.statuses as string[]) : [];
     if (b.all && statuses.length) return bad('TRADE_PURGE_SCOPE_CONFLICT');

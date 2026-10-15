@@ -43,6 +43,14 @@ import { AesGcmSecretCipher } from './infrastructure/security/aes-gcm.secret-cip
 import { SupervisorTraderTaskGateway } from './infrastructure/runtime/supervisor-trader-task.gateway.js';
 // presentation
 import { TradingController } from './presentation/trading.controller.js';
+import { ExposureAdmin } from './application/exposure-admin.js';
+import {
+  EXPOSURE_LEDGER_READER,
+  type ExposureLedgerReader,
+} from './application/exposure.ports.js';
+import { RedisExposureLedgerReader } from './infrastructure/exposure/redis-exposure-ledger.reader.js';
+import { REDIS_CLIENT } from '../../shared/infrastructure/redis/redis.types.js';
+import type { Redis } from 'ioredis';
 
 /** Đối chiếu định kỳ cấu hình các task trader (bắt cả thay đổi hạng kèo ở module odds). */
 const CONFIG_RECONCILE_MS = 30_000;
@@ -140,6 +148,26 @@ const CONFIG_RECONCILE_MS = 30_000;
         c: SecretCipher,
         sync: TraderConfigSync,
       ) => new TradingAdmin(a, p, tr, s, t, c, sync),
+    },
+    {
+      provide: EXPOSURE_LEDGER_READER,
+      inject: [REDIS_CLIENT],
+      useFactory: (r: Redis) => new RedisExposureLedgerReader(r),
+    },
+    {
+      provide: ExposureAdmin,
+      inject: [
+        EXPOSURE_LEDGER_READER,
+        TRADER_PROFILE_REPOSITORY,
+        STAKE_TIER_SOURCE,
+        TRADING_SETTINGS_STORE,
+      ],
+      useFactory: (
+        r: ExposureLedgerReader,
+        p: TraderProfileRepository,
+        t: StakeTierSource,
+        s: TradingSettingsStore,
+      ) => new ExposureAdmin(r, p, t, s),
     },
     {
       provide: TraderDataHandler,
