@@ -137,7 +137,7 @@ export function PurgeTradesDialog({
         </p>
         {all ? (
           <p className="text-caption text-muted-fg">
-            Xóa toàn bộ: trader đang chạy của {profileName ? 'profile này' : 'mọi profile'} quên dấu &quot;đã xử lý&quot; và xét lại ngay các kèo còn sống. Số lệnh mỗi hạng và hạn mức trận vẫn giữ nên không vào trùng (cửa đã vào sẽ hiện &quot;Cửa này đã vào&quot;).
+            Xóa toàn bộ: trader đang chạy của {profileName ? 'profile này' : 'mọi profile'} quên dấu &quot;đã xử lý&quot; và xét lại ngay các kèo còn sống. Số lệnh mỗi hạng và hạn mức trận vẫn giữ nên không vượt số lệnh (cửa đã đủ thì bỏ qua im lặng).
           </p>
         ) : null}
         {risky && matched ? (

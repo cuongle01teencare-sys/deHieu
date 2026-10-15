@@ -125,7 +125,7 @@ export function ExposureLedger() {
       <Section
         className="mt-10"
         title="Số lệnh đã vào theo cửa"
-        description="Mỗi profile, mỗi cửa (market + cặp sàn/phía), mỗi hạng. Đạt tối đa → kèo cùng cửa ở hạng đó bị bỏ qua (Cửa này đã vào). Giữ 12 giờ từ lệnh vào gần nhất."
+        description="Mỗi profile, mỗi cửa (market + cặp sàn/phía), mỗi hạng. Đạt tối đa → kèo cùng cửa ở hạng đó bị bỏ qua im lặng (không ghi dòng ở Lệnh giấy). Giữ 12 giờ từ lệnh vào gần nhất."
       >
         {!data.entries.length ? (
           <Empty icon={Database}>Chưa cửa nào có lệnh vào.</Empty>

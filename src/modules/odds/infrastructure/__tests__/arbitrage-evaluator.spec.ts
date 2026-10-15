@@ -1,4 +1,5 @@
 import { ArbitrageEvaluator } from '../../application/arbitrage-evaluator.js';
+import { DEFAULT_ARBITRAGE_SETTINGS } from '../../application/arbitrage-settings.js';
 import { MatchKey } from '../../domain/match-key.js';
 import { OddsLine } from '../../domain/odds-line.js';
 import { InMemoryOddsRoomStore } from '../persistence/in-memory/in-memory-odds-room.store.js';
@@ -55,7 +56,7 @@ describe('ArbitrageEvaluator: moc margin cua lan phat moi', () => {
 
     await evaluateMargin(0.09);
     const [first] = await signals.activeSignals();
-    now += 30_000;
+    now += DEFAULT_ARBITRAGE_SETTINGS.signalTtlMs;
     await evaluateMargin(0.085);
     const [refreshed] = await signals.activeSignals();
     expect(refreshed.signalId).toBe(first.signalId);

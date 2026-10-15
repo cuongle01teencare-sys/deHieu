@@ -49,18 +49,41 @@ export class TraderConfigSync {
    * Không truyền profileId = mọi task. Trả số task đã nhận lệnh.
    */
   async resetSeen(profileId?: string): Promise<number> {
+    return this.broadcast('reset_seen', profileId);
+  }
+
+  /** Gửi lệnh (không dữ liệu) cho mọi task trader đang chạy (hoặc của một profile). Trả số task nhận. */
+  async broadcast(name: string, profileId?: string): Promise<number> {
     const running = (await this._gateway.listRunning()).filter(
       (r) => !profileId || r.profileId === profileId,
     );
     let n = 0;
     for (const r of running) {
       try {
-        if (await this._gateway.command(r.taskId, 'reset_seen')) n++;
+        if (await this._gateway.command(r.taskId, name)) n++;
       } catch (e) {
         this._onError(e);
       }
     }
     return n;
+  }
+
+  /**
+   * Gửi lệnh điều khiển cho task trader đang chạy của profile.
+   * NO_TASK = profile chưa có task chạy; REJECTED = task từ chối (vd kèo đã hết).
+   */
+  async sendToProfile(
+    profileId: string,
+    name: string,
+    data: unknown,
+  ): Promise<'SENT' | 'NO_TASK' | 'REJECTED'> {
+    const t = (await this._gateway.listRunning()).find(
+      (r) => r.profileId === profileId,
+    );
+    if (!t) return 'NO_TASK';
+    return (await this._gateway.command(t.taskId, name, data))
+      ? 'SENT'
+      : 'REJECTED';
   }
 
   /** Gửi cho mọi task đang chạy; `force` = gửi cả khi không đổi. Trả số task đã nhận bản mới. */

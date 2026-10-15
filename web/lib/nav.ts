@@ -9,6 +9,7 @@ import {
   GitMerge,
   History,
   LayoutDashboard,
+  MousePointerClick,
   Palette,
   Radio,
   ScrollText,
@@ -49,6 +50,7 @@ export const NAV_GROUPS: { label: string | null; items: NavItem[] }[] = [
       { icon: Radio, label: 'Publisher & Node', href: '/publisher', short: 'Publisher' },
       { icon: Bot, label: 'Consumer', href: '/consumer' },
       { icon: Coins, label: 'Auto trade', href: '/giao-dich' },
+      { icon: MousePointerClick, label: 'On click', href: '/on-click' },
     ],
   },
   {

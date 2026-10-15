@@ -13,9 +13,13 @@ import {
 } from '@nestjs/common';
 import { z } from 'zod';
 import { ApiZodBody } from '../../../shared/presentation/openapi.js';
-import { RequirePermissions } from '../../auth/presentation/auth.decorators.js';
+import {
+  CurrentPrincipal,
+  RequirePermissions,
+} from '../../auth/presentation/auth.decorators.js';
 import { TradingAdmin } from '../application/trading-admin.js';
 import { ExposureAdmin } from '../application/exposure-admin.js';
+import { OneClickAdmin } from '../application/one-click-admin.js';
 import { TRADING_PERMISSIONS as P } from '../application/trading.permissions.js';
 import { TRADE_STATUSES } from '../application/trade-attempt.js';
 import { STAKE_TRENDS } from '../domain/stake-plan.js';
@@ -100,6 +104,8 @@ const ProfileBody = z.object({
         .max(100)
         .nullable()
         .default(null),
+      /** Giá bán thấp nhất Polymarket ≥ số này → chuyển On click (bot không tự vào); 0 = tắt. */
+      oneClickMinPrice: z.number().min(0).max(1).default(0.5),
     })
     .default({
       minNetMargin: 0.01,
@@ -108,6 +114,7 @@ const ProfileBody = z.object({
       maxEntriesPerTier: 1,
       ignoreCancelReasons: ['better_opportunity'],
       markets: null,
+      oneClickMinPrice: 0.5,
     }),
 });
 
@@ -147,6 +154,12 @@ const ExposureResetBody = z.union([
   }),
 ]);
 
+const OneClickQuery = z.object({ profileId: z.string().min(1) });
+const OneClickEnterBody = z.object({
+  profileId: z.string().min(1),
+  signalId: z.string().min(1),
+});
+
 const StatsQuery = z.object({
   profileId: z.string().optional(),
   since: z.coerce.number().int().positive().optional(),
@@ -162,6 +175,7 @@ export class TradingController {
   constructor(
     @Inject(TradingAdmin) private readonly _admin: TradingAdmin,
     @Inject(ExposureAdmin) private readonly _exposure: ExposureAdmin,
+    @Inject(OneClickAdmin) private readonly _oneClick: OneClickAdmin,
   ) {}
 
   // ------------------------------------------------------------- tài khoản
@@ -380,6 +394,42 @@ export class TradingController {
   })
   stats(@Query() q: unknown) {
     return this._admin.tradeStats(StatsQuery.parse(q));
+  }
+
+  // ------------------------------------------------------------- On click (người vào lệnh)
+
+  @Get('oneclick')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary: 'Kèo chờ người vào lệnh (On click)',
+    description:
+      'Quyền: trading:read. Kèo trader của profile KHÔNG tự vào vì giá bán thấp nhất Polymarket ≥ oneClickMinPrice của profile. Mỗi mục: phân tích "nếu vào bây giờ" (giống lệnh bot: sổ lệnh, chia tiền, lãi), cập nhật mỗi lần kèo được làm mới. Trong bộ nhớ app.',
+  })
+  oneClick(@Query() q: unknown) {
+    return this._oneClick.list(OneClickQuery.parse(q).profileId);
+  }
+
+  @Post('oneclick/enter')
+  @HttpCode(200)
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Người vào lệnh (giấy) một kèo On click',
+    description:
+      'Quyền: trading:manage. Task trader của profile đọc lại sổ lệnh và vào lệnh như bot (bảng tiền, số lệnh mỗi hạng, hạn mức trận), ghi kèm người vào (detail.manual.by). Kết quả hiện ở Lệnh giấy. 404 = kèo không còn trên bảng.',
+  })
+  @ApiZodBody(OneClickEnterBody)
+  async oneClickEnter(
+    @Body() body: unknown,
+    @CurrentPrincipal() principal?: { id: string },
+  ) {
+    const b = OneClickEnterBody.parse(body);
+    return unwrap(
+      await this._oneClick.enter(
+        b.profileId,
+        b.signalId,
+        principal?.id ?? 'unknown',
+      ),
+    );
   }
 
   // ------------------------------------------------------------- sổ phơi nhiễm (Redis)

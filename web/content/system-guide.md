@@ -381,7 +381,7 @@ Backend phát hiện và giao tín hiệu. Việc thông báo ra ngoài hoặc �
 | `minMargin`       | Lợi nhuận tối thiểu để phát tín hiệu                             | `0.02` = 2%               |
 | `marginStep`      | Bước tăng so với margin lần phát mới gần nhất để hủy cũ và phát mới | `0.01` = 1 điểm phần trăm |
 | `marginDropStep`  | Bước giảm riêng để hủy cũ và phát mới nếu còn đạt ngưỡng | `0.01` = 1 điểm phần trăm |
-| `signalTtlMs`     | Khoảng hiệu lực của tín hiệu và mốc làm mới khi còn đủ điều kiện | `30000` = 30 giây         |
+| `signalTtlMs`     | Khoảng hiệu lực của tín hiệu và mốc làm mới khi còn đủ điều kiện | `300000` = 5 phút         |
 | `maxStartDriftMs` | Độ lệch giờ bắt đầu tối đa giữa hai nguồn                        | `1200000` = 20 phút       |
 | `enabledPhases`   | Phase được phép phát tín hiệu                                    | `live`, `prematch`        |
 
@@ -400,6 +400,7 @@ Cài đặt arbitrage, hạng kèo, kênh thông báo và task có bật **Lưu 
 | [Kèo](/keo)                    | Tín hiệu active và lịch sử tín hiệu                                          |
 | [Publisher & Node](/publisher) | Task, node, bắt đầu, dừng, xóa task đã dừng hoặc lỗi; lệnh tùy kind          |
 | [Consumer](/consumer)          | Kết nối, pause/resume và số thông báo chờ ACK                                |
+| [On click](/on-click)          | Kèo giá bán Polymarket cao chờ người bấm vào lệnh (giấy) theo profile         |
 | [Sự cố](/su-co)                | Sự cố đang mở và xác nhận đã xem                                             |
 | [Audit](/audit)                | Nhật ký thao tác API                                                         |
 | [Lịch sử odds](/lich-su-odds)  | Chuyển trạng thái báo giá như open, suspended hoặc removed                   |
@@ -438,7 +439,7 @@ Cột **Tiền mục tiêu**, **Tiền mục tiêu tối thiểu**, **Tiền m�
 | Tối thiểu (% tiền hạng) | Mức tối thiểu của mọi hạng = tiền hạng × %. Vào được ít hơn → bỏ qua. 0% = vào được bao nhiêu cũng vào |
 | Tối đa (× tiền hạng) | Chỉ dùng khi bật **Tăng dần trong hạng**. ×1 = không tăng |
 | Ô trong bảng | Ghi đè cho riêng hạng đó (để trống = tự tính theo các trường trên) |
-| Số lệnh mỗi cửa (cột cuối) | Số lệnh tối đa cho một cửa ở hạng đó; ô trống = theo "Số lệnh mỗi cửa mỗi hạng (mặc định)" của profile. Tăng số này thì cửa đang bị "Cửa này đã vào" của kèo còn sống được xét lại ngay |
+| Số lệnh mỗi cửa (cột cuối) | Số lệnh tối đa cho một cửa ở hạng đó; ô trống = theo "Số lệnh mỗi cửa mỗi hạng (mặc định)" của profile. Tính cả việc vào lặp lại cùng một kèo mỗi lần kèo được làm mới. Đủ số thì bỏ qua **im lặng** (không ghi dòng). Tăng số này thì kèo còn sống của cửa đó được xét lại ngay |
 
 **Tiền mục tiêu và Tối thiểu cùng đơn vị** (USD cược csgoempire), chỉ khác vai trò: mục tiêu là mức muốn vào (và không vượt), tối thiểu là mức thấp nhất còn chấp nhận. Ví dụ mục tiêu 50$, tối thiểu 35$, odds 2.0 → cần 100 share Polymarket:
 
@@ -498,21 +499,69 @@ Mua được 90 share (27$ + 14,1$ = 41,1$) → chân csgoempire = 90 ÷ 2.0 = *
 
 Mở chi tiết một lệnh ở trang Auto trade → Lệnh giấy để xem từng mức giá đã ăn, độ sâu sổ lệnh và lý do bỏ qua.
 
-### Mỗi kèo xử lý một lần, khi nào được xét lại
+### Mỗi lần phát kèo là một lệnh, khi nào được xét lại
 
-Trader xử lý mỗi kèo **một lần theo mã kèo**; kèo làm mới định kỳ giữ nguyên mã nên không bị xử lý lặp. Dấu "đã xử lý" lưu ở Redis, còn tới khi kèo hết hạn + 1 giờ. Kèo còn sống được **xét lại ngay** trong hai trường hợp:
+**Mỗi lần publisher phát kèo là một lệnh**, kể cả phát mới lẫn làm mới khi hết thời hạn kèo (mặc định 5 phút). Lần làm mới được xét như một lệnh mới, dù lần trước vào được hay bị bỏ (hết lãi, sổ lệnh mỏng, hết hạn mức…). Chỉ những thứ sau mới chặn:
 
-- **Đổi cấu hình profile**: kèo từng bị bỏ qua vì cấu hình (Market không được chọn, Hạng không được chọn, Không thuộc hạng nào, Profile đứng yên, Chiến lược không có) mà đúng phần cấu hình đó vừa đổi → xét lại một lần. Đổi phần khác hoặc lưu lại y hệt thì không. Kèo bị bỏ qua vì lý do khác (sổ lệnh mỏng, hết lãi…) không xét lại.
+- **Bộ lọc của profile**: market, hạng kèo, profile đứng yên. Kèo bị lọc thì các lần làm mới không ghi thêm dòng.
+- **Lý do hủy kèo**: kèo bị hủy khi đang tính thì dừng, trừ lý do được chọn "vẫn vào lệnh".
+- **Giới hạn**: số lệnh mỗi cửa mỗi hạng, hạn mức tiền theo trận, lãi tối thiểu sau phí, lệnh tối thiểu.
+- **Giá bán thấp nhất ≥ ngưỡng On click** thì không tự vào mà chuyển sang On click.
+
+Lợi nhuận **tăng** đủ 1% thì publisher phát kèo mới, là một lệnh nữa; lệnh đã vào của kèo cũ vẫn giữ. Lợi nhuận **giảm** chỉ thành kèo mới khi giảm đủ "Bước giảm lợi nhuận"; giảm chưa đủ bước thì không có gì mới và lệnh cũ vẫn giữ. Hub giao lại **đúng bản tin đã xử lý** (cùng mốc phát, vd sau khi trader nối lại) thì không tính là lệnh mới.
+
+Dấu "đã xử lý" theo mã kèo lưu ở Redis, còn tới khi kèo hết hạn + 1 giờ. Ngoài lần làm mới, kèo còn sống được **xét lại ngay** khi:
+
+- **Sổ lệnh đổi** (Hết lãi sau phí, Sổ lệnh mỏng, Dưới lệnh tối thiểu): trader tự đọc lại sổ lệnh **mỗi 10 giây** cho các kèo này. Vẫn bỏ cùng lý do thì không ghi thêm dòng; sổ có lãi trở lại thì vào lệnh ngay.
+- **Đổi cấu hình** (profile hoặc Giới hạn chung): kèo từng bị bỏ vì đúng phần cấu hình vừa đổi được xét lại ngay. Đổi phần khác hoặc lưu lại y hệt thì không.
+
+  | Bị bỏ vì | Xét lại khi đổi |
+  | --- | --- |
+  | Market / Hạng không được chọn, Không thuộc hạng nào, Profile đứng yên, Chiến lược không có | đúng phần đó |
+  | Hết hạn mức trận | hạn mức chung hoặc hạn mức trận của profile |
+  | Hết lãi sau phí | lãi ròng tối thiểu |
+  | Sổ lệnh mỏng, Dưới lệnh tối thiểu | lãi ròng tối thiểu, bảng tiền |
+  | Kèo quá cũ | "Bỏ kèo cũ hơn" |
+  | Đủ số lệnh của cửa (im lặng) | số lệnh mỗi cửa mỗi hạng |
+  | Chuyển On click | ngưỡng On click |
+
+- **Trả lại / Đặt lại ở Sổ phơi nhiễm**: kèo đang bị chặn vì hạn mức trận hoặc đủ số lệnh được xét lại ngay.
 - **Xóa toàn bộ lệnh giấy** (Xóa lệnh… → Toàn bộ, không giới hạn thời điểm) của một profile hoặc mọi profile → trader quên dấu "đã xử lý" và xét lại mọi kèo còn sống.
 
 - **Bấm "Xét lại kèo đang sống"** (menu ⋯ của profile): xét lại mọi kèo còn sống, không xóa lệnh.
-- **Lần trước bị bỏ qua tạm thời** (Kèo quá cũ, Kèo hết hạn, Consumer bị tạm dừng): lần hub giao lại kèo kế tiếp được xét lại. Hay gặp ngay sau khi trader khởi động lại: hub gửi lại các kèo còn sống đúng bản lưu ở lần làm mới gần nhất (có thể đã 10–30 giây) nên lần đầu báo "Kèo quá cũ", lần làm mới sau (dữ liệu mới) mới xét thật.
+- **Lần trước bị bỏ qua tạm thời** (Kèo hết hạn, Consumer bị tạm dừng): lần hub giao lại kèo kế tiếp được xét lại.
 
-Dấu "đã xử lý" trong Redis chỉ ghi giá trị `1` (không kèm kết quả) và **bền qua khởi động lại**: task trader khởi động lại vẫn bỏ qua im lặng mọi kèo đã có dấu. Kết quả lần xử lý (để xét lại khi đổi cấu hình / bỏ qua tạm thời) chỉ nhớ trong phiên task; sau khởi động lại muốn xét lại thì bấm "Xét lại kèo đang sống".
+Dấu "đã xử lý" trong Redis chỉ ghi giá trị `1` (không kèm kết quả). Kết quả từng lần xử lý chỉ nhớ trong phiên task, nên khi **trader khởi động lại** (restart task hoặc app) mọi kèo còn sống mà hub gửi lại đều được **xét lại một lần**, kể cả kèo đã có dấu. Số lệnh mỗi cửa mỗi hạng và hạn mức trận nằm trong Redis nên không bị vượt; id lệnh xét lại kèm mã phiên (`profile:signal:<phiên>.2`) để không trùng dòng đã ghi. **Nối lại hub** khi trader không khởi động lại (app restart, rớt mạng) thì kèo chưa vào được lệnh được xét lại một lần; kèo đã vào thì chờ lần làm mới.
 
-Lần xét lại ghi lệnh mới với id có hậu tố (`profile:signal:2`). Số lệnh mỗi cửa mỗi hạng và hạn mức theo trận vẫn giữ, nên cửa đã vào sẽ hiện "Cửa này đã vào" thay vì vào trùng.
+**Tóm tắt điều kiện xét lại kèo đang sống:**
+
+| Khi | Xét lại kèo nào |
+| --- | --- |
+| Publisher phát lại (hết thời hạn kèo) | mọi kèo, trừ bị bộ lọc profile loại |
+| Mỗi 10 giây | bỏ vì sổ lệnh (hết lãi, sổ mỏng, dưới lệnh tối thiểu, market đóng) hoặc lỗi |
+| Đổi cấu hình profile / Giới hạn chung | bỏ vì đúng phần cấu hình vừa đổi |
+| Trả lại / Đặt lại ở Sổ phơi nhiễm | bỏ vì hạn mức trận, đủ số lệnh |
+| Trader khởi động lại | mọi kèo hub gửi lại |
+| Nối lại hub (app restart, rớt mạng) | kèo chưa vào được lệnh |
+| Consumer resume | bỏ vì Consumer bị tạm dừng |
+| Xóa toàn bộ lệnh / bấm "Xét lại kèo đang sống" | mọi kèo |
+
+Các lần xét lại (không phải bản tin publisher vừa phát) không kiểm tra "Kèo quá cũ". Xét lại theo nhịp mà vẫn cùng kết quả thì không ghi thêm dòng.
+
+Lần xét lại ghi lệnh mới với id có hậu tố (`profile:signal:2`). Số lệnh mỗi cửa mỗi hạng và hạn mức theo trận vẫn giữ: cửa đã đủ số lệnh thì bỏ qua im lặng, không vượt số lệnh.
+
+**Vào lặp lại cùng kèo:** mỗi lần làm mới (cùng mã kèo, mốc phát mới) lại được xét vào tiếp, cho tới khi cửa đủ số lệnh của hạng. Chế độ giấy không trừ thanh khoản đã "mua", nên mỗi lần đều tính trên cùng sổ lệnh hiện có.
 
 Nhiều dòng giống hệt nhau trong cùng một phút thường là **nhiều kèo khác mã** của cùng một cửa: odds bị khóa ↔ mở lại liên tục làm kèo bị hủy rồi phát lại với mã mới; mỗi mã được xử lý một lần.
+
+### On click: kèo để người vào lệnh
+
+Mỗi profile có ngưỡng **Chuyển On click khi giá bán thấp nhất ≥** (mặc định `0.50`, `0` = tắt). Khi kèo có lãi và giá ask **thấp nhất** trên sổ lệnh Polymarket từ ngưỡng đó trở lên, bot **không tự vào**: trader vẫn đọc sổ lệnh và tính đủ như khi vào (bảng tiền, các mức giá, phí, lãi), rồi gửi bản phân tích "nếu vào bây giờ" sang trang **On click** (mục Vận hành). Kèo dưới ngưỡng (vd 0.49 trở xuống) bot vẫn vào như cũ.
+
+- Lệnh giấy ghi **một** dòng *Bỏ qua · Chuyển On click* khi kèo vừa chuyển sang; các lần làm mới sau chỉ cập nhật bảng On click.
+- Trang On click chọn profile ở đầu trang; danh sách tự làm mới, kèo bị hủy, hết hạn hoặc đã vào thì biến mất. Bấm một dòng để xem đủ phân tích như lệnh bot.
+- Bấm **Vào lệnh (giấy)**: trader của profile đọc lại sổ lệnh ngay lúc đó và vào như bot (lãi tối thiểu, số lệnh mỗi cửa mỗi hạng, hạn mức trận vẫn áp; bỏ qua kiểm tra "kèo quá cũ"). Kết quả hiện ở Lệnh giấy với nhãn *vào tay bởi …*. Nếu lúc bấm sổ lệnh đã hết lãi hoặc đủ số lệnh, dòng ghi lý do bỏ qua như bot.
+- Bảng On click nằm trong bộ nhớ app: restart app thì trống đến lần trader làm mới kèo kế tiếp.
 
 ### Sổ phơi nhiễm (Redis) và thống kê Lệnh giấy
 
@@ -521,7 +570,7 @@ Hai nguồn số liệu khác nhau:
 - **Thống kê ở Lệnh giấy** (lãi giả định, tiền vào, số lệnh…) tính từ **lịch sử lệnh còn lưu trong database**. Xóa lệnh thì số này giảm.
 - **Sổ phơi nhiễm** là bộ đếm trong **Redis** mà trader dùng để quyết định: tiền đã dùng theo trận (chung + riêng profile) và số lệnh đã vào mỗi cửa mỗi hạng. Xóa lệnh **không** đổi sổ này; mỗi lệnh vào mới gia hạn 12 giờ.
 
-Xem sổ ở **Auto trade → Giới hạn chung → Sổ phơi nhiễm (Redis)**: còn bao nhiêu hạn mức mỗi trận, cửa nào đã đủ số lệnh, bao lâu nữa hết hạn. Nút **Trả lại** xóa bộ đếm tiền của một trận; **Đặt lại** đếm lại số lệnh của một cửa. Khi "Hết hạn mức trận" hay "Cửa này đã vào" trông vô lý so với Lệnh giấy, xem ở đây trước.
+Xem sổ ở **Auto trade → Giới hạn chung → Sổ phơi nhiễm (Redis)**: còn bao nhiêu hạn mức mỗi trận, cửa nào đã đủ số lệnh, bao lâu nữa hết hạn. Nút **Trả lại** xóa bộ đếm tiền của một trận; **Đặt lại** đếm lại số lệnh của một cửa. Khi "Hết hạn mức trận" hay việc không vào thêm lệnh trông vô lý so với Lệnh giấy, xem ở đây trước.
 
 ### Kèo bị hủy vì lệch giờ bắt đầu
 

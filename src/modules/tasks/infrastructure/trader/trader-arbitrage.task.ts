@@ -43,6 +43,13 @@ const CONFIG_RETRY_MS = 5_000;
  */
 const STATUS_EVERY_MS = 30_000;
 const CH_STATUS = 'status';
+/** Kèo chờ người vào lệnh (On click): phân tích mới nhất / gỡ khi kèo hết. */
+const CH_ONECLICK = 'oneclick';
+/**
+ * Nhịp xét lại kèo còn sống bị bỏ vì SỔ LỆNH (hết lãi, sổ mỏng, dưới lệnh tối thiểu): sổ lệnh
+ * Polymarket đổi liên tục mà publisher chỉ làm mới kèo theo thời hạn kèo (vd 5 phút).
+ */
+const BOOK_RECHECK_MS = 10_000;
 /** Phơi nhiễm theo trận giữ tối đa ngần này (trận kết thúc / app không giải phóng). */
 const EXPOSURE_TTL_MS = 12 * 3_600_000;
 
@@ -58,6 +65,15 @@ const CONFIG_SKIPS: Readonly<Record<string, (c: TraderConfig) => unknown>> = {
   TIER_NOT_SELECTED: (c) => c.stakeTable,
   NO_TIER: (c) => c.stakeTable,
   UNKNOWN_STRATEGY: (c) => c.strategy.id,
+  ONE_CLICK: (c) => c.risk.oneClickMinPrice,
+  // lãi tối thiểu / tiền tối thiểu của hạng đổi → tính lại trên sổ lệnh
+  NO_EDGE: (c) => c.risk.minNetMargin,
+  INSUFFICIENT_DEPTH: (c) => [c.risk.minNetMargin, c.stakeTable],
+  BELOW_MIN_ORDER: (c) => [c.risk.minNetMargin, c.stakeTable],
+  // nâng hạn mức trận (chung hoặc của profile) → kèo bị chặn vì hạn mức vào tiếp
+  BUDGET_EXHAUSTED: (c) => [c.matchExposureCapUsd, c.risk.matchCapUsd],
+  CAP_REACHED: (c) => [c.matchExposureCapUsd, c.risk.matchCapUsd],
+  STALE_SIGNAL: (c) => c.risk.maxSignalAgeMs,
   // tăng số lệnh mỗi hạng → cửa đang bị chặn được xét lại
   ALREADY_ENTERED: (c) => [
     c.risk.maxEntriesPerTier,
@@ -80,31 +96,96 @@ const TRANSIENT_SKIPS = new Set([
 ]);
 
 /**
+ * Bộ lọc của profile (market, hạng, profile đứng yên…): kèo bị lọc thì lần phát lại vẫn bị lọc,
+ * chỉ xét lại khi phần cấu hình đó đổi — không ghi lại dòng bỏ qua mỗi lần làm mới.
+ */
+const FILTER_SKIPS = new Set([
+  'INACTIVE',
+  'MARKET_NOT_SELECTED',
+  'TIER_NOT_SELECTED',
+  'NO_TIER',
+  'UNKNOWN_STRATEGY',
+]);
+
+/** Bỏ vì sổ lệnh lúc đó: xét lại theo nhịp BOOK_RECHECK_MS. */
+const BOOK_SKIPS = new Set([
+  'NO_EDGE',
+  'INSUFFICIENT_DEPTH',
+  'BELOW_MIN_ORDER',
+  // market tạm không nhận lệnh có thể mở lại
+  'MARKET_CLOSED',
+]);
+/** Bỏ vì sổ phơi nhiễm: xét lại khi admin trả lại hạn mức trận / đặt lại số lệnh của cửa. */
+const EXPOSURE_SKIPS = new Set([
+  'BUDGET_EXHAUSTED',
+  'CAP_REACHED',
+  'ALREADY_ENTERED',
+]);
+
+/** Nguồn của một lần xử lý kèo. */
+type Source =
+  | 'hub'
+  | 'config'
+  | 'force'
+  | 'recheck'
+  | 'exposure'
+  /** Hub giao lại kèo sau khi trader khởi động lại / nối lại hub (app restart, rớt mạng). */
+  | 'restart'
+  /** Admin resume consumer: kèo bị bỏ vì tạm dừng được xét lại. */
+  | 'resume';
+
+/**
  * Có xét lại kèo đã xử lý không:
- * - lần trước bị bỏ qua vì cấu hình mà phần cấu hình đó (hoặc logic) đã đổi;
- * - lần trước bị bỏ qua tạm thời và đây là lần hub giao lại kèo (`delivered`).
+ * - mỗi lần publisher phát kèo (mới hoặc làm mới, `fresh` = bản tin chưa xử lý) là MỘT lệnh:
+ *   xét lại bất kể lần trước vào được hay bị bỏ (hết lãi, sổ mỏng, hạn mức…); giới hạn số lệnh
+ *   mỗi hạng / hạn mức trận vẫn áp. Trừ kèo bị bộ lọc của profile loại;
+ * - lần trước bị bỏ qua tạm thời và hub giao lại kèo (`delivered`);
+ * - lần trước bị bỏ qua vì cấu hình mà phần cấu hình đó (hoặc logic) đã đổi.
  */
 const needsRedo = (
   last: LiveSignal['last'],
   c: TraderConfig,
-  delivered: boolean,
-): boolean =>
-  !!last &&
-  ((delivered &&
-    last.status === 'skipped' &&
-    TRANSIENT_SKIPS.has(reasonCode(last.reason))) ||
-    (last.configKey !== null && last.configKey !== configKey(last.reason, c)));
+  source: Source,
+  fresh: boolean,
+): boolean => {
+  if (!last) return false;
+  const code = reasonCode(last.reason);
+  if (source === 'recheck')
+    // lỗi đọc sổ lệnh / API cũng đọc lại
+    return (
+      last.status === 'error' ||
+      (last.status === 'skipped' && BOOK_SKIPS.has(code))
+    );
+  if (source === 'resume')
+    return last.status === 'skipped' && code === 'HUB_PAUSED';
+  if (source === 'exposure')
+    return last.status === 'skipped' && EXPOSURE_SKIPS.has(code);
+  const delivered = source === 'hub';
+  return (
+    (delivered && fresh && !FILTER_SKIPS.has(code)) ||
+    (delivered && last.status === 'skipped' && TRANSIENT_SKIPS.has(code)) ||
+    (last.configKey !== null && last.configKey !== configKey(last.reason, c))
+  );
+};
 
 /** Kèo còn sống đã nhận từ hub (bản mới nhất) + kết quả lần xử lý gần nhất trong phiên task này. */
 interface LiveSignal {
   signal: HubSignal;
   /** Số lần đã xử lý (để đặt id lệnh khác nhau khi xét lại). */
   attempts: number;
+  /** issuedAt của bản tin (phát mới / làm mới) đã xử lý gần nhất: hub giao lại CÙNG bản tin không thành lệnh mới. */
+  handledIssuedAt?: number;
   last: {
     status: Status;
     reason: string | null;
     configKey: string | null;
   } | null;
+  /** Đang nằm trên bảng On click (đã gửi phân tích cho app). */
+  oneClick?: boolean;
+  /** Vừa nối lại hub: lần hub giao lại kèo này được xét lại (app restart / rớt mạng). */
+  replayRedo?: boolean;
+  /** Kèo đã xử lý ở phiên task trước (khởi động lại): id lệnh xét lại kèm mã phiên để không trùng. */
+  restored?: boolean;
 }
 
 interface RunDeps {
@@ -148,10 +229,15 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
   /** Kèo đang được xử lý (bất kỳ bước nào) — không xét lại chồng. */
   private readonly _handling = new Set<string>();
   private _run: RunDeps | null = null;
+  /** Mã phiên task: id lệnh xét lại kèo của phiên trước không trùng id đã ghi. */
+  private readonly _session = Date.now().toString(36);
 
-  /** Thay được sổ phơi nhiễm (vd test nhiều trader dùng chung một sổ). */
+  /** Thay được sổ phơi nhiễm (vd test nhiều trader dùng chung một sổ) và nhịp xét lại sổ lệnh. */
   constructor(
-    private readonly _deps: { readonly ledger?: ExposureLedger } = {},
+    private readonly _deps: {
+      readonly ledger?: ExposureLedger;
+      readonly bookRecheckMs?: number;
+    } = {},
   ) {}
 
   async run(ctx: TaskContext<TraderArbitrageParams>): Promise<void> {
@@ -176,7 +262,30 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     ctx.onCommand((name, data) => {
       // app đã xóa toàn bộ lệnh của profile → quên dấu "đã xử lý", xét lại mọi kèo còn sống
       if (name === 'reset_seen') {
-        this._reevaluate(true);
+        this._reevaluate('force');
+        return;
+      }
+      // admin trả lại hạn mức trận / đặt lại số lệnh của cửa → kèo bị chặn vì đó vào tiếp
+      if (name === 'exposure_freed') {
+        this._reevaluate('exposure');
+        return;
+      }
+      // người bấm "Vào lệnh" ở On click: đọc lại sổ lệnh rồi vào như bot (bỏ cổng giá On click)
+      if (name === 'manual_enter') {
+        const { signalId, by } = (data ?? {}) as {
+          signalId?: unknown;
+          by?: unknown;
+        };
+        const l =
+          typeof signalId === 'string' ? this._live.get(signalId) : undefined;
+        const run = this._run;
+        if (!l || !run || l.signal.expiresAt <= Date.now())
+          throw new Error('SIGNAL_NOT_LIVE: kèo đã hết hoặc trader chưa nhận');
+        if (this._handling.has(l.signal.signalId))
+          throw new Error('SIGNAL_BUSY: kèo đang được xử lý, thử lại');
+        void this._handle(run.ctx, l.signal, run, 'force', {
+          by: typeof by === 'string' ? by : 'unknown',
+        }).catch((e) => run.ctx.warn(e));
         return;
       }
       if (name !== 'config') throw new Error(`UNKNOWN_COMMAND: ${name}`);
@@ -187,7 +296,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       configured.abort(); // đánh thức vòng chờ cấu hình
       // kèo bị bỏ qua vì cấu hình mà phần cấu hình đó vừa đổi → xét lại ngay
       // (kết quả lần trước đọc từ sổ nếu task mới khởi động lại)
-      this._reevaluate(false);
+      this._reevaluate('config');
     });
 
     try {
@@ -202,6 +311,10 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       if (ctx.signal.aborted) return;
 
       let connected = false;
+      // sổ lệnh đổi liên tục: kèo bị bỏ vì sổ lệnh được xét lại đều, không chờ publisher làm mới
+      const recheck = setInterval(() => {
+        if (connected) this._reevaluate('recheck');
+      }, this._deps.bookRecheckMs ?? BOOK_RECHECK_MS);
       const status = setInterval(() => {
         if (connected)
           ctx.emit(
@@ -224,6 +337,11 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
             );
           },
           onCancel: (c) => {
+            if (this._live.get(c.signalId)?.oneClick)
+              ctx.emit(
+                { profileId: p.profileId, signalId: c.signalId, removed: true },
+                CH_ONECLICK,
+              );
             this._live.delete(c.signalId);
             if (this._inflight.has(c.signalId))
               this._cancels.set(c.signalId, c);
@@ -235,7 +353,12 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
               ?.abort(`SIGNAL_CANCELLED: ${c.reason}`);
           },
           onState: (state, detail) => {
-            if (state === 'connected') connected = true;
+            if (state === 'connected') {
+              connected = true;
+              // nối lại hub (app restart / rớt mạng): hub gửi lại kèo còn sống → xét lại một lần
+              for (const l of this._live.values()) l.replayRedo = true;
+            }
+            if (state === 'resumed') this._reevaluate('resume');
             if (state === 'disconnected') {
               connected = false;
               if (detail) ctx.warn(detail);
@@ -249,6 +372,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       } finally {
         this._run = null;
         clearInterval(status);
+        clearInterval(recheck);
       }
     } finally {
       for (const ac of this._inflight.values()) ac.abort('TASK_STOPPED');
@@ -270,7 +394,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
    * Xét lại các kèo còn sống. force = bỏ hẳn dấu "đã xử lý" (sau khi xóa toàn bộ lệnh);
    * không force = chỉ kèo bị bỏ qua vì cấu hình mà cấu hình/logic đã đổi (xem needsRedo).
    */
-  private _reevaluate(force: boolean): number {
+  private _reevaluate(source: Exclude<Source, 'hub'>): number {
     const run = this._run;
     if (!run) return 0;
     const now = Date.now();
@@ -282,12 +406,15 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       }
       if (this._handling.has(id)) continue;
       n++;
-      void this._handle(
-        run.ctx,
-        l.signal,
-        run,
-        force ? 'force' : 'config',
-      ).catch((e) => run.ctx.warn(e));
+      // lọc trước: nhịp xét lại không đụng kèo không liên quan
+      if (
+        source !== 'force' &&
+        !needsRedo(l.last, this._config!, source, false)
+      )
+        continue;
+      void this._handle(run.ctx, l.signal, run, source).catch((e) =>
+        run.ctx.warn(e),
+      );
     }
     return n;
   }
@@ -304,7 +431,9 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     /**
      * hub = hub vừa giao kèo; config = xét lại sau khi đổi cấu hình; force = bỏ hẳn dấu "đã xử lý".
      */
-    source: 'hub' | 'config' | 'force' = 'hub',
+    source: Source = 'hub',
+    /** Người vào lệnh từ On click (không phải bot). */
+    manual: { readonly by: string } | null = null,
   ): Promise<void> {
     const startedAt = Date.now();
     const cfg = this._config;
@@ -321,16 +450,30 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       // đã xử lý trước đó. Kết quả lần trước chỉ nhớ trong phiên task này (không lưu Redis):
       // bị bỏ qua vì cấu hình mà cấu hình đã đổi / bỏ qua tạm thời → xét lại, không thì thôi
       if (!live) return;
+      // đã xử lý ở phiên trước (trader vừa khởi động lại, không còn kết quả) → xét lại một lần
+      const restoredNow = live.last === null && live.attempts === 0;
+      if (restoredNow) live.restored = true;
       live.attempts = Math.max(live.attempts, 1);
-      if (
-        !needsRedo(live.last, cfg, source === 'hub') ||
+      const fresh = s.issuedAt > (live.handledIssuedAt ?? 0);
+      // hub giao lại sau khi nối lại: xét lại kèo chưa vào được lệnh (đã vào thì chờ lần làm mới)
+      const replay =
+        source === 'hub' &&
+        !!live.replayRedo &&
+        live.last?.status !== 'paper_filled' &&
+        !FILTER_SKIPS.has(reasonCode(live.last?.reason ?? null));
+      if (source === 'hub') live.replayRedo = false;
+      if (restoredNow || replay) source = 'restart';
+      else if (
+        !needsRedo(live.last, cfg, source, fresh) ||
         this._handling.has(s.signalId)
       )
         return;
-    }
+      if (this._handling.has(s.signalId)) return;
+    } else if (source === 'force' && live?.last === null && live.attempts === 0)
+      live.restored = true;
     this._handling.add(s.signalId);
     try {
-      await this._decide(ctx, s, deps, cfg, startedAt, live);
+      await this._decide(ctx, s, deps, cfg, startedAt, live, manual, source);
     } finally {
       this._handling.delete(s.signalId);
     }
@@ -347,9 +490,15 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     cfg: TraderConfig,
     startedAt: number,
     live: LiveSignal | undefined,
+    manual: { readonly by: string } | null,
+    source: Source = 'hub',
   ): Promise<void> {
     const profileId = ctx.params.profileId;
+    /** Kết quả lần xử lý trước (để lần xét lại theo nhịp không ghi dòng trùng lý do). */
+    const prev = live?.last ?? null;
     const attempt = live ? ++live.attempts : 1;
+    if (live)
+      live.handledIssuedAt = Math.max(live.handledIssuedAt ?? 0, s.issuedAt);
 
     const book = s.legs.find((l) => l.tenant === 'sptpub');
     const poly = s.legs.find((l) => l.tenant === 'polymarket');
@@ -365,7 +514,9 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       // lần đầu giữ id cũ; xét lại → hậu tố số lần (id trùng sẽ bị DB bỏ qua)
       id:
         attempt > 1
-          ? `${profileId}:${s.signalId}:${attempt}`
+          ? live?.restored
+            ? `${profileId}:${s.signalId}:${this._session}.${attempt}`
+            : `${profileId}:${s.signalId}:${attempt}`
           : `${profileId}:${s.signalId}`,
       profileId,
       mode: cfg.mode,
@@ -380,7 +531,13 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       tierName: pick?.row.tierName ?? other?.row.tierName ?? null,
     };
     let marketDataAt: number | null = null;
-    const emit = (
+    /** Gỡ kèo khỏi bảng On click (kết quả mới không còn là "chờ người vào"). */
+    const leaveOneClick = () => {
+      if (!live?.oneClick) return;
+      live.oneClick = false;
+      ctx.emit({ profileId, signalId: s.signalId, removed: true }, CH_ONECLICK);
+    };
+    const build = (
       status: Status,
       reason: string | null,
       r: Partial<{
@@ -398,8 +555,6 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         detail: Record<string, unknown>;
       }> = {},
     ) => {
-      if (live)
-        live.last = { status, reason, configKey: configKey(reason, cfg) };
       const c = this._cancels.get(s.signalId);
       // kèo bị hủy khi đang tính: lý do + giờ bắt đầu từng chân lúc hủy (ignored = vẫn vào tiếp)
       const cancel = c
@@ -409,52 +564,81 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
             detail: c.detail ?? null,
           }
         : undefined;
-      return ctx.emit(
-        {
-          ...base,
-          status,
-          reason,
-          book: book ? { ...bare(book)!, stake: r.stake ?? 0 } : null,
-          polymarket: poly
-            ? {
-                ...bare(poly)!,
-                tokenId: r.tokenId ?? '',
-                shares: r.shares ?? 0,
-                avgPrice: r.avgPrice ?? 0,
-                fee: r.fee ?? 0,
-                cost: r.polyCost ?? 0,
-              }
-            : null,
-          totalCost: r.totalCost ?? 0,
-          payout: r.payout ?? 0,
-          profit: r.profit ?? 0,
-          netMargin: r.netMargin ?? 0,
-          latencyMs: Date.now() - startedAt,
-          detail: {
-            signalAgeMs: startedAt - s.issuedAt,
-            targetStake: pick?.stake ?? null,
-            ...(cancel ? { cancel } : {}),
-            ...r.detail,
-          },
-          createdAt: Date.now(),
-          csgoempireAccountId: cfg.accounts.csgoempire?.id ?? null,
-          polymarketAccountId: cfg.accounts.polymarket?.id ?? null,
-          timing: {
-            signalIssuedAt: s.issuedAt,
-            receivedAt: startedAt,
-            marketDataAt,
-            decidedAt: Date.now(),
-          },
-          legs: r.legs ?? [],
+      return {
+        ...base,
+        status,
+        reason,
+        book: book ? { ...bare(book)!, stake: r.stake ?? 0 } : null,
+        polymarket: poly
+          ? {
+              ...bare(poly)!,
+              tokenId: r.tokenId ?? '',
+              shares: r.shares ?? 0,
+              avgPrice: r.avgPrice ?? 0,
+              fee: r.fee ?? 0,
+              cost: r.polyCost ?? 0,
+            }
+          : null,
+        totalCost: r.totalCost ?? 0,
+        payout: r.payout ?? 0,
+        profit: r.profit ?? 0,
+        netMargin: r.netMargin ?? 0,
+        latencyMs: Date.now() - startedAt,
+        detail: {
+          signalAgeMs: startedAt - s.issuedAt,
+          targetStake: pick?.stake ?? null,
+          ...(cancel ? { cancel } : {}),
+          ...(manual ? { manual } : {}),
+          ...r.detail,
         },
-        CH_TRADE,
-      );
+        createdAt: Date.now(),
+        csgoempireAccountId: cfg.accounts.csgoempire?.id ?? null,
+        polymarketAccountId: cfg.accounts.polymarket?.id ?? null,
+        timing: {
+          signalIssuedAt: s.issuedAt,
+          receivedAt: startedAt,
+          marketDataAt,
+          decidedAt: Date.now(),
+        },
+        legs: r.legs ?? [],
+      };
+    };
+    type Result = Parameters<typeof build>[2];
+    const emit = (status: Status, reason: string | null, r: Result = {}) => {
+      // xét lại theo nhịp / sau khi trả hạn mức mà vẫn bỏ cùng lý do → không ghi thêm dòng
+      if (
+        (source === 'recheck' || source === 'exposure') &&
+        prev &&
+        status === prev.status &&
+        (status === 'error' ||
+          (status === 'skipped' &&
+            reasonCode(prev.reason) === reasonCode(reason)))
+      )
+        return;
+      if (live)
+        live.last = { status, reason, configKey: configKey(reason, cfg) };
+      leaveOneClick();
+      ctx.emit(build(status, reason, r), CH_TRADE);
+    };
+    /** Bỏ qua không ghi lệnh (chỉ nhớ kết quả để xét lại khi cấu hình liên quan đổi). */
+    const quiet = (reason: string) => {
+      leaveOneClick();
+      if (live)
+        live.last = {
+          status: 'skipped',
+          reason,
+          configKey: configKey(reason, cfg),
+        };
     };
 
     if (!cfg.active) return emit('skipped', `INACTIVE: ${cfg.inactiveReason}`);
     if (deps.hub.paused) return emit('skipped', 'HUB_PAUSED');
     if (s.expiresAt <= startedAt) return emit('skipped', 'SIGNAL_EXPIRED');
+    // "quá cũ" chỉ áp cho bản tin hub vừa giao; xét lại kèo còn sống (publisher chưa hủy, odds chưa
+    // lệch đủ bước) thì sổ lệnh được đọc mới nên không tính tuổi bản tin
     if (
+      !manual &&
+      source === 'hub' &&
       cfg.risk.maxSignalAgeMs > 0 &&
       startedAt - s.issuedAt > cfg.risk.maxSignalAgeMs
     )
@@ -485,11 +669,8 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     const max = pick.row.maxEntries ?? cfg.risk.maxEntriesPerTier;
     const entryKey = `entry:${profileId}:${s.room}:${s.comboId}:${pick.row.tierId}`;
     const entered = await deps.ledger.count(entryKey);
-    if (entered >= max)
-      return emit(
-        'skipped',
-        `ALREADY_ENTERED: cửa này đã vào ${entered}/${max} lệnh ở hạng ${pick.row.tierName}`,
-      );
+    // đủ số lệnh của hạng → bỏ qua IM LẶNG (không ghi dòng); tăng số lệnh của hạng thì xét lại
+    if (entered >= max) return quiet('ALREADY_ENTERED');
     const strategy = TRADE_STRATEGIES[cfg.strategy.id];
     if (!strategy)
       return emit('skipped', `UNKNOWN_STRATEGY: ${cfg.strategy.id}`);
@@ -566,24 +747,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           },
         });
 
-      // lấy suất của hạng trước (nguyên tử) rồi mới giữ hạn mức: kèo trùng cửa đến cùng lúc không vượt số lệnh
-      if (!(await deps.ledger.acquire(entryKey, max, EXPOSURE_TTL_MS)))
-        return emit(
-          'skipped',
-          `ALREADY_ENTERED: cửa này vừa đủ ${max} lệnh ở hạng ${pick.row.tierName}`,
-          { tokenId },
-        );
-      if (!(await deps.ledger.reserve(caps, d.totalCost, EXPOSURE_TTL_MS))) {
-        await deps.ledger.giveBack(entryKey);
-        return emit(
-          'skipped',
-          'CAP_REACHED: giới hạn tổng theo trận vừa bị trader khác dùng hết',
-          {
-            tokenId,
-          },
-        );
-      }
-      return emit('paper_filled', null, {
+      const filled: Result = {
         stake: d.stake,
         tokenId,
         shares: d.shares,
@@ -638,7 +802,65 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           depth,
           sizing,
         },
-      });
+      };
+
+      // giá bán thấp nhất ≥ ngưỡng → bot không vào, gửi phân tích sang On click cho người vào
+      const thr = cfg.risk.oneClickMinPrice;
+      const minAsk = ob.asks.reduce(
+        (m, l) => (l.size > 0 && l.price < m ? l.price : m),
+        Number.POSITIVE_INFINITY,
+      );
+      if (!manual && thr > 0 && minAsk >= thr - 1e-9) {
+        const reason = `ONE_CLICK: giá bán thấp nhất ${minAsk} ≥ ${thr} — chờ người vào lệnh ở On click`;
+        const first = reasonCode(live?.last?.reason ?? null) !== 'ONE_CLICK';
+        if (live) {
+          live.last = {
+            status: 'skipped',
+            reason,
+            configKey: configKey(reason, cfg),
+          };
+          live.oneClick = true;
+        }
+        const extra = { minAsk, oneClickMinPrice: thr };
+        ctx.emit(
+          {
+            profileId,
+            signalId: s.signalId,
+            expiresAt: s.expiresAt,
+            // "nếu vào bây giờ": cùng phân tích bot dùng để vào lệnh
+            candidate: build('paper_filled', reason, {
+              ...filled,
+              detail: { ...filled.detail, ...extra },
+            }),
+          },
+          CH_ONECLICK,
+        );
+        // Lệnh giấy chỉ ghi MỘT dòng khi kèo vừa chuyển sang On click
+        if (first)
+          ctx.emit(
+            build('skipped', reason, {
+              tokenId,
+              detail: { ...filled.detail, ...extra },
+            }),
+            CH_TRADE,
+          );
+        return;
+      }
+
+      // lấy suất của hạng trước (nguyên tử) rồi mới giữ hạn mức: kèo trùng cửa đến cùng lúc không vượt số lệnh
+      if (!(await deps.ledger.acquire(entryKey, max, EXPOSURE_TTL_MS)))
+        return quiet('ALREADY_ENTERED');
+      if (!(await deps.ledger.reserve(caps, d.totalCost, EXPOSURE_TTL_MS))) {
+        await deps.ledger.giveBack(entryKey);
+        return emit(
+          'skipped',
+          'CAP_REACHED: giới hạn tổng theo trận vừa bị trader khác dùng hết',
+          {
+            tokenId,
+          },
+        );
+      }
+      return emit('paper_filled', null, filled);
     } catch (e: unknown) {
       if (signal.aborted)
         return emit('cancelled', String(signal.reason), {

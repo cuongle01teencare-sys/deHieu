@@ -311,7 +311,7 @@ function ProfileForm({
     <Panel
       open={!!value}
       onOpenChange={(v) => !v && onClose()}
-      width="lg"
+      width="xl"
       title={editing ? `Sửa ${editing.name}` : 'Thêm profile trader'}
       description="Lưu xong, task trader đang chạy của profile nhận cấu hình mới ngay (không cần khởi động lại)."
       footer={
@@ -380,9 +380,16 @@ function ProfileForm({
           <Field
             label="Số lệnh mỗi cửa mỗi hạng (mặc định)"
             htmlFor="pf-entries"
-            help="Cùng cửa ở cùng hạng vào tối đa bấy nhiêu lệnh, dù margin lên hay xuống; lên hạng khác thì tính lại từ đầu. Đặt riêng cho từng hạng ở cột Số lệnh mỗi cửa trong bảng tiền."
+            help="Cùng cửa ở cùng hạng vào tối đa bấy nhiêu lệnh (kể cả vào lặp lại cùng một kèo mỗi lần làm mới), dù margin lên hay xuống; lên hạng khác thì tính lại từ đầu. Đủ số thì bỏ qua im lặng. Đặt riêng cho từng hạng ở cột Số lệnh mỗi cửa trong bảng tiền."
           >
             <NumInput id="pf-entries" value={risk.maxEntriesPerTier} onValue={(v) => v !== undefined && v >= 1 && setRisk({ ...risk, maxEntriesPerTier: Math.floor(v) })} />
+          </Field>
+          <Field
+            label="Chuyển On click khi giá bán thấp nhất ≥"
+            htmlFor="pf-oneclick"
+            help="Giá ask thấp nhất trên sổ lệnh Polymarket (0–1). Đạt ngưỡng → bot KHÔNG tự vào, kèo hiện ở trang On click (mục Vận hành) để người bấm vào lệnh. 0 = tắt (bot vào mọi kèo)."
+          >
+            <NumInput id="pf-oneclick" value={risk.oneClickMinPrice} onValue={(v) => v !== undefined && v >= 0 && v <= 1 && setRisk({ ...risk, oneClickMinPrice: v })} />
           </Field>
         </div>
         <Field

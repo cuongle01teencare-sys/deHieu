@@ -18,7 +18,7 @@ interface PanelProps {
   actions?: ReactNode;
   footer?: ReactNode;
   children: ReactNode;
-  width?: 'md' | 'lg';
+  width?: 'md' | 'lg' | 'xl';
 }
 
 /**
@@ -53,7 +53,7 @@ function DesktopDrawer({ open, onOpenChange, title, eyebrow, description, action
           className={cn(
             'fixed inset-y-0 right-0 z-40 flex flex-col bg-raised shadow-pop outline-none',
             'data-[state=open]:animate-slide-in-right data-[state=closed]:animate-slide-out-right',
-            width === 'lg' ? 'w-[min(640px,100vw)]' : 'w-[min(480px,100vw)]',
+            width === 'xl' ? 'w-[min(920px,100vw)]' : width === 'lg' ? 'w-[min(640px,100vw)]' : 'w-[min(480px,100vw)]',
           )}
         >
           <div className="flex items-start gap-3 border-b border-line px-6 pb-4 pt-5">

@@ -46,6 +46,8 @@ export const TraderConfigSchema = z.object({
     ignoreCancelReasons: z.array(z.string()).default([]),
     // null = mọi market (app cũ không gửi)
     markets: z.array(z.string()).nullable().default(null),
+    // giá bán thấp nhất Polymarket ≥ số này → không tự vào, chuyển On click; 0 = tắt (app cũ không gửi)
+    oneClickMinPrice: z.number().min(0).max(1).default(0),
   }),
   matchExposureCapUsd: nonNeg,
 });

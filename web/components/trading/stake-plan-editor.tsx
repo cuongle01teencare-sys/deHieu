@@ -249,7 +249,7 @@ const COL_HINT = {
   min: 'Tiền cược csgoempire thấp nhất chấp nhận được, so với TỔNG share mua được ở mọi mức giá cộng lại (không phải từng người bán). Ví dụ mục tiêu 50$, tối thiểu 35$: mua được 80 share → 40$ ≥ 35$ thì vào 40$; chỉ 60 share → 30$ thì bỏ qua cả hai chân. Giữ nguyên cho mọi margin trong hạng, kể cả khi bật Tăng dần trong hạng.',
   max: 'Chỉ có tác dụng khi bật Tăng dần trong hạng. Khi bật: tiền mục tiêu tăng đều từ cột Tiền mục tiêu (ở cận dưới của hạng) lên số này (ở cận trên), theo margin của kèo.',
   entries:
-    'Một cửa (cùng market, cùng cặp sàn/phía) ở hạng này được vào tối đa bấy nhiêu lệnh. Ô trống = theo "Số lệnh mỗi cửa mỗi hạng" mặc định của profile (ô bên dưới). Mỗi hạng đếm riêng.',
+    'Một cửa (cùng market, cùng cặp sàn/phía) ở hạng này được vào tối đa bấy nhiêu lệnh — kể cả vào lặp lại CÙNG một kèo mỗi lần kèo được làm mới. Đủ số thì bỏ qua im lặng. Ô trống = theo "Số lệnh mỗi cửa mỗi hạng" mặc định của profile (ô bên dưới). Mỗi hạng đếm riêng.',
 } as const;
 
 /** Tăng dần trong hạng: mục tiêu tăng thêm bao nhiêu $ mỗi 0,1% margin (null = không tăng). */
@@ -294,6 +294,9 @@ function Mechanism() {
             {b('Đủ share')} → vào đúng tiền mục tiêu bên csgoempire.
           </li>
           <li>
+            {b('Vào lặp lại:')} kèo vừa vào lệnh, mỗi lần được làm mới (cùng kèo, dữ liệu mới) lại được xét vào tiếp, tới khi cửa đủ {b('Số lệnh mỗi cửa')} của hạng. Hạn mức theo trận vẫn áp cho tổng các lệnh.
+          </li>
+          <li>
             {b('Sổ lệnh mỏng, thiếu share')} → hạ tiền bên csgoempire xuống cho khớp: {b('tiền csgoempire = số share Polymarket mua được ÷ odds csgoempire')}. Ví dụ chỉ gom được 80 share → 80 ÷ 2.0 = 40$.
             <ul className="mt-1 list-disc space-y-0.5 pl-4">
               <li>Số tiền đã hạ ≥ {b('Tiền mục tiêu tối thiểu')} → vào với số tiền đó (40$ ≥ 35$ → vào 40$).</li>
@@ -301,7 +304,7 @@ function Mechanism() {
             </ul>
           </li>
           <li>
-            {b('Các kết quả bỏ qua khác:')} Hết lãi sau phí (giá rẻ nhất đã không đủ lãi) · Dưới lệnh tối thiểu (ít hơn số share tối thiểu của market) · Hết hạn mức trận · Cửa này đã vào (đủ số lệnh mỗi hạng) · Kèo quá cũ / hết hạn · Kèo bị hủy khi đang tính.
+            {b('Các kết quả bỏ qua khác:')} Hết lãi sau phí (giá rẻ nhất đã không đủ lãi) · Dưới lệnh tối thiểu (ít hơn số share tối thiểu của market) · Hết hạn mức trận · Kèo quá cũ / hết hạn · Kèo bị hủy khi đang tính. Cửa đã đủ số lệnh của hạng thì bỏ qua im lặng (không ghi dòng).
           </li>
         </ol>
         <div>

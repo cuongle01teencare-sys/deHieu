@@ -60,6 +60,7 @@ let profiles: TraderProfile[] = [
 ];
 
 let matchExposureCapUsd = 500;
+const oneClickTaken = new Set<string>();
 
 const MATCHES: [string, [string, string], string][] = [
   ['lol', ['t1', 'gen.g'], 'match-winner'],
@@ -170,6 +171,26 @@ export function mockTrading(method: string, path: string, search: string, body: 
       const before = Number(q.get('before') ?? Infinity);
       return ok(filtered().filter((t) => t.createdAt < before).slice(0, Number(q.get('limit') ?? 100)));
     }
+    if (p === 'oneclick') {
+      const pid = q.get('profileId') ?? '';
+      const now = Date.now();
+      const list = trades
+        .filter((t) => t.profileId === pid && t.status === 'paper_filled')
+        .slice(0, 3)
+        .filter((t) => !oneClickTaken.has(t.signalId))
+        .map((t, k) => {
+          const minAsk = 0.52 + k * 0.04;
+          const reason = `ONE_CLICK: giá bán thấp nhất ${minAsk} ≥ 0.5 — chờ người vào lệnh ở On click`;
+          return {
+            profileId: pid,
+            signalId: t.signalId,
+            expiresAt: now + 60_000 - k * 20_000,
+            updatedAt: now - k * 1_500,
+            analysis: { ...t, reason, createdAt: now - k * 1_500, detail: { ...t.detail, minAsk, oneClickMinPrice: 0.5 } },
+          };
+        });
+      return ok(list);
+    }
     if (p === 'exposure')
       return ok({
         available: true,
@@ -205,6 +226,15 @@ export function mockTrading(method: string, path: string, search: string, body: 
       const prof = profiles.find((x) => x.id === decodeURIComponent(one[1]!));
       return prof ? ok(prof) : { status: 404, body: { message: 'Not Found' } };
     }
+  }
+
+  if (method === 'POST' && p === 'oneclick/enter') {
+    const sid = String(b.signalId ?? '');
+    const src = trades.find((t) => t.signalId === sid && t.profileId === b.profileId);
+    if (!src || oneClickTaken.has(sid)) return { status: 404, body: { message: 'Not Found' } };
+    oneClickTaken.add(sid);
+    trades = [{ ...src, id: `${src.id}:m`, createdAt: Date.now(), detail: { ...src.detail, manual: { by: 'admin' } } }, ...trades];
+    return ok({ sent: true });
   }
 
   if (method === 'POST' && p === 'stake-preview') {

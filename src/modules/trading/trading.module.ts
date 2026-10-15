@@ -44,6 +44,8 @@ import { SupervisorTraderTaskGateway } from './infrastructure/runtime/supervisor
 // presentation
 import { TradingController } from './presentation/trading.controller.js';
 import { ExposureAdmin } from './application/exposure-admin.js';
+import { OneClickBoard } from './application/one-click-board.js';
+import { OneClickAdmin } from './application/one-click-admin.js';
 import {
   EXPOSURE_LEDGER_READER,
   type ExposureLedgerReader,
@@ -161,19 +163,31 @@ const CONFIG_RECONCILE_MS = 30_000;
         TRADER_PROFILE_REPOSITORY,
         STAKE_TIER_SOURCE,
         TRADING_SETTINGS_STORE,
+        TraderConfigSync,
       ],
       useFactory: (
         r: ExposureLedgerReader,
         p: TraderProfileRepository,
         t: StakeTierSource,
         s: TradingSettingsStore,
-      ) => new ExposureAdmin(r, p, t, s),
+        sync: TraderConfigSync,
+      ) => new ExposureAdmin(r, p, t, s, sync),
+    },
+    { provide: OneClickBoard, useValue: new OneClickBoard() },
+    {
+      provide: OneClickAdmin,
+      inject: [OneClickBoard, TraderConfigSync],
+      useFactory: (b: OneClickBoard, s: TraderConfigSync) =>
+        new OneClickAdmin(b, s),
     },
     {
       provide: TraderDataHandler,
-      inject: [TRADE_ATTEMPT_REPOSITORY, TraderConfigSync],
-      useFactory: (r: TradeAttemptRepository, s: TraderConfigSync) =>
-        new TraderDataHandler(r, s),
+      inject: [TRADE_ATTEMPT_REPOSITORY, TraderConfigSync, OneClickBoard],
+      useFactory: (
+        r: TradeAttemptRepository,
+        s: TraderConfigSync,
+        b: OneClickBoard,
+      ) => new TraderDataHandler(r, s, undefined, b),
     },
   ],
 })

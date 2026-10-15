@@ -37,6 +37,11 @@ export interface RiskLimits {
    * (kể cả market thêm sau); [] = chưa chọn market nào → profile đứng yên.
    */
   readonly markets: readonly string[] | null;
+  /**
+   * Giá bán thấp nhất Polymarket ≥ số này (vd 0.5) → bot KHÔNG tự vào, chuyển kèo sang On click
+   * cho người vào lệnh. 0 = tắt (bot vào mọi kèo).
+   */
+  readonly oneClickMinPrice: number;
 }
 
 export const DEFAULT_RISK_LIMITS: RiskLimits = {
@@ -46,6 +51,7 @@ export const DEFAULT_RISK_LIMITS: RiskLimits = {
   maxEntriesPerTier: 1,
   ignoreCancelReasons: ['better_opportunity'],
   markets: null,
+  oneClickMinPrice: 0.5,
 };
 
 /** Profile có vào market này không. */
@@ -72,6 +78,8 @@ export function validateRiskLimits(r: RiskLimits): string | null {
   if (!(r.maxSignalAgeMs >= 0)) return 'maxSignalAgeMs phải ≥ 0';
   if (!(Number.isInteger(r.maxEntriesPerTier) && r.maxEntriesPerTier >= 1))
     return 'maxEntriesPerTier phải là số nguyên ≥ 1';
+  if (!(r.oneClickMinPrice >= 0 && r.oneClickMinPrice <= 1))
+    return 'oneClickMinPrice phải trong [0, 1] (0 = tắt)';
   if (r.markets !== null && r.markets.length > 100)
     return 'markets tối đa 100 market';
   return null;

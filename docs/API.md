@@ -197,6 +197,8 @@ Polymarket thật → mua các mức giá còn lãi ròng ≥ ngưỡng → gi�
 | PUT    | `/trading/settings`                     | `trading:manage` | `{ "matchExposureCapUsd": 500 }`                                                               |
 | GET    | `/trading/trades`                       | `trading:read`   | Lệnh giấy mới nhất; lọc `profileId`, `status`; phân trang `before` + `limit`                   |
 | GET    | `/trading/trades/stats`                 | `trading:read`   | Số lần vào/bỏ qua/hủy/lỗi, tổng tiền, lãi giả định, lý do bỏ qua; lọc `profileId`, `since`     |
+| GET    | `/trading/oneclick?profileId=`          | `trading:read`   | Kèo On click của profile: `[{ profileId, signalId, expiresAt, updatedAt, analysis }]`, `analysis` là TradeAttempt dự kiến (status `paper_filled`, reason `ONE_CLICK`, detail có `minAsk`, `oneClickMinPrice`) |
+| POST   | `/trading/oneclick/enter`               | `trading:manage` | `{ profileId, signalId }` nhờ trader vào lệnh như bot, ghi `detail.manual.by`. 404 = kèo không còn trên bảng; 400 `NO_TRADER_TASK` / `TRADER_REJECTED` |
 | GET    | `/trading/exposure`                     | `trading:read`   | Sổ phơi nhiễm thật (Redis): tiền đã dùng theo trận (chung + riêng profile), số lệnh đã vào mỗi cửa mỗi hạng, TTL. Không phụ thuộc lịch sử lệnh |
 | POST   | `/trading/exposure/reset`               | `trading:manage` | `{ "match": "cs2:a~b" }` trả lại hạn mức trận; `{ "entry": { profileId, room, comboId, tierId } }` đặt lại số lệnh của cửa |
 | POST   | `/trading/profiles/:id/reevaluate`      | `trading:manage` | Task trader của profile xét lại mọi kèo còn sống (không xóa lệnh) |
@@ -216,6 +218,7 @@ Polymarket thật → mua các mức giá còn lãi ròng ≥ ngưỡng → gi�
 // risk
 { "minNetMargin": 0.01, "matchCapUsd": 0, "maxSignalAgeMs": 3000,
   "maxEntriesPerTier": 1,                       // số lệnh tối đa cho MỘT cửa ở MỖI hạng (hạng khác tính riêng)
+  "oneClickMinPrice": 0.5,                      // giá ask thấp nhất Polymarket ≥ ngưỡng → không tự vào, chuyển On click; 0 = tắt
   "ignoreCancelReasons": ["better_opportunity"] } // kèo bị hủy vì lý do này khi đang tính → vẫn vào
 ```
 

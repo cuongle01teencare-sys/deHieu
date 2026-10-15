@@ -89,6 +89,7 @@ const config = (
     maxEntriesPerTier: 1,
     ignoreCancelReasons: ['better_opportunity'],
     markets: null,
+    oneClickMinPrice: 0,
   },
   matchExposureCapUsd: 0,
   ...over,
@@ -176,12 +177,15 @@ const until = async (cond: () => boolean, ms = 3_000) => {
 describe('TraderArbitrageTask (giấy)', () => {
   let hub: FakeHub;
   let bookGate: Promise<void> | null;
+  /** Thay sổ lệnh trả về (null = mặc định). */
+  let asks: { price: string; size: string }[] | null;
 
   beforeEach(async () => {
     process.env.CONSUMER_WS_TOKEN = TOKEN;
     hub = new FakeHub();
     await new Promise((r) => hub.wss.once('listening', r));
     bookGate = null;
+    asks = null;
     vi.stubGlobal(
       'fetch',
       async (url: string, init?: { signal?: AbortSignal }) => {
@@ -196,7 +200,7 @@ describe('TraderArbitrageTask (giấy)', () => {
               ),
             ]);
           return Response.json({
-            asks: [
+            asks: asks ?? [
               { price: '0.49', size: '1000' },
               { price: '0.40', size: '50' },
             ],
@@ -294,16 +298,16 @@ describe('TraderArbitrageTask (giấy)', () => {
     await t.stop();
   });
 
-  it('kèo hủy rồi phát lại (signalId mới, cùng cửa, cùng hạng) → không vào chồng', async () => {
+  it('kèo hủy rồi phát lại (signalId mới, cùng cửa, cùng hạng) → đủ số lệnh thì bỏ qua im lặng', async () => {
     const t = start(new TraderArbitrageTask(), params('A'));
     await t.command('config', config('A'));
     await until(() => hub.consumers.has('trader:A'));
     hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('r1') });
     await until(() => trades(t).length === 1);
     hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('r2') });
-    await until(() => trades(t).length === 2);
-    expect(trades(t).map((x) => x.status)).toEqual(['paper_filled', 'skipped']);
-    expect(String(trades(t)[1].reason)).toMatch(/^ALREADY_ENTERED/);
+    await new Promise((r) => setTimeout(r, 80));
+    // cửa đã đủ 1 lệnh ở hạng này → không vào, không ghi dòng "Cửa này đã vào"
+    expect(trades(t).map((x) => x.status)).toEqual(['paper_filled']);
     await t.stop();
   });
 
@@ -330,19 +334,17 @@ describe('TraderArbitrageTask (giấy)', () => {
     const t = start(new TraderArbitrageTask(), params('A'));
     await t.command('config', config('A', { stakeTable: [std, vip] }));
     await until(() => hub.consumers.has('trader:A'));
-    const send = async (id: string, m: number, n: number) => {
+    const send = async (id: string, m: number) => {
       hub.broadcast({ type: 'signal', kind: 'issued', signal: signal(id, m) });
-      await until(() => trades(t).length === n);
+      await new Promise((r) => setTimeout(r, 80));
     };
-    await send('m1', 0.03, 1); // Thường
-    await send('m2', 0.06, 2); // lên VIP → vào
-    await send('m3', 0.035, 3); // tụt về Thường → đã vào hạng này
-    await send('m4', 0.07, 4); // VIP lần 2 → đã vào hạng này
+    await send('m1', 0.03); // Thường
+    await send('m2', 0.06); // lên VIP → vào
+    await send('m3', 0.035); // tụt về Thường → đủ lệnh hạng này, im lặng
+    await send('m4', 0.07); // VIP lần 2 → đủ lệnh hạng này, im lặng
     expect(trades(t).map((x) => [x.tierName, x.status])).toEqual([
       ['Thường', 'paper_filled'],
       ['VIP', 'paper_filled'],
-      ['Thường', 'skipped'],
-      ['VIP', 'skipped'],
     ]);
     await t.stop();
   });
@@ -359,18 +361,18 @@ describe('TraderArbitrageTask (giấy)', () => {
           maxEntriesPerTier: 2,
           ignoreCancelReasons: [],
           markets: null,
+          oneClickMinPrice: 0,
         },
       }),
     );
     await until(() => hub.consumers.has('trader:A'));
-    for (const [i, id] of ['q1', 'q2', 'q3'].entries()) {
+    for (const id of ['q1', 'q2', 'q3']) {
       hub.broadcast({ type: 'signal', kind: 'issued', signal: signal(id) });
-      await until(() => trades(t).length === i + 1);
+      await new Promise((r) => setTimeout(r, 80));
     }
     expect(trades(t).map((x) => x.status)).toEqual([
       'paper_filled',
       'paper_filled',
-      'skipped',
     ]);
     await t.stop();
   });
@@ -385,15 +387,14 @@ describe('TraderArbitrageTask (giấy)', () => {
       }),
     );
     await until(() => hub.consumers.has('trader:A'));
-    for (const [i, id] of ['e1', 'e2', 'e3', 'e4'].entries()) {
+    for (const id of ['e1', 'e2', 'e3', 'e4']) {
       hub.broadcast({ type: 'signal', kind: 'issued', signal: signal(id) });
-      await until(() => trades(t).length === i + 1);
+      await new Promise((r) => setTimeout(r, 80));
     }
     expect(trades(t).map((x) => x.status)).toEqual([
       'paper_filled',
       'paper_filled',
       'paper_filled',
-      'skipped',
     ]);
     // tăng số lệnh của hạng → cửa đang bị chặn được xét lại
     await t.command(
@@ -402,8 +403,8 @@ describe('TraderArbitrageTask (giấy)', () => {
         stakeTable: base.stakeTable.map((r) => ({ ...r, maxEntries: 4 })),
       }),
     );
-    await until(() => trades(t).length === 5);
-    expect(trades(t)[4]).toMatchObject({
+    await until(() => trades(t).length === 4);
+    expect(trades(t)[3]).toMatchObject({
       id: 'A:e4:2',
       status: 'paper_filled',
     });
@@ -628,21 +629,192 @@ describe('TraderArbitrageTask (giấy)', () => {
     await t.stop();
   });
 
-  it('reset_seen (app xóa toàn bộ lệnh) → xét lại mọi kèo còn sống', async () => {
+  it('làm mới cùng kèo → vào tiếp mỗi lần tới đủ số lệnh của hạng; reset_seen không vượt số lệnh', async () => {
     const t = start(new TraderArbitrageTask(), params('A'));
-    await t.command('config', config('A'));
+    const base = config('A');
+    const withMax = (n: number) =>
+      config('A', {
+        stakeTable: base.stakeTable.map((r) => ({ ...r, maxEntries: n })),
+      });
+    await t.command('config', withMax(3));
     await until(() => hub.consumers.has('trader:A'));
     hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('s10') });
     await until(() => trades(t).length === 1);
-    // hub gửi lại cùng kèo → vẫn chỉ xử lý một lần
-    hub.broadcast({ type: 'signal', kind: 'refreshed', signal: signal('s10') });
+    for (let i = 0; i < 4; i++) {
+      hub.broadcast({
+        type: 'signal',
+        kind: 'refreshed',
+        signal: signal('s10'),
+      });
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    // 3 lệnh (đủ số lệnh của hạng), lần làm mới thứ 3, 4 im lặng
+    expect(trades(t).map((x) => [x.id, x.status])).toEqual([
+      ['A:s10', 'paper_filled'],
+      ['A:s10:2', 'paper_filled'],
+      ['A:s10:3', 'paper_filled'],
+    ]);
+    await t.command('reset_seen', {});
+    await new Promise((r) => setTimeout(r, 80));
+    expect(trades(t)).toHaveLength(3);
+    // tăng số lệnh của hạng → vào tiếp ngay
+    await t.command('config', withMax(4));
+    await until(() => trades(t).length === 4);
+    expect(trades(t)[3]).toMatchObject({ status: 'paper_filled' });
+    await t.stop();
+  });
+
+  it('mỗi lần phát (mới/làm mới) là một lệnh: lần trước bị bỏ (hết hạn mức) vẫn xét lại; hub giao lại cùng bản tin không tính', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    const base = config('A');
+    // hạn mức trận của profile quá nhỏ → bỏ qua vì hạn mức
+    await t.command(
+      'config',
+      config('A', { risk: { ...base.risk, matchCapUsd: 1 } }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    const first = signal('s20');
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: first });
+    await until(() => trades(t).length === 1);
+    expect(trades(t)[0]?.status).toBe('skipped');
+    // hub giao lại CÙNG bản tin (cùng issuedAt) → không thành lệnh mới
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: first });
     await new Promise((r) => setTimeout(r, 80));
     expect(trades(t)).toHaveLength(1);
-    await t.command('reset_seen', {});
+    // publisher làm mới kèo (mốc mới) → xét như một lệnh mới, vẫn áp hạn mức
+    hub.broadcast({
+      type: 'signal',
+      kind: 'refreshed',
+      signal: { ...first, issuedAt: first.issuedAt + 1 },
+    });
     await until(() => trades(t).length === 2);
-    // đã vào ở hạng này rồi → lần xét lại báo cửa đã vào, không vào trùng
-    expect(trades(t)[1]).toMatchObject({ id: 'A:s10:2', status: 'skipped' });
-    expect(String(trades(t)[1]?.reason)).toMatch(/^ALREADY_ENTERED/);
+    expect(trades(t)[1]).toMatchObject({ id: 'A:s20:2', status: 'skipped' });
+    await t.stop();
+  });
+
+  it('bỏ vì sổ lệnh (hết lãi) → xét lại theo nhịp, cùng lý do không ghi thêm dòng; sổ có lãi thì vào', async () => {
+    const t = start(
+      new TraderArbitrageTask({ bookRecheckMs: 40 }),
+      params('A'),
+    );
+    asks = [{ price: '0.6', size: '1000' }];
+    await t.command('config', config('A'));
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('s30') });
+    await until(() => trades(t).length === 1);
+    expect(trades(t)[0]?.reason).toMatch(/^NO_EDGE/);
+    // vài nhịp xét lại vẫn hết lãi → không ghi thêm
+    await new Promise((r) => setTimeout(r, 150));
+    expect(trades(t)).toHaveLength(1);
+    // sổ lệnh có lãi trở lại → nhịp kế tiếp vào lệnh
+    asks = null;
+    await until(() => trades(t).length === 2);
+    expect(trades(t)[1]).toMatchObject({ status: 'paper_filled' });
+    await t.stop();
+  });
+
+  it('nâng hạn mức trận → kèo bị chặn vì hạn mức xét lại ngay', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    const base = config('A');
+    await t.command(
+      'config',
+      config('A', { risk: { ...base.risk, matchCapUsd: 1 } }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('s31') });
+    await until(() => trades(t).length === 1);
+    expect(trades(t)[0]?.status).toBe('skipped');
+    await t.command(
+      'config',
+      config('A', { risk: { ...base.risk, matchCapUsd: 500 } }),
+    );
+    await until(() => trades(t).length === 2);
+    expect(trades(t)[1]).toMatchObject({ status: 'paper_filled' });
+    await t.stop();
+  });
+
+  it('trả lại sổ phơi nhiễm (exposure_freed) → cửa đã đủ số lệnh được vào tiếp', async () => {
+    const ledger = new InMemoryExposureLedger();
+    const t = start(new TraderArbitrageTask({ ledger }), params('A'));
+    await t.command('config', config('A'));
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('s32') });
+    await until(() => trades(t).length === 1);
+    // kèo khác mã cùng cửa → đủ số lệnh, bỏ qua im lặng
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('s33') });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(trades(t)).toHaveLength(1);
+    // admin đặt lại số lệnh của cửa → trader được báo, xét lại
+    const slots = (ledger as unknown as { _slots: Map<string, unknown> })
+      ._slots;
+    for (const k of slots.keys()) await ledger.giveBack(k);
+    await t.command('exposure_freed', {});
+    await until(() => trades(t).length === 2);
+    expect(trades(t)[1]).toMatchObject({
+      signalId: 's33',
+      status: 'paper_filled',
+    });
+    await t.stop();
+  });
+
+  it('trader khởi động lại: kèo còn sống đã có dấu "đã xử lý" vẫn được xét lại một lần (id kèm mã phiên)', async () => {
+    const ledger = new InMemoryExposureLedger();
+    const base = config('A');
+    const cfg = config('A', { risk: { ...base.risk, matchCapUsd: 1 } });
+    const t1 = start(new TraderArbitrageTask({ ledger }), params('A'));
+    await t1.command('config', cfg);
+    await until(() => hub.consumers.has('trader:A'));
+    const sig = signal('s40');
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: sig });
+    await until(() => trades(t1).length === 1);
+    expect(trades(t1)[0]?.status).toBe('skipped');
+    await t1.stop();
+    hub.consumers.delete('trader:A');
+
+    // phiên mới, cùng sổ (Redis) — hub gửi lại kèo còn sống, bản lưu cũ
+    const t2 = start(new TraderArbitrageTask({ ledger }), params('A'));
+    await t2.command(
+      'config',
+      config('A', { risk: { ...base.risk, matchCapUsd: 500 } }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({
+      type: 'signal',
+      kind: 'refreshed',
+      signal: { ...sig, issuedAt: sig.issuedAt - 20_000 },
+    });
+    await until(() => trades(t2).length === 1);
+    expect(trades(t2)[0]).toMatchObject({ status: 'paper_filled' });
+    expect(String(trades(t2)[0]?.id)).toMatch(/^A:s40:[a-z0-9]+\.2$/);
+    // giao lại cùng bản tin → không xét nữa
+    hub.broadcast({
+      type: 'signal',
+      kind: 'refreshed',
+      signal: { ...sig, issuedAt: sig.issuedAt - 20_000 },
+    });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(trades(t2)).toHaveLength(1);
+    await t2.stop();
+  });
+
+  it('kèo bị bộ lọc profile loại (market) → làm mới không ghi thêm dòng', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    const base = config('A');
+    await t.command(
+      'config',
+      config('A', { risk: { ...base.risk, markets: ['handicap'] } }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    const first = signal('s21');
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: first });
+    await until(() => trades(t).length === 1);
+    hub.broadcast({
+      type: 'signal',
+      kind: 'refreshed',
+      signal: { ...first, issuedAt: first.issuedAt + 1 },
+    });
+    await new Promise((r) => setTimeout(r, 80));
+    expect(trades(t)).toHaveLength(1);
     await t.stop();
   });
 
@@ -673,6 +845,46 @@ describe('TraderArbitrageTask (giấy)', () => {
     hub.broadcast({ type: 'signal', kind: 'refreshed', signal: signal('s13') });
     await new Promise((r) => setTimeout(r, 80));
     expect(trades(t)).toHaveLength(2);
+    await t.stop();
+  });
+
+  it('On click: giá bán thấp nhất ≥ ngưỡng → bot không vào, gửi phân tích; người bấm thì vào (ghi người vào)', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    const base = config('A');
+    // sổ lệnh giả: ask thấp nhất 0.40 → ngưỡng 0.30 thì chuyển On click
+    await t.command(
+      'config',
+      config('A', { risk: { ...base.risk, oneClickMinPrice: 0.3 } }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    const board = () =>
+      t.emitted.filter((e) => e.channel === 'oneclick').map((e) => e.payload);
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('oc1') });
+    await until(() => board().length === 1);
+    expect(board()[0]).toMatchObject({
+      profileId: 'A',
+      signalId: 'oc1',
+      candidate: { status: 'paper_filled', detail: { minAsk: 0.4 } },
+    });
+    // Lệnh giấy: đúng một dòng "chuyển On click"
+    await until(() => trades(t).length === 1);
+    expect(trades(t)[0]?.reason).toMatch(/^ONE_CLICK/);
+    // làm mới → cập nhật phân tích, không ghi thêm dòng
+    hub.broadcast({ type: 'signal', kind: 'refreshed', signal: signal('oc1') });
+    await until(() => board().length === 2);
+    expect(trades(t)).toHaveLength(1);
+    // người bấm vào lệnh
+    await t.command('manual_enter', { signalId: 'oc1', by: 'alice' });
+    await until(() => trades(t).length === 2);
+    expect(trades(t)[1]).toMatchObject({
+      status: 'paper_filled',
+      detail: { manual: { by: 'alice' } },
+    });
+    // kèo đã vào → gỡ khỏi bảng
+    await until(() => board().some((b) => b.removed === true));
+    await expect(
+      t.command('manual_enter', { signalId: 'khong-co', by: 'alice' }),
+    ).rejects.toThrow(/SIGNAL_NOT_LIVE/);
     await t.stop();
   });
 

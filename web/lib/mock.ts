@@ -55,7 +55,7 @@ let settings: ArbitrageSettings = {
   minMargin: 0.02,
   marginStep: 0.01,
   marginDropStep: 0.01,
-  signalTtlMs: 30_000,
+  signalTtlMs: 300_000,
   maxStartDriftMs: 1_200_000,
   enabledPhases: ['live', 'prematch'],
 };

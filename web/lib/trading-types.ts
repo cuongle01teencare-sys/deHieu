@@ -82,9 +82,22 @@ export interface RiskLimits {
   ignoreCancelReasons: string[];
   /** Market được vào (vd 'game-winner'). null = mọi market; [] = chưa chọn (profile đứng yên). */
   markets: string[] | null;
+  /** Giá bán thấp nhất Polymarket ≥ ngưỡng này → bot không tự vào, chuyển sang On click chờ người vào. 0 = tắt. */
+  oneClickMinPrice: number;
 }
 
-export const DEFAULT_RISK: RiskLimits = { minNetMargin: 0.01, matchCapUsd: 0, maxSignalAgeMs: 3_000, maxEntriesPerTier: 1, ignoreCancelReasons: ['better_opportunity'], markets: null };
+export const DEFAULT_RISK: RiskLimits = { minNetMargin: 0.01, matchCapUsd: 0, maxSignalAgeMs: 3_000, maxEntriesPerTier: 1, ignoreCancelReasons: ['better_opportunity'], markets: null, oneClickMinPrice: 0.5 };
+
+/** GET /trading/oneclick?profileId= — kèo chờ người vào lệnh. */
+export interface OneClickCandidate {
+  profileId: string;
+  signalId: string;
+  expiresAt: number;
+  /** Lúc trader gửi bản phân tích này (ms). */
+  updatedAt: number;
+  /** "Nếu vào bây giờ": phân tích như lệnh bot (status paper_filled = dự kiến, reason ONE_CLICK). */
+  analysis: TradeAttempt;
+}
 
 export interface TraderProfile {
   id: string;
@@ -155,6 +168,11 @@ export interface TradeDetail {
   bookAt?: number | null;
   /** Kèo bị hủy khi trader đang tính. ignored = lý do được bỏ qua nên vẫn vào tiếp. */
   cancel?: { reason: string; ignored: boolean; detail: import('./types').SignalCloseDetail | null };
+  /** Người vào lệnh tay ở On click (không phải bot). */
+  manual?: { by: string };
+  /** Kèo chuyển On click: giá bán thấp nhất lúc đó và ngưỡng của profile. */
+  minAsk?: number;
+  oneClickMinPrice?: number;
 }
 
 export interface TradeAttempt {

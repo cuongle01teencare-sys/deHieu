@@ -1,5 +1,6 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { ExternalLink, Trash2 } from 'lucide-react';
 import { fmtMargin, fmtStamp } from '@/lib/format';
@@ -44,6 +45,7 @@ export const REASON_LABEL: Record<string, string> = {
   ALREADY_ENTERED: 'Cửa này đã vào',
   SIGNAL_CANCELLED: 'Kèo bị hủy',
   TASK_STOPPED: 'Task bị dừng',
+  ONE_CLICK: 'Chuyển On click',
 };
 
 const code = (r: string | null) => (r ?? '').split(':')[0]!.trim();
@@ -81,6 +83,8 @@ function explain(t: TradeAttempt, d: Detail): string {
         : rest(t.reason);
     case 'BELOW_MIN_ORDER':
       return `Số share mua được dưới lệnh tối thiểu của market (${d.sizing?.minShares ?? '—'} share). ${rest(t.reason)}`;
+    case 'ONE_CLICK':
+      return `Giá bán thấp nhất Polymarket ${d.minAsk ?? '—'} ≥ ngưỡng On click ${d.oneClickMinPrice ?? '—'} của profile, nên bot không tự vào mà chuyển kèo sang trang On click chờ người bấm vào lệnh.`;
     case 'BUDGET_EXHAUSTED':
     case 'CAP_REACHED':
       return `Giới hạn tổng tiền cho trận này (chung mọi trader hoặc riêng profile) chỉ còn ${d.budget !== undefined && d.budget !== null ? usd(d.budget) : 'ít'}, không đủ mức tối thiểu.`;
@@ -108,6 +112,8 @@ export function TradeDetailPanel({
   onClose,
   onDelete,
   deleteDisabledReason,
+  badge,
+  footer,
 }: {
   trade: TradeAttempt | null;
   profileName: (id: string) => string;
@@ -115,6 +121,10 @@ export function TradeDetailPanel({
   /** Có = hiện nút xóa lệnh ở chân panel. */
   onDelete?: (t: TradeAttempt) => void;
   deleteDisabledReason?: string | null;
+  /** Thay nhãn trạng thái ở đầu panel. */
+  badge?: ReactNode;
+  /** Thay chân panel (vd nút Vào lệnh ở On click). */
+  footer?: ReactNode;
 }) {
   const t = trade;
   const d = (t?.detail ?? {}) as Detail;
@@ -128,9 +138,17 @@ export function TradeDetailPanel({
       width="lg"
       eyebrow={t ? `${t.sport} · ${t.market} · ${t.phase}` : undefined}
       title={t ? `${t.teams[0]} vs ${t.teams[1]}` : ''}
-      actions={st ? <Pill tone={st.tone}>{st.label}</Pill> : null}
+      actions={
+        badge ??
+        (st ? (
+          <span className="flex items-center gap-2">
+            {d.manual ? <Pill tone="muted">Vào tay</Pill> : null}
+            <Pill tone={st.tone}>{st.label}</Pill>
+          </span>
+        ) : null)
+      }
       footer={
-        t && onDelete ? (
+        footer !== undefined ? footer : t && onDelete ? (
           <Button variant="danger-ghost" size="sm" disabledReason={deleteDisabledReason} onClick={() => onDelete(t)}>
             <Trash2 aria-hidden /> Xóa lệnh này
           </Button>
@@ -143,6 +161,11 @@ export function TradeDetailPanel({
             {t.reason ? <div className="mb-1 text-body font-medium text-fg">{reasonText(t)}</div> : null}
             <p className="text-body text-muted-fg">{explain(t, d)}</p>
             {t.reason ? <p className="num mt-2 text-caption text-faint">{t.reason}</p> : null}
+            {d.manual ? (
+              <p className="mt-2 text-caption text-muted-fg">
+                Người vào lệnh ở On click: <span className="text-fg">{d.manual.by}</span> (không phải bot).
+              </p>
+            ) : null}
             {d.cancel?.ignored ? (
               <p className="mt-2 text-caption text-warn">
                 Kèo bị hủy khi đang tính ({CANCEL_REASONS[d.cancel.reason] ?? d.cancel.reason}

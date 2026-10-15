@@ -65,6 +65,7 @@ export function buildTraderConfig(input: {
         maxEntriesPerTier: 1,
         ignoreCancelReasons: [],
         markets: [],
+        oneClickMinPrice: 0,
       },
       matchExposureCapUsd: settings.matchExposureCapUsd,
     };

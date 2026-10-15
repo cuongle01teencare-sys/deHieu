@@ -1,6 +1,7 @@
 import type { OperationStatus } from '../../../shared/domain/domain-repository.js';
 import type { TraderProfile } from '../domain/trader-profile.js';
 import type { EntryRef, ExposureLedgerReader } from './exposure.ports.js';
+import type { TraderConfigSync } from './trader-config.sync.js';
 import type {
   StakeTierSource,
   TraderProfileRepository,
@@ -47,7 +48,13 @@ export class ExposureAdmin {
     private readonly _profiles: TraderProfileRepository,
     private readonly _tiers: StakeTierSource,
     private readonly _settings: TradingSettingsStore,
+    /** Báo trader xét lại kèo bị chặn vì hạn mức / số lệnh sau khi trả lại. */
+    private readonly _sync: TraderConfigSync | null = null,
   ) {}
+
+  private async _freed(profileId?: string): Promise<void> {
+    if (this._sync) await this._sync.broadcast('exposure_freed', profileId);
+  }
 
   async view(): Promise<ExposureView> {
     const [profiles, tiers, settings] = await Promise.all([
@@ -99,16 +106,14 @@ export class ExposureAdmin {
 
   async resetMatch(match: string): Promise<OperationStatus<{ keys: number }>> {
     if (!match.trim()) return { status: 'FAILED', reason: 'MATCH_REQUIRED' };
-    return {
-      status: 'SUCEED',
-      data: { keys: await this._reader.resetMatch(match) },
-    };
+    const keys = await this._reader.resetMatch(match);
+    await this._freed();
+    return { status: 'SUCEED', data: { keys } };
   }
 
   async resetEntry(e: EntryRef): Promise<OperationStatus<{ keys: number }>> {
-    return {
-      status: 'SUCEED',
-      data: { keys: await this._reader.resetEntry(e) },
-    };
+    const keys = await this._reader.resetEntry(e);
+    await this._freed(e.profileId);
+    return { status: 'SUCEED', data: { keys } };
   }
 }

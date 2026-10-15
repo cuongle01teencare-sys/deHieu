@@ -213,6 +213,9 @@ export function PaperTrades() {
                   </TD>
                   <TD>
                     <Pill tone={STATUS[t.status].tone}>{STATUS[t.status].label}</Pill>
+                    {(t.detail as { manual?: { by: string } }).manual ? (
+                      <span className="mt-0.5 block text-caption text-muted-fg">vào tay bởi {(t.detail as { manual: { by: string } }).manual.by}</span>
+                    ) : null}
                     {t.status !== 'paper_filled' && t.reason ? (
                       <Hint content={t.reason}>
                         <span className="mt-0.5 block max-w-48 cursor-default truncate text-caption text-muted-fg">{reasonLabel(t.reason)}</span>
