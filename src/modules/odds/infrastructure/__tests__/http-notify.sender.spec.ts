@@ -14,17 +14,17 @@ import type { ArbitrageSignal } from '../../domain/arbitrage-signal.js';
 
 const msg: NotifyMessage = {
   kind: 'issued',
-  title: 'Kèo mới · VIP · +5.00%',
+  title: 'New signal · VIP · +5.00%',
   description: '**CS2** · a <b> vs b',
   fields: [
     {
       name: '1. polymarket',
-      value: '**a** @ **2.100**\n[Mở trận](https://polymarket.com/event/x)',
+      value: '**a** @ **2.100**\n[Open match](https://polymarket.com/event/x)',
       inline: true,
     },
   ],
   links: [{ label: 'polymarket', url: 'https://polymarket.com/event/x' }],
-  footer: 'Hết hạn 15:00:00 · s1',
+  footer: 'Expires 15:00:00 · s1',
   at: 0,
 };
 
@@ -32,7 +32,7 @@ describe('HttpNotifySender', () => {
   it('Discord: embed có màu theo loại tin, field cạnh nhau, không ping ai', () => {
     const body = formatMessage.discord(msg);
     const [e] = body.embeds;
-    expect(e?.title).toBe('🟢 Kèo mới · VIP · +5.00%');
+    expect(e?.title).toBe('🟢 New signal · VIP · +5.00%');
     expect(e?.color).toBe(0x22c55e);
     expect(e).not.toHaveProperty('url'); // tiêu đề không dẫn lệch về một sàn
     expect(e?.fields[0]).toMatchObject({ name: '1. polymarket', inline: true });
@@ -47,11 +47,11 @@ describe('HttpNotifySender', () => {
     const tg = formatMessage.telegram(msg);
     expect(tg).toContain('<b>CS2</b> · a &lt;b&gt; vs b');
     expect(tg).toContain(
-      '<a href="https://polymarket.com/event/x">Mở trận</a>',
+      '<a href="https://polymarket.com/event/x">Open match</a>',
     );
     const sl = formatMessage.slack(msg);
     expect(sl).toContain('*CS2*');
-    expect(sl).toContain('<https://polymarket.com/event/x|Mở trận>');
+    expect(sl).toContain('<https://polymarket.com/event/x|Open match>');
   });
 
   it('kèo mới: chia vốn đúng để lời bằng nhau, đủ thông tin hai cửa', () => {
@@ -90,17 +90,17 @@ describe('HttpNotifySender', () => {
       { id: 't', name: 'VIP', minMargin: 0.05, maxMargin: null },
       false,
     );
-    expect(m.title).toBe('Kèo mới · VIP · +10.00%');
+    expect(m.title).toBe('New signal · VIP · +10.00%');
     expect(m.fields.map((f) => f.name)).toEqual([
-      'Cửa 1 · sptpub',
-      'Cửa 2 · polymarket',
-      'Lợi nhuận',
+      'Side 1 · sptpub',
+      'Side 2 · polymarket',
+      'Profit',
     ]);
-    expect(m.fields[0]?.value).toContain('vốn **50.0%**');
+    expect(m.fields[0]?.value).toContain('stake **50.0%**');
     // chỉ polymarket có link → không gắn link nào (không dẫn lệch về một sàn)
     expect(m.links).toEqual([]);
-    expect(m.fields.some((f) => f.value.includes('Mở trang'))).toBe(false);
-    expect(m.fields[2]?.value).toContain('nhận về **110.00**');
+    expect(m.fields.some((f) => f.value.includes('[Open '))).toBe(false);
+    expect(m.fields[2]?.value).toContain('returns **110.00**');
 
     const both = issuedMessage(
       {
@@ -115,7 +115,7 @@ describe('HttpNotifySender', () => {
     );
     expect(both.links.map((l) => l.label)).toEqual(['sptpub', 'polymarket']);
     expect(both.fields[0]?.value).toContain(
-      '[Mở trang sptpub](https://csgoempire.com/x)',
+      '[Open sptpub](https://csgoempire.com/x)',
     );
   });
 
@@ -160,17 +160,17 @@ describe('HttpNotifySender', () => {
       maxStartDriftMs: 20 * 60_000,
     };
     const m = cancelledMessage(sig, 's1', 'start_time_mismatch', 0, detail);
-    const f = m.fields.find((x) => x.name === 'Giờ bắt đầu lúc hủy');
+    const f = m.fields.find((x) => x.name === 'Start time at cancel');
     expect(f?.value).toContain(
-      'sptpub: **10:45 15/10** (lúc phát 10:00 15/10)',
+      'sptpub: **10:45 15/10** (at issue 10:00 15/10)',
     );
     expect(f?.value).toContain('polymarket: **10:00 15/10**');
-    expect(f?.value).toContain('Lệch **45 phút** · cho phép ≤ 20 phút');
+    expect(f?.value).toContain('Drift **45m** · allowed ≤ 20m');
     // lý do khác: không kèm giờ
     expect(
       cancelledMessage(sig, 's1', 'below_threshold', 0, detail).fields,
     ).toHaveLength(1);
-    expect(fmtDrift(80 * 60_000)).toBe('1 giờ 20 phút');
+    expect(fmtDrift(80 * 60_000)).toBe('1h 20m');
   });
 
   it('telegram: gọi Bot API sendMessage; 429 → chờ retry_after rồi thử lại', async () => {

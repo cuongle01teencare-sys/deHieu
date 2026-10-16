@@ -104,10 +104,10 @@ describe('Arbitrage notification routing', () => {
         .filter(({ message }) => message.kind !== 'cancelled')
         .map(({ message }) => message.title),
     ).toEqual([
-      'K\u00e8o m\u1edbi \u00b7 VIP \u00b7 +5.00%',
-      'K\u00e8o m\u1edbi \u00b7 SVIP \u00b7 +9.00%',
-      'K\u00e8o m\u1edbi \u00b7 VIP \u00b7 +5.00%',
-      'K\u00e8o c\u1eadp nh\u1eadt \u00b7 VIP \u00b7 +6.00%',
+      'New signal \u00b7 VIP \u00b7 +5.00%',
+      'New signal \u00b7 SVIP \u00b7 +9.00%',
+      'New signal \u00b7 VIP \u00b7 +5.00%',
+      'Updated signal \u00b7 VIP \u00b7 +6.00%',
     ]);
     expect(
       sent
@@ -115,8 +115,8 @@ describe('Arbitrage notification routing', () => {
         .map(({ message }) => message.fields[0].value),
     ).toEqual([
       // 5% → 9% sang kênh khác hạng: kênh cũ vẫn được báo hủy để không treo kèo
-      'c\u00f3 k\u00e8o t\u1ed1t h\u01a1n',
-      'k\u00e8o kh\u00f4ng c\u00f2n t\u1ed1t n\u1eefa',
+      'a better opportunity appeared',
+      'edge is no longer good',
     ]);
     expect(evaluator.stats()).toMatchObject({ issued: 4, cancelled: 3 });
   });

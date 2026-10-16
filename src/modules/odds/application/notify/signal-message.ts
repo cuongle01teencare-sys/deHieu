@@ -12,33 +12,33 @@ const SPORT: Readonly<Record<string, string>> = {
 };
 
 const CANCEL: Readonly<Record<CancelReason, string>> = {
-  below_threshold: 'lợi nhuận tụt dưới ngưỡng',
-  better_opportunity: 'có kèo tốt hơn',
-  margin_decreased: 'kèo không còn tốt nữa',
-  leg_suspended: 'một bên đang khóa odds',
-  leg_removed: 'một bên đã gỡ odds',
-  start_time_mismatch: 'giờ bắt đầu hai bên lệch nhau',
-  publisher_stopped: 'nguồn dữ liệu bị dừng',
-  phase_disabled: 'kênh live/prematch đang tắt',
-  match_expired: 'trận đã kết thúc',
-  missing_from_listing: 'market không còn trong danh sách',
+  below_threshold: 'profit fell below threshold',
+  better_opportunity: 'a better opportunity appeared',
+  margin_decreased: 'edge is no longer good',
+  leg_suspended: 'one side suspended its odds',
+  leg_removed: 'one side removed its odds',
+  start_time_mismatch: 'start times differ between sides',
+  publisher_stopped: 'data source stopped',
+  phase_disabled: 'live/pre-match channel is disabled',
+  match_expired: 'match has ended',
+  missing_from_listing: 'market is no longer listed',
 };
 
 export const marketLabel = (market: string): string => {
-  if (market === 'game-winner') return 'Thắng trận';
+  if (market === 'game-winner') return 'Match winner';
   const map = /^map-(\d+)-winner$/.exec(market);
-  if (map) return `Thắng map ${map[1]}`;
+  if (map) return `Map ${map[1]} winner`;
   const hcp = /^map-handicap-([mp])([\d.]+)$/.exec(market);
-  if (hcp) return `Chấp map ${hcp[1] === 'm' ? '-' : '+'}${hcp[2]}`;
+  if (hcp) return `Map handicap ${hcp[1] === 'm' ? '-' : '+'}${hcp[2]}`;
   const total = /^total-maps-([\d.]+)$/.exec(market);
-  if (total) return `Tổng map ${total[1]}`;
+  if (total) return `Total maps ${total[1]}`;
   return market;
 };
 
 export const pct = (margin: number): string => `${(margin * 100).toFixed(2)}%`;
 
 const time = (ms: number) =>
-  new Date(ms).toLocaleTimeString('vi-VN', {
+  new Date(ms).toLocaleTimeString('en-GB', {
     timeZone: 'Asia/Ho_Chi_Minh',
     hour12: false,
   });
@@ -62,9 +62,9 @@ const clock = (ms: number) => {
 /** ms → "45 phút" / "1 giờ 20 phút" / "30 giây". */
 export const fmtDrift = (ms: number): string => {
   const min = Math.round(ms / 60_000);
-  if (min < 1) return `${Math.round(ms / 1000)} giây`;
+  if (min < 1) return `${Math.round(ms / 1000)}s`;
   const h = Math.floor(min / 60);
-  return h ? `${h} giờ${min % 60 ? ` ${min % 60} phút` : ''}` : `${min} phút`;
+  return h ? `${h}h${min % 60 ? ` ${min % 60}m` : ''}` : `${min}m`;
 };
 
 /**
@@ -79,20 +79,20 @@ export function startTimesField(
   const lines = d.startTimes.map((t) => {
     const before = s?.legs.find((l) => l.tenant === t.tenant)?.startsAt;
     const moved = before !== undefined && before !== t.startsAt;
-    return `${t.tenant}: **${clock(t.startsAt)}**${moved ? ` (lúc phát ${clock(before)})` : ''}`;
+    return `${t.tenant}: **${clock(t.startsAt)}**${moved ? ` (at issue ${clock(before)})` : ''}`;
   });
   if (d.startDriftMs !== null)
     lines.push(
-      `Lệch **${fmtDrift(d.startDriftMs)}** · cho phép ≤ ${fmtDrift(d.maxStartDriftMs)}`,
+      `Drift **${fmtDrift(d.startDriftMs)}** · allowed ≤ ${fmtDrift(d.maxStartDriftMs)}`,
     );
-  return { name: 'Giờ bắt đầu lúc hủy', value: lines.join('\n') };
+  return { name: 'Start time at cancel', value: lines.join('\n') };
 }
 
 const matchLine = (s: ArbitrageSignal) =>
   `**${SPORT[s.sport] ?? s.sport}** · **${s.teams[0]}** vs **${s.teams[1]}**`;
 
 const phaseLabel = (s: ArbitrageSignal) =>
-  s.phase === 'live' ? 'Đang đánh (live)' : 'Trước trận';
+  s.phase === 'live' ? 'Live' : 'Pre-match';
 
 /** Link trang trận của từng cửa — chỉ dùng khi CẢ HAI cửa đều có, để không dẫn lệch về một bên. */
 const legUrls = (s: ArbitrageSignal): [string, string] | null => {
@@ -128,16 +128,16 @@ export function issuedMessage(
   const legField = (i: 0 | 1) => {
     const l = s.legs[i];
     return {
-      name: `Cửa ${i + 1} · ${l.tenant}`,
+      name: `Side ${i + 1} · ${l.tenant}`,
       value: [
-        `**${l.pick}**  ·  odds **${l.odds.toFixed(3)}**  ·  vốn **${split.shares[i].toFixed(1)}%**`,
-        ...(urls ? [`[Mở trang ${l.tenant}](${urls[i]})`] : []),
+        `**${l.pick}**  ·  odds **${l.odds.toFixed(3)}**  ·  stake **${split.shares[i].toFixed(1)}%**`,
+        ...(urls ? [`[Open ${l.tenant}](${urls[i]})`] : []),
       ].join('\n'),
     };
   };
   return {
     kind: replaces ? 'updated' : 'issued',
-    title: `${replaces ? 'Kèo cập nhật' : 'Kèo mới'}${tier ? ` · ${tier.name}` : ''} · +${pct(s.margin)}`,
+    title: `${replaces ? 'Updated signal' : 'New signal'}${tier ? ` · ${tier.name}` : ''} · +${pct(s.margin)}`,
     description: [
       matchLine(s),
       `${marketLabel(s.market)} · ${phaseLabel(s)}`,
@@ -146,14 +146,14 @@ export function issuedMessage(
       legField(0),
       legField(1),
       {
-        name: 'Lợi nhuận',
-        value: `**+${pct(s.margin)}**  ·  đặt 100 nhận về **${split.payoutPer100.toFixed(2)}**`,
+        name: 'Profit',
+        value: `**+${pct(s.margin)}**  ·  bet 100 returns **${split.payoutPer100.toFixed(2)}**`,
       },
     ],
     links: urls
       ? s.legs.map((l, i) => ({ label: l.tenant, url: urls[i] }))
       : [],
-    footer: `Hết hạn ${time(s.expiresAt)}  ·  id ${s.signalId}`,
+    footer: `Expires ${time(s.expiresAt)}  ·  id ${s.signalId}`,
     at: s.issuedAt,
   };
 }
@@ -170,15 +170,15 @@ export function cancelledMessage(
     reason === 'start_time_mismatch' ? startTimesField(s, detail) : null;
   return {
     kind: 'cancelled',
-    title: 'Kèo đã hủy',
+    title: 'Signal cancelled',
     description: s
       ? [
           matchLine(s),
-          `${marketLabel(s.market)} · ${phaseLabel(s)} · trước đó +${pct(s.margin)}`,
+          `${marketLabel(s.market)} · ${phaseLabel(s)} · previously +${pct(s.margin)}`,
         ].join('\n')
       : '',
     fields: [
-      { name: 'Lý do', value: CANCEL[reason] ?? reason },
+      { name: 'Reason', value: CANCEL[reason] ?? reason },
       ...(times ? [times] : []),
     ],
     links: [],
@@ -193,8 +193,8 @@ export function testMessage(
 ): NotifyMessage {
   return {
     kind: 'test',
-    title: 'Kiểm tra kết nối',
-    description: `Kênh **${channelName}** đã kết nối với hệ thống kèo.`,
+    title: 'Connection test',
+    description: `Channel **${channelName}** is connected to the signal system.`,
     fields: [],
     links: [],
     at,

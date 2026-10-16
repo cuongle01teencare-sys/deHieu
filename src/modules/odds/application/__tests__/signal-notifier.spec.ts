@@ -151,7 +151,7 @@ describe('SignalNotifier — phân kênh theo hạng kèo admin tự đặt', ()
     ]);
     await t.notifier.drain();
     expect(t.sender.sent.map((x) => `${x.channel}:${x.message.title}`)).toEqual(
-      ['vip:Kèo mới · Kim cương · +6.00%', 'vip:Kèo đã hủy'],
+      ['vip:New signal · Kim cương · +6.00%', 'vip:Signal cancelled'],
     );
   });
 
@@ -164,8 +164,8 @@ describe('SignalNotifier — phân kênh theo hạng kèo admin tự đặt', ()
     ]);
     await t.notifier.drain();
     expect(t.sender.sent.map((x) => x.message.title)).toEqual([
-      'Kèo mới · Kim cương · +6.00%',
-      'Kèo cập nhật · Kim cương · +7.00%',
+      'New signal · Kim cương · +6.00%',
+      'Updated signal · Kim cương · +7.00%',
     ]);
   });
 
@@ -189,9 +189,9 @@ describe('SignalNotifier — phân kênh theo hạng kèo admin tự đặt', ()
     ]);
     await t.notifier.drain();
     expect(t.sender.sent.map((x) => x.message.title)).toEqual([
-      'Kèo mới · Kim cương · +6.00%',
-      'Kèo cập nhật · Kim cương · +7.00%',
-      'Kèo đã hủy',
+      'New signal · Kim cương · +6.00%',
+      'Updated signal · Kim cương · +7.00%',
+      'Signal cancelled',
     ]);
   });
 
