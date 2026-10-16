@@ -91,6 +91,15 @@ async function fetchInPage(
 
 const norm = (v: string | null | undefined) => v?.trim().toLowerCase() || null;
 
+/** Trang đang ở csgoempire.com (fetch đường dẫn tương đối / cookie đúng nguồn). */
+function onEmpire(page: Page) {
+  try {
+    return /(^|\.)csgoempire\.com$/.test(new URL(page.url()).hostname);
+  } catch {
+    return false;
+  }
+}
+
 const good = (r: ApiRead | null) => !!r && !!r.json && r.status < 400;
 
 interface Watched {
@@ -240,9 +249,14 @@ export class EmpireBalanceWatcher {
         // trang Match betting, lấy đúng phản hồi metadata trang tự gọi và cập nhật header.
         let meta: ApiRead | null = null;
         let rates: ApiRead | null = null;
-        if (w.headers) {
-          meta = await fetchInPage(page, META, w.headers);
-          if (good(meta)) rates = await fetchInPage(page, RATES, w.headers);
+        // Chỉ fetch nhanh khi trang đang ở csgoempire.com (Chrome vừa mở lại thì còn about:blank).
+        if (w.headers && onEmpire(page)) {
+          try {
+            meta = await fetchInPage(page, META, w.headers);
+            if (good(meta)) rates = await fetchInPage(page, RATES, w.headers);
+          } catch {
+            meta = rates = null; // fetch hỏng (trang đổi / đóng): mở lại trang bên dưới
+          }
         }
         if (!meta || !rates || !good(meta) || !good(rates))
           ({ meta, rates } = await this.reloadPage(page, w));
@@ -359,6 +373,8 @@ export class EmpireBalanceWatcher {
     const context = w.context;
     w.context = null;
     w.page = null;
+    // header gắn với trang đã đóng: Chrome mở lại phải lấy header mới từ trang
+    w.headers = null;
     if (context) await context.close().catch(() => undefined);
     // chắc chắn nhả hồ sơ kể cả khi đang mở dở
     await closeProfile(profile).catch(() => undefined);

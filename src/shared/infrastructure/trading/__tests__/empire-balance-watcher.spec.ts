@@ -60,7 +60,8 @@ function browser(...scenarios: Scenario[]) {
   }[] = [];
   let n = 0;
   const page = {
-    goto: vi.fn((_url: string, _o?: unknown) => {
+    goto: vi.fn((url: string, _o?: unknown) => {
+      page.current = url;
       const sc = scenarios[Math.min(n++, scenarios.length - 1)] ?? ok;
       const out: R[] = [];
       if (sc.meta) out.push(response('/api/v2/metadata', sc.meta));
@@ -83,6 +84,13 @@ function browser(...scenarios: Scenario[]) {
     fetchOk: true,
     evaluate: vi.fn(
       (_fn: unknown, arg: { url: string; headers: Record<string, string> }) => {
+        // như Chrome thật: trang trắng không fetch được đường dẫn tương đối
+        if (!page.current.includes('csgoempire.com'))
+          return Promise.reject(
+            new TypeError(
+              `Failed to execute 'fetch' on 'Window': Failed to parse URL from ${arg.url}`,
+            ),
+          );
         const allowed =
           page.fetchOk &&
           arg.headers['x-empire-device-identifier'] === 'dev-123';
@@ -99,6 +107,9 @@ function browser(...scenarios: Scenario[]) {
         });
       },
     ),
+    /** Địa chỉ hiện tại: about:blank tới khi goto. */
+    current: 'about:blank',
+    url: () => page.current,
     isClosed: () => false,
   };
   const context = {
@@ -188,6 +199,37 @@ describe('Chrome nền đọc số dư csgoempire', () => {
     );
     // đúng tài khoản (khác hoa/thường, khoảng trắng) thì đọc bình thường
     expect((await w.readNow('empire-9', ' Me@Example.test ')).cash).toBe(50);
+    await w.closeAll();
+  });
+
+  it('Chrome mở lại sau khi nhường hồ sơ: không fetch trên about:blank bằng header cũ, mở lại trang Match betting', async () => {
+    const b = browser(ok);
+    const w = new EmpireBalanceWatcher(sink());
+    await w.readNow('empire-10');
+    w.want('empire-10');
+    await w.pause('empire-10');
+    w.resume('empire-10');
+    // Chrome mới: trang trắng
+    b.page.current = 'about:blank';
+    b.page.evaluate.mockClear();
+    b.page.goto.mockClear();
+    expect((await w.readNow('empire-10')).cash).toBe(50);
+    expect(b.page.goto).toHaveBeenCalledWith(
+      'https://csgoempire.com/match-betting',
+      expect.anything(),
+    );
+    await w.closeAll();
+  });
+
+  it('fetch trong trang ném lỗi (trang đổi): không báo lỗi ngay mà mở lại trang và đọc', async () => {
+    const b = browser(ok);
+    const w = new EmpireBalanceWatcher(sink());
+    await w.readNow('empire-11');
+    b.page.evaluate.mockRejectedValueOnce(
+      new TypeError("Failed to execute 'fetch' on 'Window'"),
+    );
+    expect((await w.readNow('empire-11')).cash).toBe(50);
+    expect(b.page.goto).toHaveBeenCalledTimes(2);
     await w.closeAll();
   });
 
