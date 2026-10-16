@@ -40,6 +40,7 @@ export const REASON_LABEL: Record<string, string> = {
   CASH_UNAVAILABLE: 'Không đọc được Cash — hủy cả hai chân',
   LIVE_RECONCILIATION_REQUIRED: 'Dừng để đối soát hai chân',
   CSGOEMPIRE_SESSION_EXPIRED: 'Phiên csgoempire hết hạn',
+  CSGOEMPIRE_SESSION_REJECTED: 'BetBy từ chối phiên — app tự lấy phiên mới',
   CSGOEMPIRE_CLOUDFLARE_BLOCKED:
     'Cloudflare của csgoempire chặn yêu cầu đọc số dư — hủy cả hai chân',
   VENUE_NOT_JSON: 'Sàn trả trang web thay vì dữ liệu — hủy cả hai chân',

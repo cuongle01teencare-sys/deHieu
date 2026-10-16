@@ -80,6 +80,10 @@ export interface LaunchProfileOptions {
    * khi có chỗ hoặc bị hủy (đăng nhập tay); làm mới phiên nền đặt hạn để không treo hàng đợi.
    */
   slotWaitMs?: number;
+  /**
+   * Mở Chrome CÓ giao diện (không đăng nhập). Chrome ẩn (headless) tự xưng "HeadlessChrome" và bị
+   * csgoempire từ chối API; trên server có giao diện vẫn vô hình vì chạy trong Xvfb.
+   */
   visible?: boolean;
 }
 
@@ -369,6 +373,26 @@ export class EmpireSessions {
       release(browserProfile: string): void;
     },
   ) {}
+
+  /**
+   * Worker báo BetBy từ chối JWT này (401 khi còn hạn): nếu đó vẫn là JWT đang giữ thì lần get() kế
+   * tiếp phải làm mới (mở Chrome lấy JWT mới), không dùng tiếp. `tokenHash` = sha256(JWT) 16 ký tự
+   * đầu (không truyền JWT qua kênh worker → backend). Trả true nếu đã đánh dấu.
+   */
+  invalidate(browserProfile: string, tokenHash: string): boolean {
+    const cached = this.cache.get(browserProfile);
+    if (!cached?.session) return false;
+    if (tokenFingerprint(cached.session.token) !== tokenHash) return false;
+    // nhiều lệnh cùng bị 401 trong lúc làm mới: chỉ ép làm mới tối đa 1 lần / phút
+    const now = Date.now();
+    if (cached.invalidatedAt && now - cached.invalidatedAt < 60_000)
+      return false;
+    cached.invalidatedAt = now;
+    cached.refreshAt = 0;
+    // không dùng tiếp JWT đã bị từ chối khi làm mới lỗi tạm thời
+    cached.retryAt = 0;
+    return true;
+  }
 
   async get(
     browserProfile: string,
@@ -889,6 +913,11 @@ export class EmpireSessions {
   }
 }
 
+/** Dấu vân tay JWT (sha256, 16 ký tự hex đầu): để worker báo JWT nào bị từ chối mà không gửi JWT. */
+export function tokenFingerprint(token: string): string {
+  return createHash('sha256').update(token).digest('hex').slice(0, 16);
+}
+
 interface CacheEntry {
   revision: string;
   refreshAt: number;
@@ -896,6 +925,8 @@ interface CacheEntry {
   error?: string;
   /** Lần làm mới vừa hỏng tạm thời: chưa thử lại trước mốc này. */
   retryAt?: number;
+  /** Lần gần nhất worker báo JWT đang giữ bị BetBy từ chối (giới hạn ép làm mới). */
+  invalidatedAt?: number;
   lastError?: string;
 }
 

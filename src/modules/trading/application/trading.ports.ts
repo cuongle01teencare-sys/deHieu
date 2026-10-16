@@ -147,4 +147,6 @@ export interface TraderExecutionConfigProvider {
     config: TraderRuntimeConfig,
     accounts: readonly TradingAccount[],
   ): Promise<TraderRuntimeConfig>;
+  /** BetBy từ chối JWT (dấu vân tay) của hồ sơ này: lần prepare kế tiếp phải lấy phiên mới. */
+  sessionRejected?(browserProfile: string, tokenHash: string): void;
 }

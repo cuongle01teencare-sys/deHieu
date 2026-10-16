@@ -348,6 +348,24 @@ describe('live pair execution', () => {
     for (const submit of s.submit) expect(submit).not.toHaveBeenCalled();
   });
 
+  it('BetBy từ chối JWT còn hạn (REJECTED): hủy lệnh nhưng KHÔNG khóa tài khoản — app tự lấy phiên mới', async () => {
+    const s = setup([100, 100]);
+    s.venues.empire.mockRejectedValueOnce(
+      new Error(
+        'CSGOEMPIRE_SESSION_REJECTED: BetBy từ chối phiên — BetBy /api/v1/coupon/max HTTP 401 — Unauthorized · JWT còn 10 phút',
+      ),
+    );
+    const r = await s.executor.execute(
+      credentials,
+      plan,
+      new AbortController().signal,
+    );
+    expect(r.status).toBe('cancelled');
+    expect(r.reason).toMatch(/^CSGOEMPIRE_SESSION_REJECTED: /);
+    expect(s.locks.halt).not.toHaveBeenCalled();
+    for (const submit of s.submit) expect(submit).not.toHaveBeenCalled();
+  });
+
   it('does not send expired signals', async () => {
     const s = setup();
     expect(

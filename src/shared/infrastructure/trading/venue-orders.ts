@@ -17,6 +17,9 @@ import { createHash } from 'node:crypto';
 import type { LiveTradingConfig } from '../../application/live-trading.js';
 import { AesGcmSecretCipher } from './secret-cipher.js';
 import { SESSION_EXPIRED } from './empire-session.js';
+
+export const SESSION_REJECTED =
+  'CSGOEMPIRE_SESSION_REJECTED: BetBy từ chối phiên';
 import { accountResource, type EmpireBalanceRead } from './account-lock.js';
 
 export interface OrderPlan {
@@ -106,7 +109,9 @@ async function json(
     throw new Error(`CSGOEMPIRE_HTTP_REJECTED: HTTP ${response.status}`);
   if (response.status === 401 || response.status === 403)
     throw new Error(
-      `${SESSION_EXPIRED} — BetBy ${endpoint(url)} HTTP ${response.status}${await bodyHint(response)}`,
+      // JWT còn hạn mà BetBy từ chối = JWT bị vô hiệu (thường do site vừa cấp JWT mới khi làm mới
+      // phiên): KHÔNG khóa tài khoản — worker xin phiên mới, app tự lấy lại.
+      `${SESSION_REJECTED} — BetBy ${endpoint(url)} HTTP ${response.status}${await bodyHint(response)}`,
     );
   if (!response.ok)
     throw new Error(
@@ -551,7 +556,7 @@ export class ApiVenueOrders implements VenueOrders {
           // 401 khi JWT còn hạn = JWT bị BetBy vô hiệu (không phải hết giờ): ghi kèm thời hạn để phân biệt
           if (
             e instanceof Error &&
-            e.message.startsWith('CSGOEMPIRE_SESSION_EXPIRED')
+            e.message.startsWith('CSGOEMPIRE_SESSION_REJECTED')
           )
             throw new Error(
               `${e.message} · JWT còn ${Math.round((c.expiresAt - Date.now()) / 60_000)} phút`,

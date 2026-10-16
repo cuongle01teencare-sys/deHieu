@@ -1146,6 +1146,23 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
                 pf?.filledAmount ?? 0,
               )
             : 0;
+        if (reasonCode(execution.reason) === 'CSGOEMPIRE_SESSION_REJECTED') {
+          // BetBy từ chối JWT còn hạn (thường: vừa làm mới phiên, JWT cũ bị vô hiệu). Không khóa:
+          // báo backend JWT nào bị từ chối (chỉ dấu vân tay) để lấy phiên mới rồi gửi lại cấu hình.
+          ctx.emit(
+            {
+              profileId,
+              rejectedSession: {
+                browserProfile: cfg.execution!.empire.browserProfile,
+                tokenHash: createHash('sha256')
+                  .update(cfg.execution!.empire.token)
+                  .digest('hex')
+                  .slice(0, 16),
+              },
+            },
+            CH_CONFIG_REQUEST,
+          );
+        }
         if (execution.status === 'partial') {
           this._config = {
             ...cfg,

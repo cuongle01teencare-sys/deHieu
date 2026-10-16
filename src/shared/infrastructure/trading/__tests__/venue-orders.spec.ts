@@ -367,7 +367,7 @@ describe('direct venue APIs', () => {
         new AbortController().signal,
       ),
     ).rejects.toThrow(
-      /CSGOEMPIRE_SESSION_EXPIRED: .*BetBy \/api\/v1\/coupon\/max HTTP 401 — Unauthorized · JWT còn 30 phút/,
+      /CSGOEMPIRE_SESSION_REJECTED: .*BetBy \/api\/v1\/coupon\/max HTTP 401 — Unauthorized · JWT còn 30 phút/,
     );
   });
 

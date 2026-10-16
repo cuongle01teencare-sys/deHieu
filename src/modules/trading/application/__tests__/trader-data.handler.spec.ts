@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { TraderDataHandler } from '../trader-data.handler.js';
 import type { TradeAttempt } from '../trade-attempt.js';
 import type { TradeAttemptRepository } from '../trading.ports.js';
@@ -30,6 +30,33 @@ const payload = {
 };
 
 describe('TraderDataHandler', () => {
+  it('worker xin cấu hình kèm JWT bị BetBy từ chối → chuyển dấu vân tay cho bước lấy phiên mới', async () => {
+    const answer = vi.fn(() => Promise.resolve());
+    const h = new TraderDataHandler(
+      {} as TradeAttemptRepository,
+      { answer } as unknown as TraderConfigSync,
+    );
+    await h.execute({
+      taskId: 't',
+      kind: 'trader.arbitrage',
+      channel: 'config_request',
+      payload: {
+        profileId: 'p',
+        rejectedSession: { browserProfile: 'empire-test', tokenHash: 'abc' },
+      },
+    });
+    await h.execute({
+      taskId: 't',
+      kind: 'trader.arbitrage',
+      channel: 'config_request',
+      payload: { profileId: 'p' },
+    });
+    expect(answer.mock.calls).toEqual([
+      ['t', 'p', { browserProfile: 'empire-test', tokenHash: 'abc' }],
+      ['t', 'p', undefined],
+    ]);
+  });
+
   it('database lỗi tạm thời → thử lại tới khi ghi được', async () => {
     let calls = 0;
     const saved: TradeAttempt[] = [];

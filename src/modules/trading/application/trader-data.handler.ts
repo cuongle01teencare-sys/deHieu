@@ -48,10 +48,24 @@ export class TraderDataHandler {
   async execute(msg: TraderDataMessage): Promise<void> {
     if (msg.kind !== TRADER_TASK_KIND) return;
     if (msg.channel === 'config_request') {
-      const profileId = (msg.payload as { profileId?: unknown } | null)
-        ?.profileId;
+      const payload = msg.payload as {
+        profileId?: unknown;
+        rejectedSession?: { browserProfile?: unknown; tokenHash?: unknown };
+      } | null;
+      const profileId = payload?.profileId;
+      const rejected = payload?.rejectedSession;
       if (typeof profileId === 'string' && profileId)
-        await this._sync.answer(msg.taskId, profileId);
+        await this._sync.answer(
+          msg.taskId,
+          profileId,
+          typeof rejected?.browserProfile === 'string' &&
+            typeof rejected.tokenHash === 'string'
+            ? {
+                browserProfile: rejected.browserProfile,
+                tokenHash: rejected.tokenHash,
+              }
+            : undefined,
+        );
       return;
     }
     if (msg.channel === 'oneclick') {

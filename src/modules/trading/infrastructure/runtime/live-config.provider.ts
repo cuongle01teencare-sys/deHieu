@@ -384,6 +384,13 @@ export class LiveConfigProvider
       checkedAt: Date.now(),
     };
   }
+  sessionRejected(browserProfile: string, tokenHash: string) {
+    if (this.sessions?.invalidate(browserProfile, tokenHash))
+      this.logger.warn(
+        `csgoempire ${browserProfile}: BetBy từ chối JWT còn hạn — lấy phiên mới ngay`,
+      );
+  }
+
   async clearReconciliation(
     accounts: readonly TradingAccount[],
   ): Promise<string[]> {

@@ -69,7 +69,17 @@ export class TraderConfigSync {
   }
 
   /** Task hỏi cấu hình: luôn gửi (task vừa khởi động chưa có gì). */
-  async answer(taskId: string, profileId: string): Promise<void> {
+  async answer(
+    taskId: string,
+    profileId: string,
+    /** Worker báo BetBy từ chối JWT này → lấy phiên mới trước khi trả cấu hình. */
+    rejectedSession?: { browserProfile: string; tokenHash: string },
+  ): Promise<void> {
+    if (rejectedSession)
+      this._execution?.sessionRejected?.(
+        rejectedSession.browserProfile,
+        rejectedSession.tokenHash,
+      );
     await this._push(taskId, await this.configFor(profileId, true), true);
   }
 

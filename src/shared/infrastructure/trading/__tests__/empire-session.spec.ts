@@ -7,6 +7,7 @@ import {
   describeCause,
   EmpireSessions,
   launchProfile,
+  tokenFingerprint,
 } from '../empire-session.js';
 import type { AccountLock } from '../account-lock.js';
 import type { Response as BrowserResponse } from 'playwright';
@@ -369,6 +370,25 @@ describe('csgoempire session refresh', () => {
     expect(mocks.launch).toHaveBeenCalledTimes(2);
     expect(s.close).toHaveBeenCalledTimes(2);
     expect(await s.sessions.get('empire-test')).toBe(next);
+  });
+
+  it('BetBy từ chối JWT đang giữ (worker báo dấu vân tay): lần get kế tiếp lấy JWT mới; JWT khác / báo dồn trong 1 phút thì bỏ qua', async () => {
+    const s = setup();
+    const first = await s.sessions.get('empire-test');
+    expect(s.sessions.invalidate('empire-test', 'khong-khop')).toBe(false);
+    expect(
+      s.sessions.invalidate('empire-test', tokenFingerprint(first.token)),
+    ).toBe(true);
+    // nhiều lệnh cùng bị 401: chỉ ép làm mới một lần
+    expect(
+      s.sessions.invalidate('empire-test', tokenFingerprint(first.token)),
+    ).toBe(false);
+    const next = await s.sessions.get('empire-test');
+    expect(next.token).not.toBe(first.token);
+    expect(mocks.launch).toHaveBeenCalledTimes(2);
+    // JWT mới chưa bị từ chối: dùng lại, không mở Chrome nữa
+    expect(await s.sessions.get('empire-test')).toBe(next);
+    expect(mocks.launch).toHaveBeenCalledTimes(2);
   });
 
   it('does not open Chromium on every poll for tokens with a lifetime below 10 minutes', async () => {
