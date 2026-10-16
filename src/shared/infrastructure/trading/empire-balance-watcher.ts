@@ -20,6 +20,10 @@ interface ApiRead {
 }
 
 const PAGE = 'https://csgoempire.com/match-betting';
+/** Tỷ giá coin → USD gần như cố định: đọc lại mỗi phút là đủ. */
+const RATES_TTL_MS = 60_000;
+/** Đọc lỗi liên tiếp: giãn nhịp đọc nền tối đa tới mức này. */
+const MAX_BACKOFF_MS = 60_000;
 /** Trang xin JWT BetBy (luồng phiên của bot dùng); Chrome nền KHÔNG được gọi. */
 const BETBY_SESSION_PATH = '/api/v2/match-betting/betby/user-session/';
 const META = '/api/v2/metadata';
@@ -113,6 +117,12 @@ interface Watched {
   page: Page | null;
   opening: Promise<void> | null;
   reading: Promise<EmpireBalanceSnapshot> | null;
+  /** Tỷ giá đọc gần nhất (gần như không đổi): dùng lại tới RATES_TTL_MS để mỗi nhịp chỉ 1 request. */
+  rates: { read: ApiRead; at: number } | null;
+  /** Số lần đọc lỗi liên tiếp → giãn nhịp đọc nền (không dội sàn khi đang bị từ chối). */
+  failures: number;
+  /** Nhịp đọc nền kế tiếp không sớm hơn mốc này (giãn khi lỗi). */
+  nextAt: number;
   /** Số request phiên BetBy / sptpub đã chặn (chẩn đoán). */
   blockedBetby: number;
   /** Header riêng của trang (lấy từ request trang tự gửi); null = chưa có, phải mở lại trang. */
@@ -135,7 +145,7 @@ export class EmpireBalanceWatcher {
   constructor(
     private readonly sink: EmpireBalanceSink,
     private readonly log: (message: string) => void = () => undefined,
-    private readonly intervalMs = 20_000,
+    private readonly intervalMs = 2_000,
     private readonly idleMs = 120_000,
   ) {}
 
@@ -214,6 +224,9 @@ export class EmpireBalanceWatcher {
         headers: null,
         expected: null,
         blockedBetby: 0,
+        rates: null,
+        failures: 0,
+        nextAt: 0,
         last: null,
       };
       this.watched.set(profile, w);
@@ -232,6 +245,7 @@ export class EmpireBalanceWatcher {
   private async tick(profile: string) {
     const w = this.watched.get(profile);
     if (!w || w.paused || w.reading) return;
+    if (w.wantedUntil > Date.now() && Date.now() < w.nextAt) return; // đang giãn nhịp vì lỗi
     if (w.wantedUntil <= Date.now()) {
       // không còn profile chạy thật nào dùng: đóng Chrome cho nhẹ máy
       await this.closeBrowser(profile, w);
@@ -258,7 +272,11 @@ export class EmpireBalanceWatcher {
         if (w.headers && onEmpire(page)) {
           try {
             meta = await fetchInPage(page, META, w.headers);
-            if (good(meta)) rates = await fetchInPage(page, RATES, w.headers);
+            if (good(meta))
+              rates =
+                w.rates && Date.now() - w.rates.at < RATES_TTL_MS
+                  ? w.rates.read
+                  : await fetchInPage(page, RATES, w.headers);
           } catch {
             meta = rates = null; // fetch hỏng (trang đổi / đóng): mở lại trang bên dưới
           }
@@ -273,6 +291,7 @@ export class EmpireBalanceWatcher {
           throw new Error(
             `CSGOEMPIRE_BALANCE_READ_FAILED: exchange-rates HTTP ${rates.status}`,
           );
+        if (w.rates?.read !== rates) w.rates = { read: rates, at: Date.now() };
         const b = empireBalanceFrom(meta.json, rates.json);
         // Đúng tài khoản đã lưu? Sàn trả username/email mà không khớp → sai tài khoản: lưu lỗi để
         // worker TỪ CHỐI vào lệnh (kiểm lại mỗi lần đọc, không chỉ lúc bấm nút kiểm tra).
@@ -298,6 +317,8 @@ export class EmpireBalanceWatcher {
         void _e;
         await this.sink.saveEmpireBalance(resource, stored);
         w.last = stored;
+        w.failures = 0;
+        w.nextAt = 0;
         return snapshot;
       } catch (e) {
         const code =
@@ -307,7 +328,16 @@ export class EmpireBalanceWatcher {
         await this.sink
           .saveEmpireBalanceError(resource, code)
           .catch(() => undefined);
-        this.log(`csgoempire ${profile}: Chrome nền đọc số dư lỗi — ${code}`);
+        // lỗi liên tiếp: giãn nhịp đọc nền (2s → 4s → 8s … tối đa 60s) để không dội sàn
+        w.failures++;
+        const wait = Math.min(
+          MAX_BACKOFF_MS,
+          this.intervalMs * 2 ** w.failures,
+        );
+        w.nextAt = Date.now() + wait;
+        this.log(
+          `csgoempire ${profile}: Chrome nền đọc số dư lỗi — ${code} (đọc lại sau ${Math.round(wait / 1000)} giây)`,
+        );
         // trang hỏng / bị đăng xuất: đóng để lần sau mở lại sạch
         await this.closeBrowser(profile, w);
         throw e;

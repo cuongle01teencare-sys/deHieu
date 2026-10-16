@@ -167,7 +167,8 @@ describe('Chrome nền đọc số dư csgoempire', () => {
     await w.readNow('empire-7');
     expect((await w.readNow('empire-7')).cash).toBe(50);
     expect(b.page.goto).toHaveBeenCalledOnce();
-    expect(b.page.evaluate).toHaveBeenCalledTimes(2);
+    // chỉ gọi metadata: tỷ giá (gần như cố định) dùng lại từ lần đọc trước trong 60 giây
+    expect(b.page.evaluate).toHaveBeenCalledOnce();
     const sent = b.page.evaluate.mock.calls[0][1];
     expect(sent.url).toBe('/api/v2/metadata');
     expect(sent.headers).toEqual({
@@ -258,6 +259,30 @@ describe('Chrome nền đọc số dư csgoempire', () => {
       blocked('https://csgoempire.com/api/v2/metadata/exchange-rates'),
     ).toBe(false);
     expect(blocked('https://csgoempire.com/match-betting')).toBe(false);
+    await w.closeAll();
+  });
+
+  it('đọc nhanh (mặc định 2 giây); lỗi liên tiếp thì giãn nhịp 4s → 8s… để không dội sàn, đọc được thì về nhịp thường', async () => {
+    vi.useFakeTimers();
+    browser({ meta: [403, null] });
+    const s = sink();
+    const w = new EmpireBalanceWatcher(s, () => undefined, 2_000, 600_000);
+    w.want('empire-13');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.launch).toHaveBeenCalledTimes(1); // lần 1 lỗi → chờ 4s
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mocks.launch).toHaveBeenCalledTimes(1); // nhịp 2s bị bỏ qua vì đang giãn
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mocks.launch).toHaveBeenCalledTimes(2); // lần 2 lỗi → chờ 8s
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(mocks.launch).toHaveBeenCalledTimes(2);
+    // sàn hết từ chối
+    browser(ok);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(mocks.launch).toHaveBeenCalledTimes(3);
+    expect(s.saveEmpireBalance).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(s.saveEmpireBalance).toHaveBeenCalledTimes(2); // về nhịp 2 giây
     await w.closeAll();
   });
 

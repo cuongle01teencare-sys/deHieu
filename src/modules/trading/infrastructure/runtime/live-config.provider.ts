@@ -53,8 +53,14 @@ export class LiveConfigProvider
       ? new AccountLock(process.env.REDIS_URL)
       : null;
     this.balances = this.locks
-      ? new EmpireBalanceWatcher(this.locks, (message) =>
-          this.logger.warn(message),
+      ? new EmpireBalanceWatcher(
+          this.locks,
+          (message) => this.logger.warn(message),
+          // nhịp đọc số dư csgoempire (ms); mặc định 2 giây, tối thiểu 1 giây
+          Math.max(
+            1_000,
+            Number(process.env.TRADING_EMPIRE_BALANCE_INTERVAL_MS) || 2_000,
+          ),
         )
       : null;
     this.sessions = this.locks
