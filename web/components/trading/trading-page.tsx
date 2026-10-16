@@ -24,10 +24,10 @@ export function TradingPage() {
     <div>
       <PageHeader
         title="Auto trade"
-        description="Trader là consumer của kèo: mỗi profile (1 csgoempire + 1 ví Polymarket) nhận cùng một kèo, chọn tiền theo hạng kèo, đọc sổ lệnh Polymarket thật. Hiện chạy chế độ giấy — chưa đặt lệnh."
+        description="Mỗi profile gồm một tài khoản csgoempire, một ví Polymarket và bảng vốn theo hạng kèo. Auto trade và On click dùng chung cấu hình; chọn chế độ giấy hoặc thật trong profile."
         meta={
           <>
-            <Pill tone="warn">Chế độ giấy</Pill>
+            <Pill tone="muted">Theo cấu hình profile</Pill>
             {settings.data && !settings.data.secretKeyConfigured ? (
               <span className="flex items-center gap-1.5 text-caption text-warn">
                 <ShieldAlert className="size-3.5" /> Chưa đặt TRADING_SECRET_KEY
@@ -41,7 +41,7 @@ export function TradingPage() {
           value={tab}
           onChange={setTab}
           options={[
-            { value: 'trades', label: 'Lệnh giấy' },
+            { value: 'trades', label: 'Lệnh giao dịch' },
             { value: 'profiles', label: 'Profile' },
             { value: 'accounts', label: 'Tài khoản' },
             { value: 'settings', label: 'Giới hạn chung' },
@@ -50,10 +50,17 @@ export function TradingPage() {
       </div>
       {tab === 'trades' ? <PaperTrades /> : null}
       {tab === 'profiles' ? <TraderProfiles /> : null}
-      {tab === 'accounts' ? <TradingAccounts secretKeyConfigured={settings.data?.secretKeyConfigured ?? null} /> : null}
+      {tab === 'accounts' ? (
+        <TradingAccounts
+          secretKeyConfigured={settings.data?.secretKeyConfigured ?? null}
+        />
+      ) : null}
       {tab === 'settings' ? (
         <>
-          <GlobalLimits settings={settings.data} onSaved={() => void settings.reload()} />
+          <GlobalLimits
+            settings={settings.data}
+            onSaved={() => void settings.reload()}
+          />
           <ExposureLedger />
         </>
       ) : null}
@@ -61,7 +68,13 @@ export function TradingPage() {
   );
 }
 
-function GlobalLimits({ settings, onSaved }: { settings: TradingSettings | null; onSaved: () => void }) {
+function GlobalLimits({
+  settings,
+  onSaved,
+}: {
+  settings: TradingSettings | null;
+  onSaved: () => void;
+}) {
   const manage = useGuard('trading:manage');
   const mutate = useMutate();
   const [cap, setCap] = useState(500);
@@ -72,7 +85,10 @@ function GlobalLimits({ settings, onSaved }: { settings: TradingSettings | null;
   const dirty = !!settings && cap !== settings.matchExposureCapUsd;
 
   return (
-    <Section title="Giới hạn chung" description="Áp cho MỌI profile và tài khoản cùng lúc (đếm chung qua Redis).">
+    <Section
+      title="Giới hạn chung"
+      description="Áp cho MỌI profile và tài khoản cùng lúc (đếm chung qua Redis)."
+    >
       <div className="max-w-md">
         <Field
           label="Tổng tiền tối đa mỗi trận ($)"
@@ -83,7 +99,11 @@ function GlobalLimits({ settings, onSaved }: { settings: TradingSettings | null;
               : 'Đang tắt: không giới hạn tổng theo trận (mỗi profile vẫn có giới hạn riêng nếu đặt).'
           }
         >
-          <NumInput id="cap" value={cap} onValue={(v) => v !== undefined && setCap(v)} />
+          <NumInput
+            id="cap"
+            value={cap}
+            onValue={(v) => v !== undefined && setCap(v)}
+          />
         </Field>
         <div className="mt-6 flex gap-2">
           <Button
@@ -93,7 +113,11 @@ function GlobalLimits({ settings, onSaved }: { settings: TradingSettings | null;
             disabledReason={manage}
             onClick={async () => {
               setBusy(true);
-              const r = await mutate('trading/settings', { method: 'PUT', body: { matchExposureCapUsd: cap } }, 'Đã lưu giới hạn chung');
+              const r = await mutate(
+                'trading/settings',
+                { method: 'PUT', body: { matchExposureCapUsd: cap } },
+                'Đã lưu giới hạn chung',
+              );
               setBusy(false);
               if (r !== null) onSaved();
             }}
@@ -101,7 +125,10 @@ function GlobalLimits({ settings, onSaved }: { settings: TradingSettings | null;
             Lưu
           </Button>
           {dirty ? (
-            <Button variant="ghost" onClick={() => settings && setCap(settings.matchExposureCapUsd)}>
+            <Button
+              variant="ghost"
+              onClick={() => settings && setCap(settings.matchExposureCapUsd)}
+            >
               Hoàn tác
             </Button>
           ) : null}

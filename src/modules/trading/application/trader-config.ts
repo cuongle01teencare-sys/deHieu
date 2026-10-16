@@ -8,6 +8,7 @@ import type {
   TraderProfile,
 } from '../domain/trader-profile.js';
 import type { TradingSettings } from '../domain/trading-settings.js';
+import type { LiveTradingConfig } from '../../../shared/application/live-trading.js';
 
 export const TRADER_CONFIG_VERSION = 1 as const;
 
@@ -17,6 +18,7 @@ export const TRADER_CONFIG_VERSION = 1 as const;
  * (ghi lý do), để admin thấy vì sao trader đứng yên.
  */
 export interface TraderRuntimeConfig {
+  readonly execution?: LiveTradingConfig;
   readonly v: typeof TRADER_CONFIG_VERSION;
   readonly profileId: string;
   readonly profileName: string;

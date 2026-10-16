@@ -21,6 +21,9 @@ import {
   TRADER_TASK_GATEWAY,
   TRADING_ACCOUNT_REPOSITORY,
   TRADING_SETTINGS_STORE,
+  EMPIRE_BROWSER_GATEWAY,
+  TRADING_ACCOUNT_CHECKER,
+  type TradingAccountChecker,
   type SecretCipher,
   type StakeTierSource,
   type TradeAttemptRepository,
@@ -41,6 +44,19 @@ import {
 } from './infrastructure/persistence/drizzle/drizzle-trading.repositories.js';
 import { AesGcmSecretCipher } from './infrastructure/security/aes-gcm.secret-cipher.js';
 import { SupervisorTraderTaskGateway } from './infrastructure/runtime/supervisor-trader-task.gateway.js';
+import { LiveConfigProvider } from './infrastructure/runtime/live-config.provider.js';
+import { EmpireLoginAdmin } from './application/empire-login-admin.js';
+import { AccountCheckAdmin } from './application/account-check-admin.js';
+import { AccountReportAdmin } from './application/account-report-admin.js';
+import {
+  POLYMARKET_RESOLUTION_SOURCE,
+  SettlementAdmin,
+  TRADE_SETTLEMENT_REPOSITORY,
+  type PolymarketResolutionSource,
+  type TradeSettlementRepository,
+} from './application/trade-settlement.js';
+import { GammaPolymarketResolutions } from './infrastructure/settlement/gamma-polymarket-resolutions.js';
+import type { EmpireBrowserGateway } from './application/trading.ports.js';
 // presentation
 import { TradingController } from './presentation/trading.controller.js';
 import { ExposureAdmin } from './application/exposure-admin.js';
@@ -68,6 +84,8 @@ import type { Redis } from 'ioredis';
 
 /** Đối chiếu định kỳ cấu hình các task trader (bắt cả thay đổi hạng kèo ở module odds). */
 const CONFIG_RECONCILE_MS = 30_000;
+/** Nhịp đối soát kết quả lệnh với market Polymarket đã resolve. */
+const SETTLEMENT_MS = 10 * 60_000;
 /** Nhịp gỡ kèo On click đã hết hạn (ghi lịch sử). */
 const ONE_CLICK_SWEEP_MS = 10_000;
 
@@ -79,6 +97,25 @@ const ONE_CLICK_SWEEP_MS = 10_000;
   imports: [TasksModule, OddsModule],
   controllers: [TradingController],
   providers: [
+    LiveConfigProvider,
+    { provide: EMPIRE_BROWSER_GATEWAY, useExisting: LiveConfigProvider },
+    { provide: TRADING_ACCOUNT_CHECKER, useExisting: LiveConfigProvider },
+    {
+      provide: AccountCheckAdmin,
+      inject: [TRADING_ACCOUNT_REPOSITORY, TRADING_ACCOUNT_CHECKER],
+      useFactory: (
+        accounts: TradingAccountRepository,
+        checker: TradingAccountChecker,
+      ) => new AccountCheckAdmin(accounts, checker),
+    },
+    {
+      provide: EmpireLoginAdmin,
+      inject: [TRADING_ACCOUNT_REPOSITORY, EMPIRE_BROWSER_GATEWAY],
+      useFactory: (
+        accounts: TradingAccountRepository,
+        browser: EmpireBrowserGateway,
+      ) => new EmpireLoginAdmin(accounts, browser),
+    },
     {
       provide: TRADING_ACCOUNT_REPOSITORY,
       inject: [TransactionContext],
@@ -96,6 +133,33 @@ const ONE_CLICK_SWEEP_MS = 10_000;
       inject: [TransactionContext],
       useFactory: (tx: TransactionContext) =>
         new DrizzleTradeAttemptRepository(tx),
+    },
+    {
+      provide: TRADE_SETTLEMENT_REPOSITORY,
+      useExisting: TRADE_ATTEMPT_REPOSITORY,
+    },
+    {
+      provide: POLYMARKET_RESOLUTION_SOURCE,
+      useFactory: () => new GammaPolymarketResolutions(),
+    },
+    {
+      provide: SettlementAdmin,
+      inject: [
+        TRADE_SETTLEMENT_REPOSITORY,
+        TRADE_ATTEMPT_REPOSITORY,
+        POLYMARKET_RESOLUTION_SOURCE,
+      ],
+      useFactory: (
+        r: TradeSettlementRepository,
+        t: TradeAttemptRepository,
+        src: PolymarketResolutionSource,
+      ) => new SettlementAdmin(r, t, src),
+    },
+    {
+      provide: AccountReportAdmin,
+      inject: [TRADING_ACCOUNT_REPOSITORY, TRADE_SETTLEMENT_REPOSITORY],
+      useFactory: (a: TradingAccountRepository, r: TradeSettlementRepository) =>
+        new AccountReportAdmin(a, r),
     },
     {
       provide: TRADING_SETTINGS_STORE,
@@ -130,6 +194,7 @@ const ONE_CLICK_SWEEP_MS = 10_000;
         TRADING_SETTINGS_STORE,
         STAKE_TIER_SOURCE,
         TRADER_TASK_GATEWAY,
+        LiveConfigProvider,
       ],
       useFactory: (
         a: TradingAccountRepository,
@@ -137,10 +202,17 @@ const ONE_CLICK_SWEEP_MS = 10_000;
         s: TradingSettingsStore,
         t: StakeTierSource,
         g: TraderTaskGateway,
+        execution: LiveConfigProvider,
       ) => {
         const logger = new Logger('TraderConfig');
-        return new TraderConfigSync(a, p, s, t, g, (e) =>
-          logger.warn(`không gửi được cấu hình: ${String(e)}`),
+        return new TraderConfigSync(
+          a,
+          p,
+          s,
+          t,
+          g,
+          (e) => logger.warn(`không gửi được cấu hình: ${String(e)}`),
+          execution,
         );
       },
     },
@@ -263,6 +335,9 @@ export class TradingModule implements OnModuleInit, OnApplicationShutdown {
   private readonly _logger = new Logger('Trading');
   private _reconcile: ReturnType<typeof setInterval> | null = null;
   private _sweep: ReturnType<typeof setInterval> | null = null;
+  private _settle: ReturnType<typeof setInterval> | null = null;
+  /** Lượt đối chiếu cấu hình đang chạy (lượt chậm vì mở Chrome thì nhịp sau bỏ qua, không chồng lên). */
+  private _reconciling: Promise<unknown> | null = null;
 
   constructor(
     @Inject(TaskSupervisor) private readonly _supervisor: TaskSupervisor,
@@ -271,6 +346,7 @@ export class TradingModule implements OnModuleInit, OnApplicationShutdown {
     @Inject(OneClickBoard) private readonly _board: OneClickBoard,
     @Inject(OneClickHistoryRecorder)
     private readonly _ocHistory: OneClickHistoryRecorder,
+    @Inject(SettlementAdmin) private readonly _settlement: SettlementAdmin,
   ) {}
 
   async onModuleInit() {
@@ -299,13 +375,45 @@ export class TradingModule implements OnModuleInit, OnApplicationShutdown {
         );
       }
     });
+    const settle = () =>
+      this._settlement
+        .run()
+        .then((r) => {
+          if (r.settled)
+            this._logger.log(
+              `đối soát: ${r.settled}/${r.checked} lệnh có kết quả`,
+            );
+        })
+        .catch((e: unknown) => {
+          // drizzle gói lỗi Postgres thật (vd thiếu bảng) vào `cause`: in lý do, không in cả câu SQL
+          const cause = e instanceof Error ? e.cause : undefined;
+          const why =
+            cause instanceof Error
+              ? cause.message
+              : e instanceof Error
+                ? e.message.split('\n')[0]
+                : String(e);
+          this._logger.warn(
+            `đối soát kết quả lệnh lỗi: ${why}${/trade_settlements/.test(why) ? ' — chưa chạy migration? Chạy: pnpm db:migrate' : ''}`,
+          );
+        });
+    this._settle = setInterval(() => void settle(), SETTLEMENT_MS);
+    this._settle.unref();
+    setTimeout(() => void settle(), 60_000).unref();
     this._reconcile = setInterval(() => {
-      this._sync.pushAll().catch((e: unknown) => this._logger.warn(String(e)));
+      if (this._reconciling) return;
+      this._reconciling = this._sync
+        .pushAll()
+        .catch((e: unknown) => this._logger.warn(String(e)))
+        .finally(() => {
+          this._reconciling = null;
+        });
     }, CONFIG_RECONCILE_MS);
   }
 
   onApplicationShutdown() {
     if (this._reconcile) clearInterval(this._reconcile);
     if (this._sweep) clearInterval(this._sweep);
+    if (this._settle) clearInterval(this._settle);
   }
 }

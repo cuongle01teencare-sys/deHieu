@@ -58,18 +58,21 @@ function Diagnostics() {
   const os = d.workers.find((w) => w.scope.startsWith('/push/onesignal'));
   const verdict = !os
     ? 'Chưa có service worker của OneSignal (/push/onesignal/) → trình duyệt chưa cài được worker. Tải lại trang; nếu vẫn vậy, file /push/onesignal/OneSignalSDKWorker.js có thể không tải được.'
-    : !os.push
-      ? 'Worker OneSignal đã cài nhưng trình duyệt chưa tạo đăng ký push → lỗi ở phía trình duyệt / iOS. Bấm "Đăng ký lại"; nếu vẫn vậy: xóa Arb Ops khỏi Màn hình chính, thêm lại, mở lại.'
-      : !d.onesignalId || !d.subscriptionId
-        ? 'Trình duyệt đã có đăng ký push nhưng máy chủ OneSignal chưa nhận → kiểm tra Site URL ở OneSignal (Web → Settings) khớp đúng ' + d.origin + ' và kiểu tích hợp là Custom Code.'
-        : !d.optedIn
-          ? 'Đã có mã nhưng chưa opt-in → bấm "Đăng ký lại".'
-          : 'Đăng ký ổn.';
+    : !d.onesignalId && !d.log.some((l) => l.includes('subscribe được gọi'))
+      ? `SDK chưa kết nối được máy chủ OneSignal nên chưa xin đăng ký push → gần như chắc chắn Site URL ở OneSignal (Web → Settings) KHÔNG khớp đúng ${d.origin} (phải y hệt, có https://, không có / cuối), hoặc web dùng sai App ID.`
+      : !os.push
+        ? 'Trình duyệt / iOS từ chối tạo đăng ký push (xem lỗi bên dưới). Thử: xóa Arb Ops khỏi Màn hình chính, thêm lại, mở lại, bấm "Đăng ký lại".'
+        : !d.onesignalId || !d.subscriptionId
+          ? 'Trình duyệt đã có đăng ký push nhưng máy chủ OneSignal chưa nhận → kiểm tra Site URL ở OneSignal (Web → Settings) khớp đúng ' + d.origin + ' và kiểu tích hợp là Custom Code.'
+          : !d.optedIn
+            ? 'Đã có mã nhưng chưa opt-in → bấm "Đăng ký lại".'
+            : 'Đăng ký ổn.';
   const lines = [
     `origin ${d.origin} · standalone ${yes(d.standalone)} · sdk ${d.sdk} · quyền ${d.permission}`,
     `OneSignal user ${d.onesignalId ?? '—'} · subscription ${d.subscriptionId ?? '—'} · optedIn ${yes(d.optedIn)} · token ${yes(d.hasToken)}`,
     `workers: ${d.workers.map((w) => `${w.scope} (chạy ${yes(w.active)}, push ${yes(w.push)})`).join(' · ') || 'không có'}`,
     d.lastError ? `lỗi gần nhất: ${d.lastError}` : null,
+    d.log.length ? `nhật ký: ${d.log.join(' | ')}` : 'nhật ký: (chưa có — bấm "Đăng ký lại")',
   ].filter((x): x is string => !!x);
   return (
     <div className="mt-2 rounded-[8px] border border-line p-2">

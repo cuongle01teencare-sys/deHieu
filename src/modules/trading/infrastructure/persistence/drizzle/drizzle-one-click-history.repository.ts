@@ -146,7 +146,10 @@ export class DrizzleOneClickHistoryRepository implements OneClickHistoryReposito
     const manual = like(t.endReason, 'manual:%');
     const cancelled = like(t.endReason, 'cancelled:%');
     const expired = eq(t.endReason, 'expired');
-    const auto = like(t.endReason, 'result:paper_filled%');
+    const auto = or(
+      like(t.endReason, 'result:paper_filled%'),
+      like(t.endReason, 'result:filled%'),
+    )!;
     switch (q.outcome) {
       case 'open':
         w.push(isNull(t.endedAt));

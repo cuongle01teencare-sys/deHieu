@@ -4,6 +4,7 @@ import type {
   TraderTaskGateway,
   TradingAccountRepository,
   TradingSettingsStore,
+  TraderExecutionConfigProvider,
 } from './trading.ports.js';
 import {
   buildTraderConfig,
@@ -27,21 +28,49 @@ export class TraderConfigSync {
     private readonly _tiers: StakeTierSource,
     private readonly _gateway: TraderTaskGateway,
     private readonly _onError: (e: unknown) => void = () => undefined,
+    private readonly _execution?: TraderExecutionConfigProvider,
+    /**
+     * Số profile chuẩn bị cấu hình cùng lúc. Chuẩn bị chế độ thật có thể phải mở Chrome làm mới phiên
+     * (vài chục giây): chạy song song có giới hạn để một tài khoản chậm không làm trễ các profile khác.
+     */
+    private readonly _concurrency = 3,
   ) {}
 
-  async configFor(profileId: string): Promise<TraderRuntimeConfig> {
+  async configFor(
+    profileId: string,
+    forWorker = false,
+  ): Promise<TraderRuntimeConfig> {
     const [profile, accounts, tiers, settings] = await Promise.all([
       this._profiles.get(profileId),
       this._accounts.list(),
       this._tiers.listTiers(),
       this._settings.get(),
     ]);
-    return buildTraderConfig({ profileId, profile, accounts, tiers, settings });
+    let config = buildTraderConfig({
+      profileId,
+      profile,
+      accounts,
+      tiers,
+      settings,
+    });
+    if (config.active && config.mode === 'live') {
+      config = this._execution
+        ? await this._execution.prepare(config, accounts)
+        : {
+            ...config,
+            active: false,
+            inactiveReason: 'LIVE_EXECUTION_UNAVAILABLE',
+          };
+    }
+    if (forWorker) return config;
+    const publicConfig = { ...config };
+    delete publicConfig.execution;
+    return publicConfig;
   }
 
   /** Task hỏi cấu hình: luôn gửi (task vừa khởi động chưa có gì). */
   async answer(taskId: string, profileId: string): Promise<void> {
-    await this._push(taskId, await this.configFor(profileId), true);
+    await this._push(taskId, await this.configFor(profileId, true), true);
   }
 
   /**
@@ -93,16 +122,30 @@ export class TraderConfigSync {
     for (const id of this._sent.keys())
       if (!alive.has(id)) this._sent.delete(id);
     let n = 0;
-    for (const r of running) {
-      try {
-        if (
-          await this._push(r.taskId, await this.configFor(r.profileId), force)
-        )
-          n++;
-      } catch (e) {
-        this._onError(e);
+    let next = 0;
+    const lane = async () => {
+      while (next < running.length) {
+        const r = running[next++];
+        try {
+          if (
+            await this._push(
+              r.taskId,
+              await this.configFor(r.profileId, true),
+              force,
+            )
+          )
+            n++;
+        } catch (e) {
+          this._onError(e);
+        }
       }
-    }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(Math.max(1, this._concurrency), running.length) },
+        lane,
+      ),
+    );
     return n;
   }
 

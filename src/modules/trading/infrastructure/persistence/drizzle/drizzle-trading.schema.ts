@@ -84,6 +84,14 @@ export const drizzleTradeAttemptsTable = pgTable(
   },
   (t) => [
     index('trade_attempts_profile_created_idx').on(t.profileId, t.createdAt),
+    index('trade_attempts_empire_account_created_idx').on(
+      t.csgoempireAccountId,
+      t.createdAt,
+    ),
+    index('trade_attempts_poly_account_created_idx').on(
+      t.polymarketAccountId,
+      t.createdAt,
+    ),
     index('trade_attempts_created_idx').on(t.createdAt),
     index('trade_attempts_signal_idx').on(t.signalId),
   ],
@@ -126,6 +134,37 @@ export const drizzleTradeLegsTable = pgTable(
     index('trade_legs_venue_created_idx').on(t.venue, t.createdAt),
     index('trade_legs_account_created_idx').on(t.accountId, t.createdAt),
   ],
+);
+
+/**
+ * Kết quả một lệnh sau khi trận xong (mỗi lệnh một dòng). Lấy tự động từ market Polymarket đã
+ * resolve (chân csgoempire suy ra là cửa ngược lại) hoặc người sửa tay.
+ */
+export const drizzleTradeSettlementsTable = pgTable(
+  'trade_settlements',
+  {
+    attemptId: text('attempt_id').primaryKey(),
+    profileId: text('profile_id').notNull(),
+    mode: text('mode').notNull(),
+    /** 'polymarket' | 'csgoempire' = cửa thắng; 'void' = trận hủy / hoàn tiền. */
+    winner: text('winner').notNull(),
+    /** Tiền nhận về mỗi share Polymarket (1 thắng, 0 thua, 0.5 hòa/hủy...). */
+    polyPrice: doublePrecision('poly_price').notNull(),
+    /** 'won' | 'lost' | 'void'. */
+    bookResult: text('book_result').notNull(),
+    bookPnl: doublePrecision('book_pnl').notNull(),
+    polyPnl: doublePrecision('poly_pnl').notNull(),
+    pnl: doublePrecision('pnl').notNull(),
+    /** 'polymarket' (tự động) | 'manual'. */
+    source: text('source').notNull(),
+    by: text('by'),
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [index('trade_settlements_profile_idx').on(t.profileId)],
 );
 
 /** Cấu hình chung của auto trade, key → JSON (tách khỏi app_settings của module odds). */

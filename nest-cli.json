@@ -3,6 +3,8 @@
   "collection": "@nestjs/schematics",
   "sourceRoot": "src",
   "compilerOptions": {
-    "deleteOutDir": true
+    "deleteOutDir": true,
+    "assets": ["shared/infrastructure/trading/*.py"],
+    "watchAssets": true
   }
 }

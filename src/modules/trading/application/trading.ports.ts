@@ -10,6 +10,10 @@ import type {
   TradeStatsQuery,
 } from './trade-attempt.js';
 import type { TraderRuntimeConfig } from './trader-config.js';
+import type {
+  EmpireLoginStatus,
+  EmpireJwtPreview,
+} from '../../../shared/application/empire-login.js';
 
 export interface TradingAccountRepository {
   list(): Promise<TradingAccount[]>;
@@ -77,3 +81,50 @@ export interface TraderTaskGateway {
   command(taskId: string, name: string, data?: unknown): Promise<boolean>;
 }
 export const TRADER_TASK_GATEWAY = Symbol('TRADER_TASK_GATEWAY');
+export const EMPIRE_BROWSER_GATEWAY = Symbol('EMPIRE_BROWSER_GATEWAY');
+export interface EmpireBrowserGateway {
+  startLogin(account: TradingAccount): EmpireLoginStatus;
+  loginStatus(browserProfile: string): EmpireLoginStatus | null;
+  cancelLogin(browserProfile: string): Promise<EmpireLoginStatus | null>;
+  takeJwtPreview(
+    browserProfile: string,
+    attemptId: string,
+  ): EmpireJwtPreview | null;
+}
+
+/** Kết quả đọc tài khoản thật + Cash trực tiếp từ sàn (dùng đúng phiên/khóa bot vào lệnh). */
+export interface TradingAccountCheck {
+  readonly accountId: string;
+  readonly venue: 'csgoempire' | 'polymarket';
+  readonly label: string;
+  /** csgoempire: user id; polymarket: ví ký lệnh. */
+  readonly remoteId: string | null;
+  /** csgoempire: tên Steam / username trên sàn. */
+  readonly remoteName: string | null;
+  /** polymarket: ví giữ tiền (funder hoặc ví ký). */
+  readonly wallet: string | null;
+  /** Cash dùng được (USD). */
+  readonly cash: number;
+  /** polymarket: allowance USDC cho sàn. */
+  readonly allowance: number | null;
+  /**
+   * Khớp với cấu hình đã lưu? csgoempire: tài khoản đăng nhập trên sàn = email/username đã lưu;
+   * polymarket: private key ký ra đúng địa chỉ ví đã lưu. null = không đủ dữ liệu để so.
+   */
+  readonly matchesConfig: boolean | null;
+  readonly checkedAt: number;
+}
+
+export const TRADING_ACCOUNT_CHECKER = Symbol('TRADING_ACCOUNT_CHECKER');
+export interface TradingAccountChecker {
+  /** Ném lỗi có mã (vd CSGOEMPIRE_SESSION_EXPIRED) khi không đọc được. */
+  check(account: TradingAccount): Promise<TradingAccountCheck>;
+}
+
+/** Infrastructure prepares private worker credentials and live account readiness. */
+export interface TraderExecutionConfigProvider {
+  prepare(
+    config: TraderRuntimeConfig,
+    accounts: readonly TradingAccount[],
+  ): Promise<TraderRuntimeConfig>;
+}

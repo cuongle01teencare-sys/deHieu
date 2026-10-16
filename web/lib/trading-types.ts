@@ -5,7 +5,11 @@ export type TradingVenue = 'csgoempire' | 'polymarket';
 
 export type TradingAccountConfig =
   | { venue: 'csgoempire'; browserProfile: string }
-  | { venue: 'polymarket'; walletAddress: string; funderAddress: string | null };
+  | {
+      venue: 'polymarket';
+      walletAddress: string;
+      funderAddress: string | null;
+    };
 
 export interface TradingAccountView {
   id: string;
@@ -16,6 +20,31 @@ export interface TradingAccountView {
   /** Đã lưu private key (mã hóa) hay chưa. Key không bao giờ được trả về. */
   hasSecret: boolean;
   usedBy: string[];
+}
+
+/** Tài khoản thật + Cash đọc trực tiếp từ sàn (POST trading/accounts/:id/check). */
+export interface TradingAccountCheck {
+  accountId: string;
+  venue: TradingVenue;
+  label: string;
+  /** csgoempire: user id; polymarket: ví ký lệnh. */
+  remoteId: string | null;
+  /** csgoempire: tên Steam / username trên sàn. */
+  remoteName: string | null;
+  /** polymarket: ví giữ tiền. */
+  wallet: string | null;
+  cash: number;
+  allowance: number | null;
+  /** Khớp cấu hình đã lưu (email/username csgoempire; key ↔ ví Polymarket). null = không so được. */
+  matchesConfig: boolean | null;
+  checkedAt: number;
+}
+
+/** Tài khoản thật sàn trả về lúc vào lệnh. */
+export interface VenueAccountIdentity {
+  id: string | null;
+  name: string | null;
+  wallet: string | null;
 }
 
 export type StakeTrend = 'flat' | 'up' | 'down' | 'custom';
@@ -86,10 +115,19 @@ export interface RiskLimits {
   oneClickMinPrice: number;
 }
 
-export const DEFAULT_RISK: RiskLimits = { minNetMargin: 0.01, matchCapUsd: 0, maxSignalAgeMs: 3_000, maxEntriesPerTier: 1, ignoreCancelReasons: ['better_opportunity'], markets: null, oneClickMinPrice: 0.5 };
+export const DEFAULT_RISK: RiskLimits = {
+  minNetMargin: 0.01,
+  matchCapUsd: 0,
+  maxSignalAgeMs: 3_000,
+  maxEntriesPerTier: 1,
+  ignoreCancelReasons: ['better_opportunity'],
+  markets: null,
+  oneClickMinPrice: 0.5,
+};
 
 /** Kết quả của kèo On click (lọc lịch sử). */
-export type OneClickOutcome = 'open' | 'manual' | 'cancelled' | 'expired' | 'auto' | 'other';
+export type OneClickOutcome =
+  'open' | 'manual' | 'cancelled' | 'expired' | 'auto' | 'other';
 
 /** GET /trading/oneclick/history — mỗi profile × kèo một dòng. */
 export interface OneClickHistoryEntry {
@@ -131,7 +169,7 @@ export interface TraderProfile {
   id: string;
   name: string;
   enabled: boolean;
-  mode: 'paper';
+  mode: 'paper' | 'live';
   csgoempireAccountId: string;
   polymarketAccountId: string;
   stakePlan: StakePlan;
@@ -152,7 +190,8 @@ export interface TradingSettings {
   secretKeyConfigured: boolean;
 }
 
-export type TradeStatus = 'paper_filled' | 'skipped' | 'cancelled' | 'error';
+export type TradeStatus =
+  'paper_filled' | 'filled' | 'partial' | 'skipped' | 'cancelled' | 'error';
 
 export interface TradeLeg {
   tenant: string;
@@ -178,6 +217,20 @@ export interface DepthLevel {
 
 /** Phần `detail` worker ghi (các trường có thể thiếu tùy kết quả). */
 export interface TradeDetail {
+  cash?: {
+    venue: string;
+    available: number;
+    required: number;
+    /** Tài khoản thật đọc từ sàn ngay trước khi gửi lệnh. */
+    account?: VenueAccountIdentity;
+  }[];
+  /** Tài khoản trong cấu hình profile lúc vào lệnh. */
+  accounts?: {
+    csgoempire: { id: string; label: string } | null;
+    polymarket: { id: string; label: string } | null;
+  };
+  submitted?: boolean;
+  feeEstimated?: boolean;
   signalAgeMs?: number;
   targetStake?: number | null;
   bestAsk?: number | null;
@@ -193,11 +246,20 @@ export interface TradeDetail {
     targetShares: number;
     maxStakeAtEdge: number;
   };
-  sizing?: { targetStake: number; minStake: number; minShares: number; minNetMargin: number };
+  sizing?: {
+    targetStake: number;
+    minStake: number;
+    minShares: number;
+    minNetMargin: number;
+  };
   cancelledAfterMs?: number;
   bookAt?: number | null;
   /** Kèo bị hủy khi trader đang tính. ignored = lý do được bỏ qua nên vẫn vào tiếp. */
-  cancel?: { reason: string; ignored: boolean; detail: import('./types').SignalCloseDetail | null };
+  cancel?: {
+    reason: string;
+    ignored: boolean;
+    detail: import('./types').SignalCloseDetail | null;
+  };
   /** Người vào lệnh tay ở On click (không phải bot). */
   manual?: { by: string };
   /** Kèo chuyển On click: giá bán thấp nhất lúc đó và ngưỡng của profile. */
@@ -221,7 +283,15 @@ export interface TradeAttempt {
   signalMargin: number;
   tierName: string | null;
   book: (TradeLeg & { stake: number }) | null;
-  polymarket: (TradeLeg & { tokenId: string; shares: number; avgPrice: number; fee: number; cost: number }) | null;
+  polymarket:
+    | (TradeLeg & {
+        tokenId: string;
+        shares: number;
+        avgPrice: number;
+        fee: number;
+        cost: number;
+      })
+    | null;
   totalCost: number;
   payout: number;
   profit: number;
@@ -232,7 +302,12 @@ export interface TradeAttempt {
   csgoempireAccountId: string | null;
   polymarketAccountId: string | null;
   /** Mốc thời gian (ms epoch): kèo phát → worker nhận → đọc xong sổ lệnh → quyết định. */
-  timing: { signalIssuedAt: number; receivedAt: number; marketDataAt: number | null; decidedAt: number } | null;
+  timing: {
+    signalIssuedAt: number;
+    receivedAt: number;
+    marketDataAt: number | null;
+    decidedAt: number;
+  } | null;
   legs: TradeLegRecord[];
 }
 
@@ -281,7 +356,13 @@ export interface ExposureMatchView {
   /** Giới hạn chung; 0 = tắt. */
   capUsd: number;
   ttlMs: number | null;
-  profiles: { profileId: string; profileName: string | null; usedUsd: number; capUsd: number; ttlMs: number | null }[];
+  profiles: {
+    profileId: string;
+    profileName: string | null;
+    usedUsd: number;
+    capUsd: number;
+    ttlMs: number | null;
+  }[];
 }
 
 export interface ExposureEntryView {
@@ -301,4 +382,95 @@ export interface ExposureView {
   error: string | null;
   matches: ExposureMatchView[];
   entries: ExposureEntryView[];
+}
+
+/** Báo cáo tài khoản (GET trading/accounts/:id/report). */
+export type ReportMode = 'live' | 'shadow' | 'paper';
+export type ReportPeriod = 'day' | 'week' | 'month' | 'quarter' | 'year';
+export type SettleWinner = 'polymarket' | 'csgoempire' | 'void';
+
+export interface ReportBucket {
+  key: string;
+  trades: number;
+  settled: number;
+  staked: number;
+  legPnl: number;
+  pairPnl: number;
+  expected: number;
+  legWins: number;
+  legLosses: number;
+}
+
+export interface ReportLeg {
+  venue: TradingVenue;
+  pick: string;
+  amount: number;
+  price: number;
+  cost: number;
+  result: 'won' | 'lost' | 'void' | null;
+  pnl: number | null;
+}
+
+export interface ReportTrade {
+  id: string;
+  createdAt: number;
+  mode: string;
+  status: string;
+  profileId: string;
+  room: string;
+  market: string;
+  teams: [string, string];
+  leg: ReportLeg;
+  other: ReportLeg;
+  expected: number;
+  pairPnl: number | null;
+  settlement: {
+    winner: SettleWinner;
+    source: 'polymarket' | 'manual';
+    by: string | null;
+    resolvedAt: number;
+    polyPrice: number;
+  } | null;
+  pairedWith: string | null;
+}
+
+export interface ModeSummary {
+  trades: number;
+  settled: number;
+  staked: number;
+  totalCost: number;
+  expected: number;
+  legPnl: number;
+  pairPnl: number;
+}
+
+export interface AccountReport {
+  accountId: string;
+  venue: TradingVenue;
+  label: string;
+  timeZone: string;
+  modes: ReportMode[];
+  generatedAt: number;
+  truncated: boolean;
+  totals: ModeSummary & {
+    legWins: number;
+    legLosses: number;
+    legVoids: number;
+    bestLeg: number | null;
+    worstLeg: number | null;
+  };
+  series: Record<ReportPeriod, ReportBucket[]>;
+  compare: {
+    byMode: Record<ReportMode, ModeSummary>;
+    paired: {
+      count: number;
+      liveExpected: number;
+      shadowExpected: number;
+      bothSettled: number;
+      livePnl: number;
+      shadowPnl: number;
+      shadowOnly: number;
+    };
+  };
+  trades: ReportTrade[];
 }

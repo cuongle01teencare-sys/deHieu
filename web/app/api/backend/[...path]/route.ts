@@ -7,7 +7,10 @@ import { decodePathSegment } from '@/lib/match-links';
  * BFF: trình duyệt gọi /api/backend/<path> bằng cookie phiên; server Next.js gắn token API
  * của người dùng rồi chuyển tiếp tới backend. Token không bao giờ tới trình duyệt.
  */
-async function handle(req: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
+async function handle(
+  req: NextRequest,
+  ctx: { params: Promise<{ path: string[] }> },
+) {
   const session = await getSession();
   if (!session.username)
     return NextResponse.json({ message: 'Chưa đăng nhập' }, { status: 401 });
@@ -30,10 +33,15 @@ async function handle(req: NextRequest, ctx: { params: Promise<{ path: string[] 
       req.nextUrl.search,
       body,
     );
-    return NextResponse.json(r.body, { status: r.status });
+    return NextResponse.json(r.body, {
+      status: r.status,
+      headers: { 'Cache-Control': 'private, no-store' },
+    });
   } catch (e) {
     return NextResponse.json(
-      { message: `Không gọi được backend: ${e instanceof Error ? e.message : String(e)}` },
+      {
+        message: `Không gọi được backend: ${e instanceof Error ? e.message : String(e)}`,
+      },
       { status: 502 },
     );
   }

@@ -1,7 +1,7 @@
 import { validateStakePlan, type StakePlan } from './stake-plan.js';
 
-/** Chế độ chạy. Hiện chỉ có giấy (paper): đọc sổ lệnh thật, ghi lãi/lỗ giả định, không đặt lệnh. */
-export const TRADER_MODES = ['paper'] as const;
+/** Paper mô phỏng; live thực thi hai chân qua API. */
+export const TRADER_MODES = ['paper', 'live'] as const;
 export type TraderMode = (typeof TRADER_MODES)[number];
 
 /**

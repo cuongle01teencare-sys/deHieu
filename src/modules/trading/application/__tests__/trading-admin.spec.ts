@@ -258,6 +258,51 @@ describe('TradingAdmin + TraderConfigSync', () => {
     });
   });
 
+  it('encrypts csgoempire credentials, never returns them, and retains them on an ordinary edit', async () => {
+    const result = await admin.saveAccount(null, {
+      label: 'Auto login',
+      enabled: true,
+      config: { venue: 'csgoempire', browserProfile: 'auto-login' },
+      loginUsername: 'saved-user',
+      loginPassword: ' password with spaces ',
+    });
+    if (result.status !== 'SUCEED') throw new Error('setup');
+    expect(result.data.hasSecret).toBe(true);
+    expect(JSON.stringify(result.data)).not.toMatch(
+      /saved-user|password with spaces/,
+    );
+    const encrypted = accounts.rows.get(result.data.id)?.secretCipher;
+    expect(encrypted).toBe(
+      'enc({"username":"saved-user","password":" password with spaces "})',
+    );
+    await admin.saveAccount(result.data.id, {
+      label: 'Renamed',
+      enabled: true,
+      config: result.data.config,
+    });
+    expect(accounts.rows.get(result.data.id)?.secretCipher).toBe(encrypted);
+    expect(JSON.stringify(await admin.listAccounts())).not.toMatch(
+      /saved-user|password with spaces/,
+    );
+  });
+
+  it('requires both login fields and a master encryption key', async () => {
+    const input = {
+      label: 'Auto login',
+      enabled: true,
+      config: { venue: 'csgoempire' as const, browserProfile: 'auto-login' },
+      loginUsername: 'user',
+    };
+    expect(await admin.saveAccount(null, input)).toMatchObject({
+      status: 'FAILED',
+    });
+    make(false);
+    expect(
+      await admin.saveAccount(null, { ...input, loginPassword: 'password' }),
+    ).toMatchObject({ status: 'FAILED' });
+    expect(accounts.rows.size).toBe(0);
+  });
+
   it('không có TRADING_SECRET_KEY → từ chối lưu private key', async () => {
     make(false);
     const r = await admin.saveAccount(null, {
@@ -284,6 +329,96 @@ describe('TradingAdmin + TraderConfigSync', () => {
     const ok = await admin.saveProfile(null, profileInput(empire.id, poly.id));
     expect(ok.status).toBe('SUCEED');
     expect((await admin.deleteAccount(empire.id)).status).toBe('FAILED');
+  });
+
+  it('nhiều tài khoản mỗi sàn: mỗi profile nhận đúng cặp của mình, không lẫn chéo', async () => {
+    const ids: Record<string, string> = {};
+    for (const n of [1, 2, 3]) {
+      const e = await admin.saveAccount(null, {
+        label: `Empire ${n}`,
+        enabled: true,
+        config: { venue: 'csgoempire', browserProfile: `empire-${n}` },
+        loginUsername: `user${n}@example.test`,
+        loginPassword: 'pw',
+      });
+      const p = await admin.saveAccount(null, {
+        label: `Poly ${n}`,
+        enabled: true,
+        config: {
+          venue: 'polymarket',
+          walletAddress: `0x${String(n).repeat(40)}`,
+          funderAddress: null,
+        },
+        privateKey: String(n).repeat(64),
+      });
+      if (e.status !== 'SUCEED' || p.status !== 'SUCEED')
+        throw new Error('setup');
+      ids[`e${n}`] = e.data.id;
+      ids[`p${n}`] = p.data.id;
+    }
+    // ghép chéo có chủ đích: A = E1+P3, B = E3+P1, C = E2+P2
+    const pairs = { A: ['e1', 'p3'], B: ['e3', 'p1'], C: ['e2', 'p2'] };
+    gateway.running = [];
+    for (const [name, [e, p]] of Object.entries(pairs)) {
+      const r = await admin.saveProfile(null, {
+        ...profileInput(ids[e], ids[p]),
+        name,
+      });
+      if (r.status !== 'SUCEED') throw new Error('profile');
+      gateway.running.push({ taskId: `trader-${name}`, profileId: r.data.id });
+    }
+    await sync.pushAll();
+    for (const [name, [e, p]] of Object.entries(pairs)) {
+      const cfg = gateway.pushed
+        .filter((x) => x.taskId === `trader-${name}`)
+        .at(-1)!.config;
+      expect(cfg.accounts).toEqual({
+        csgoempire: { id: ids[e], label: `Empire ${e.slice(1)}` },
+        polymarket: { id: ids[p], label: `Poly ${p.slice(1)}` },
+      });
+    }
+  });
+
+  it('chặn hai bản ghi trỏ vào cùng một ví / cùng một tài khoản csgoempire thật', async () => {
+    const { poly } = await addAccounts();
+    const sameWallet = await admin.saveAccount(null, {
+      label: 'Poly copy',
+      enabled: true,
+      config: {
+        venue: 'polymarket',
+        walletAddress: `0x${'c'.repeat(40)}`,
+        // funder trùng ví của Poly 1 (khác chữ hoa/thường)
+        funderAddress: `0x${'A'.repeat(40)}`,
+      },
+    });
+    expect(sameWallet.status === 'FAILED' && sameWallet.reason).toMatch(
+      /^WALLET_TAKEN/,
+    );
+    // sửa chính nó thì không bị chặn
+    expect(
+      (
+        await admin.saveAccount(poly.id, {
+          label: 'Poly 1',
+          enabled: true,
+          config: poly.config,
+        })
+      ).status,
+    ).toBe('SUCEED');
+    await admin.saveAccount(null, {
+      label: 'E-a',
+      enabled: true,
+      config: { venue: 'csgoempire', browserProfile: 'e-a' },
+      loginUsername: 'Same@Example.test',
+      loginPassword: 'pw',
+    });
+    const dup = await admin.saveAccount(null, {
+      label: 'E-b',
+      enabled: true,
+      config: { venue: 'csgoempire', browserProfile: 'e-b' },
+      loginUsername: 'same@example.test ',
+      loginPassword: 'pw',
+    });
+    expect(dup.status === 'FAILED' && dup.reason).toMatch(/^LOGIN_TAKEN/);
   });
 
   it('gửi cấu hình đã tính sẵn (bảng vốn theo hạng) cho task trader đang chạy', async () => {

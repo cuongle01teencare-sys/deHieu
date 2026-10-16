@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 /** Kết quả một lần trader xử lý kèo. */
 export const TRADE_STATUSES = [
+  'filled', // hai chân thật đã nhận/khớp
+  'partial', // lệch vị thế hoặc có chân chưa rõ kết quả; cần đối soát
   'paper_filled', // giấy: đủ điều kiện, ghi lãi/lỗ giả định theo sổ lệnh thật
   'skipped', // không vào lệnh (lý do ở reason)
   'cancelled', // kèo bị hủy khi đang xử lý

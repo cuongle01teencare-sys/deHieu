@@ -4,7 +4,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { MousePointerClick } from 'lucide-react';
 import { fmtDuration, fmtMargin, fmtSince } from '@/lib/format';
 import { marketLabel } from '@/lib/markets';
-import type { OneClickCandidate, TradeAttempt, TradeDetail, TraderProfile } from '@/lib/trading-types';
+import type {
+  OneClickCandidate,
+  TradeAttempt,
+  TradeDetail,
+  TraderProfile,
+} from '@/lib/trading-types';
 import { cn } from '@/lib/utils';
 import { useApi } from '@/hooks/use-api';
 import { useNow } from '@/hooks/use-now';
@@ -21,6 +26,7 @@ import { PushSetupButton } from '../shell/push-setup';
 import { REASON_LABEL, TradeDetailPanel } from './trade-detail';
 import { NumInput } from './stake-plan-editor';
 import { previewSizing, type SizingPreview } from '@/lib/one-click-sizing';
+import { EmpireLoginButton } from './empire-login-button';
 
 const usd = (n: number) => `${n < 0 ? '-' : ''}${Math.abs(n).toFixed(2)}$`;
 
@@ -34,11 +40,17 @@ export function OneClickPage() {
   const [profileId, setProfileId] = useState<string>('');
   useEffect(() => {
     const list = profiles.data ?? [];
-    if (!profileId && list.length) setProfileId((list.find((p) => p.enabled) ?? list[0]!).id);
+    if (!profileId && list.length)
+      setProfileId((list.find((p) => p.enabled) ?? list[0]!).id);
   }, [profiles.data, profileId]);
   const profile = profiles.data?.find((p) => p.id === profileId) ?? null;
 
-  const board = useApi<OneClickCandidate[]>(profileId ? `trading/oneclick?profileId=${encodeURIComponent(profileId)}` : null, 2_000);
+  const board = useApi<OneClickCandidate[]>(
+    profileId
+      ? `trading/oneclick?profileId=${encodeURIComponent(profileId)}`
+      : null,
+    2_000,
+  );
   const manage = useGuard('trading:manage');
   const mutate = useMutate();
   const now = useNow(1_000);
@@ -47,18 +59,33 @@ export function OneClickPage() {
   const [tab, setTab] = useState<'live' | 'history'>('live');
   /** Tiền mục tiêu người nhập theo kèo; chưa nhập = tiền của hạng trong profile. */
   const [stakes, setStakes] = useState<Record<string, number>>({});
-  const stakeOf = (c: OneClickCandidate) => stakes[c.signalId] ?? defaultStake(c);
-  const setStake = (c: OneClickCandidate, v: number | undefined) => v !== undefined && v > 0 && setStakes((m) => ({ ...m, [c.signalId]: v }));
-  const profileName = (id: string) => profiles.data?.find((p) => p.id === id)?.name ?? id;
-  const rows = useMemo(() => (board.data ?? []).filter((c) => c.expiresAt > now), [board.data, now]);
+  const stakeOf = (c: OneClickCandidate) =>
+    stakes[c.signalId] ?? defaultStake(c);
+  const setStake = (c: OneClickCandidate, v: number | undefined) =>
+    v !== undefined && v > 0 && setStakes((m) => ({ ...m, [c.signalId]: v }));
+  const profileName = (id: string) =>
+    profiles.data?.find((p) => p.id === id)?.name ?? id;
+  const rows = useMemo(
+    () => (board.data ?? []).filter((c) => c.expiresAt > now),
+    [board.data, now],
+  );
   const open = rows.find((c) => c.signalId === openId) ?? null;
 
   const enter = async (c: OneClickCandidate) => {
     setBusy(c.signalId);
     const r = await mutate<{ sent: true }>(
       'trading/oneclick/enter',
-      { method: 'POST', body: { profileId: c.profileId, signalId: c.signalId, targetStake: stakeOf(c) } },
-      'Đã gửi lệnh cho trader — kết quả hiện ở Auto trade › Lệnh giấy',
+      {
+        method: 'POST',
+        body: {
+          profileId: c.profileId,
+          signalId: c.signalId,
+          ...(stakes[c.signalId] !== undefined
+            ? { targetStake: stakes[c.signalId] }
+            : {}),
+        },
+      },
+      'Đã gửi lệnh cho trader — kết quả hiện ở Auto trade › Lệnh giao dịch',
     );
     setBusy(null);
     if (r) {
@@ -75,14 +102,25 @@ export function OneClickPage() {
     <div>
       <PageHeader
         title="On click"
-        description="Kèo có lãi nhưng giá bán thấp nhất trên Polymarket từ ngưỡng của profile trở lên (mặc định 0.50): bot không tự vào mà để ở đây. Nhập tiền mục tiêu cho từng kèo (mặc định tiền của hạng): trang tính lại ngay theo cơ chế taker như bot — mức giá sau hết lãi thì dừng, vào ít hơn. Bấm Vào lệnh (giấy) thì trader đọc lại sổ lệnh thật và vào (lãi tối thiểu, số lệnh mỗi hạng, hạn mức trận vẫn áp), ghi kèm người vào."
-        meta={<Pill tone="warn">Chế độ giấy</Pill>}
+        description="Kèo vượt ngưỡng giá On click chờ bạn bấm Vào lệnh. Trader đọc lại sổ lệnh, áp bảng vốn, lãi tối thiểu và hạn mức của profile như Auto trade. Chế độ thật kiểm tra Cash hai sàn; một bên thiếu tiền sẽ hủy cả cặp trước khi gửi."
+        meta={
+          <Pill tone={profile?.mode === 'live' ? 'warn' : 'muted'}>
+            {profile?.mode === 'live' ? 'Giao dịch thật' : 'Chế độ giấy'}
+          </Pill>
+        }
         actions={<PushSetupButton label="Nhận thông báo kèo" />}
       />
 
       <div className="mb-8 grid max-w-xl grid-cols-1 gap-4 md:grid-cols-2">
-        <Field label="Profile (cấu hình dùng để phân tích và vào lệnh)" htmlFor="oc-profile">
-          <Select id="oc-profile" value={profileId} onChange={(e) => setProfileId(e.target.value)}>
+        <Field
+          label="Profile (cấu hình dùng để phân tích và vào lệnh)"
+          htmlFor="oc-profile"
+        >
+          <Select
+            id="oc-profile"
+            value={profileId}
+            onChange={(e) => setProfileId(e.target.value)}
+          >
             {(profiles.data ?? []).map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
@@ -95,10 +133,14 @@ export function OneClickPage() {
           {profile ? (
             threshold > 0 ? (
               <>
-                Ngưỡng: giá bán thấp nhất ≥ <span className="num text-fg">{threshold}</span> (sửa ở Auto trade › Profile)
+                Ngưỡng: giá bán thấp nhất ≥{' '}
+                <span className="num text-fg">{threshold}</span> (sửa ở Auto
+                trade › Profile)
               </>
             ) : (
-              <span className="text-warn">Profile đang tắt On click (ngưỡng = 0) — bot tự vào mọi kèo.</span>
+              <span className="text-warn">
+                Profile đang tắt On click (ngưỡng = 0) — bot tự vào mọi kèo.
+              </span>
             )
           ) : null}
         </div>
@@ -106,8 +148,22 @@ export function OneClickPage() {
 
       {profileId ? (
         <div className="mb-8">
-          <div className="mb-2 text-caption text-muted-fg">Lãi giả định 7 ngày của profile này (Auto trade · On click · tổng)</div>
-          <SourceBreakdown profileId={profileId} since={since7d} active="manual" />
+          {profile ? (
+            <div className="mb-4">
+              <EmpireLoginButton
+                key={profile.csgoempireAccountId}
+                accountId={profile.csgoempireAccountId}
+              />
+            </div>
+          ) : null}
+          <div className="mb-2 text-caption text-muted-fg">
+            Lãi giả định 7 ngày của profile này (Auto trade · On click · tổng)
+          </div>
+          <SourceBreakdown
+            profileId={profileId}
+            since={since7d}
+            active="manual"
+          />
         </div>
       ) : null}
 
@@ -122,18 +178,33 @@ export function OneClickPage() {
         />
       </div>
 
-      {tab === 'history' && profileId ? <OneClickHistory profileId={profileId} profileName={profileName} /> : null}
+      {tab === 'history' && profileId ? (
+        <OneClickHistory profileId={profileId} profileName={profileName} />
+      ) : null}
 
       {tab === 'live' ? (
-        <Section title="Kèo chờ vào lệnh" description="Cập nhật mỗi lần trader làm mới kèo; tự biến mất khi kèo bị hủy, hết hạn hoặc đã vào. Bấm một dòng để xem đủ phân tích.">
+        <Section
+          title="Kèo chờ vào lệnh"
+          description="Cập nhật mỗi lần trader làm mới kèo; tự biến mất khi kèo bị hủy, hết hạn hoặc đã vào. Bấm một dòng để xem đủ phân tích."
+        >
           {profiles.error ? (
-            <ErrorState message={profiles.error} onRetry={() => void profiles.reload()} />
+            <ErrorState
+              message={profiles.error}
+              onRetry={() => void profiles.reload()}
+            />
           ) : board.error ? (
-            <ErrorState message={board.error} onRetry={() => void board.reload()} />
+            <ErrorState
+              message={board.error}
+              onRetry={() => void board.reload()}
+            />
           ) : !board.data && profileId ? (
             <SkeletonRows rows={4} />
           ) : !rows.length ? (
-            <Empty icon={MousePointerClick}>{profileId ? 'Chưa có kèo nào chờ vào lệnh.' : 'Chưa có profile nào.'}</Empty>
+            <Empty icon={MousePointerClick}>
+              {profileId
+                ? 'Chưa có kèo nào chờ vào lệnh.'
+                : 'Chưa có profile nào.'}
+            </Empty>
           ) : (
             <Table>
               <THead>
@@ -182,12 +253,24 @@ export function OneClickPage() {
               <label className="flex items-center gap-2 text-caption text-muted-fg">
                 Tiền mục tiêu ($)
                 <span className="w-24">
-                  <NumInput id="oc-stake" value={stakeOf(open)} onValue={(v) => setStake(open, v)} />
+                  <NumInput
+                    id="oc-stake"
+                    value={stakeOf(open)}
+                    onValue={(v) => setStake(open, v)}
+                  />
                 </span>
               </label>
-              <PreviewText p={previewSizing(open.analysis, stakeOf(open))} target={stakeOf(open)} />
-              <Button size="sm" disabledReason={manage ?? (busy ? 'Đang gửi…' : null)} onClick={() => void enter(open)}>
-                <MousePointerClick aria-hidden /> Vào lệnh (giấy)
+              <PreviewText
+                p={previewSizing(open.analysis, stakeOf(open))}
+                target={stakeOf(open)}
+              />
+              <Button
+                size="sm"
+                disabledReason={manage ?? (busy ? 'Đang gửi…' : null)}
+                onClick={() => void enter(open)}
+              >
+                <MousePointerClick aria-hidden /> Vào lệnh{' '}
+                {profile?.mode === 'live' ? '(thật)' : '(giấy)'}
               </Button>
             </div>
           ) : null
@@ -198,10 +281,21 @@ export function OneClickPage() {
 }
 
 /** Một dòng "csgoempire 8/12" (tên giải ở tooltip). */
-function TourCell({ label, leg }: { label: string; leg: { tournament?: { name: string | null; no: number; of: number } | null } | null }) {
+function TourCell({
+  label,
+  leg,
+}: {
+  label: string;
+  leg: {
+    tournament?: { name: string | null; no: number; of: number } | null;
+  } | null;
+}) {
   const t = leg?.tournament;
   return (
-    <span className="block whitespace-nowrap text-muted-fg" title={t?.name ?? undefined}>
+    <span
+      className="block whitespace-nowrap text-muted-fg"
+      title={t?.name ?? undefined}
+    >
       {label}{' '}
       {t ? (
         <>
@@ -216,15 +310,32 @@ function TourCell({ label, leg }: { label: string; leg: { tournament?: { name: s
 }
 
 /** Tiền mục tiêu mặc định: tiền của hạng trong profile (bản phân tích bot tính). */
-const defaultStake = (c: OneClickCandidate) => (c.analysis.detail as TradeDetail).sizing?.targetStake ?? (c.analysis.detail as TradeDetail).targetStake ?? c.analysis.book?.stake ?? 0;
+const defaultStake = (c: OneClickCandidate) =>
+  (c.analysis.detail as TradeDetail).sizing?.targetStake ??
+  (c.analysis.detail as TradeDetail).targetStake ??
+  c.analysis.book?.stake ??
+  0;
 
 /** Kết quả ước tính với tiền mục tiêu người nhập (một dòng). */
 function PreviewText({ p, target }: { p: SizingPreview; target: number }) {
-  if (!p.ok) return <span className="text-caption text-warn">{p.reason === 'NO_DATA' ? p.detail : `Không vào được: ${REASON_LABEL[p.reason] ?? p.reason} (${p.detail})`}</span>;
+  if (!p.ok)
+    return (
+      <span className="text-caption text-warn">
+        {p.reason === 'NO_DATA'
+          ? p.detail
+          : `Không vào được: ${REASON_LABEL[p.reason] ?? p.reason} (${p.detail})`}
+      </span>
+    );
   return (
     <span className="text-caption text-muted-fg">
       Ước tính: vào <span className="num text-fg">{usd(p.stake)}</span>
-      {p.stake + 0.005 < target ? <span className="text-warn"> (ít hơn {usd(target)} vì mức giá sau hết lãi)</span> : null} · lãi{' '}
+      {p.stake + 0.005 < target ? (
+        <span className="text-warn">
+          {' '}
+          (ít hơn {usd(target)} vì mức giá sau hết lãi)
+        </span>
+      ) : null}{' '}
+      · lãi{' '}
       <span className={cn('num', p.profit >= 0 ? 'text-ok' : 'text-critical')}>
         {usd(p.profit)} ({fmtMargin(p.netMargin)})
       </span>
@@ -268,7 +379,9 @@ function Row({
       </TD>
       <TD numeric>
         <span className="block text-fg">{fmtMargin(t.signalMargin)}</span>
-        <span className="block text-caption text-muted-fg">{t.tierName ?? '—'}</span>
+        <span className="block text-caption text-muted-fg">
+          {t.tierName ?? '—'}
+        </span>
       </TD>
       <TD className="text-caption">
         <TourCell label="csgoempire" leg={t.book} />
@@ -278,14 +391,28 @@ function Row({
         {d.minAsk ?? '—'}
       </TD>
       <TD numeric>
-        <span className="ml-auto block w-24" onClick={(e) => e.stopPropagation()}>
-          <NumInput id={`oc-stake-${c.signalId}`} value={stake} onValue={onStake} />
+        <span
+          className="ml-auto block w-24"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <NumInput
+            id={`oc-stake-${c.signalId}`}
+            value={stake}
+            onValue={onStake}
+          />
         </span>
       </TD>
       <TD numeric>
         {t.book && p.ok ? (
           <>
-            <span className={cn('block', p.stake + 0.005 < stake ? 'text-warn' : 'text-fg')}>{usd(p.stake)}</span>
+            <span
+              className={cn(
+                'block',
+                p.stake + 0.005 < stake ? 'text-warn' : 'text-fg',
+              )}
+            >
+              {usd(p.stake)}
+            </span>
             <span className="block text-caption text-muted-fg">
               {t.book.pick} @ {t.book.odds.toFixed(2)}
             </span>
@@ -299,7 +426,8 @@ function Row({
           <>
             <span className="block text-fg">{usd(p.polyCost)}</span>
             <span className="block text-caption text-muted-fg">
-              {t.polymarket.pick} · {+p.shares.toFixed(2)} @ {p.avgPrice.toFixed(3)}
+              {t.polymarket.pick} · {+p.shares.toFixed(2)} @{' '}
+              {p.avgPrice.toFixed(3)}
             </span>
           </>
         ) : (
@@ -309,22 +437,45 @@ function Row({
       <TD numeric>
         {p.ok ? (
           <>
-            <span className={cn('block', p.profit >= 0 ? 'text-ok' : 'text-critical')}>{usd(p.profit)}</span>
-            <span className="block text-caption text-muted-fg">{fmtMargin(p.netMargin)}</span>
+            <span
+              className={cn(
+                'block',
+                p.profit >= 0 ? 'text-ok' : 'text-critical',
+              )}
+            >
+              {usd(p.profit)}
+            </span>
+            <span className="block text-caption text-muted-fg">
+              {fmtMargin(p.netMargin)}
+            </span>
           </>
         ) : (
-          <span className="block max-w-40 text-caption text-warn">{p.reason === 'NO_DATA' ? '—' : (REASON_LABEL[p.reason] ?? p.reason)}</span>
+          <span className="block max-w-40 text-caption text-warn">
+            {p.reason === 'NO_DATA'
+              ? '—'
+              : (REASON_LABEL[p.reason] ?? p.reason)}
+          </span>
         )}
       </TD>
       <TD numeric className="num text-caption text-muted-fg">
         {fmtSince(c.updatedAt, now)}
       </TD>
-      <TD numeric className={cn('num text-caption', left < 10_000 ? 'text-warn' : 'text-muted-fg')}>
+      <TD
+        numeric
+        className={cn(
+          'num text-caption',
+          left < 10_000 ? 'text-warn' : 'text-muted-fg',
+        )}
+      >
         {fmtDuration(Math.max(0, left))}
       </TD>
       <TD numeric>
         <span onClick={(e) => e.stopPropagation()}>
-          <Button size="sm" disabledReason={manage ?? (busy ? 'Đang gửi…' : null)} onClick={onEnter}>
+          <Button
+            size="sm"
+            disabledReason={manage ?? (busy ? 'Đang gửi…' : null)}
+            onClick={onEnter}
+          >
             Vào lệnh
           </Button>
         </span>

@@ -1,4 +1,10 @@
 import { targetStake } from '../../../../shared/domain/stake-table.js';
+import { createHash } from 'node:crypto';
+import { AccountLock } from '../../../../shared/infrastructure/trading/account-lock.js';
+import {
+  LiveOrderExecutor,
+  type LiveExecutor,
+} from '../../../../shared/infrastructure/trading/live-executor.js';
 import type { Task, TaskContext } from '../../application/task.js';
 import { sleep } from '../shared/abortable.js';
 import {
@@ -18,7 +24,7 @@ import {
 } from './exposure-ledger.js';
 import { PolymarketMarketData } from './polymarket-market-data.js';
 import { TRADE_STRATEGIES } from './trade-strategies.js';
-import { depthSummary } from './arbitrage-sizing.js';
+import { depthSummary, takerFeePerShare } from './arbitrage-sizing.js';
 import {
   TraderConfigSchema,
   type TraderConfig,
@@ -53,7 +59,8 @@ const BOOK_RECHECK_MS = 10_000;
 /** Phơi nhiễm theo trận giữ tối đa ngần này (trận kết thúc / app không giải phóng). */
 const EXPOSURE_TTL_MS = 12 * 3_600_000;
 
-type Status = 'paper_filled' | 'skipped' | 'cancelled' | 'error';
+type Status =
+  'paper_filled' | 'filled' | 'partial' | 'skipped' | 'cancelled' | 'error';
 
 /**
  * Lý do bỏ qua phụ thuộc cấu hình profile → phần cấu hình quyết định lý do đó. Khi phần này đổi,
@@ -198,6 +205,7 @@ interface RunDeps {
   readonly ctx: TaskContext<TraderArbitrageParams>;
   readonly market: PolymarketMarketData;
   readonly ledger: ExposureLedger;
+  readonly liveLedger: ExposureLedger;
   readonly hub: ConsumerHubClient;
 }
 
@@ -229,12 +237,14 @@ const tournamentOf = (l: HubLeg) => {
 };
 
 /**
- * Trader arbitrage (giấy): consumer của ConsumerHub. Mỗi profile một task, mọi task nhận CÙNG một
+ * Trader arbitrage: consumer của ConsumerHub. Mỗi profile một task, mọi task nhận CÙNG một
  * kèo khi publisher phát một lần. Với mỗi kèo: chọn tiền theo bảng vốn của hạng → đọc sổ lệnh + phí
  * polymarket thật → chiến lược quyết định số share → giữ phơi nhiễm theo trận (Redis) → ghi kết quả.
- * KHÔNG đặt lệnh thật. Kèo bị hủy khi đang xử lý → bỏ (AbortController theo signalId).
+ * Paper ghi mô phỏng; live kiểm tra Cash rồi gửi hai API trong khóa tài khoản.
+ * Kèo bị hủy trước khi gửi → bỏ; đã gửi thì ghi nhận kết quả để đối soát.
  */
 export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
+  private _executor: LiveExecutor | null = null;
   private _config: TraderConfig | null = null;
   private readonly _inflight = new Map<string, AbortController>();
   /** Lệnh hủy nhận được khi kèo đang tính (kể cả lý do được bỏ qua) → ghi vào lệnh. */
@@ -242,6 +252,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
   private readonly _live = new Map<string, LiveSignal>();
   /** Kèo đang được xử lý (bất kỳ bước nào) — không xét lại chồng. */
   private readonly _handling = new Set<string>();
+  private readonly _decisions = new Set<Promise<void>>();
   private _run: RunDeps | null = null;
   /** Mã phiên task: id lệnh xét lại kèo của phiên trước không trùng id đã ghi. */
   private readonly _session = Date.now().toString(36);
@@ -251,6 +262,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     private readonly _deps: {
       readonly ledger?: ExposureLedger;
       readonly bookRecheckMs?: number;
+      readonly executor?: LiveExecutor;
     } = {},
   ) {}
 
@@ -262,10 +274,18 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       p.hubUrl ?? `ws://127.0.0.1:${process.env.CONSUMER_WS_PORT ?? '3002'}`;
     const market = new PolymarketMarketData(polymarketRestUrls(p.endpoints));
     const redisUrl = process.env.REDIS_URL;
+    this._executor =
+      this._deps.executor ??
+      (redisUrl ? new LiveOrderExecutor(new AccountLock(redisUrl)) : null);
     const ledger: ExposureLedger =
       this._deps.ledger ??
       (p.sharedExposure && redisUrl
         ? new RedisExposureLedger(redisUrl, 'trade:paper')
+        : new InMemoryExposureLedger());
+    const liveLedger =
+      this._deps.ledger ??
+      (redisUrl
+        ? new RedisExposureLedger(redisUrl, 'trade:live')
         : new InMemoryExposureLedger());
     if (!this._deps.ledger && p.sharedExposure && !redisUrl)
       ctx.warn(
@@ -357,9 +377,12 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         {
           onSignal: (s) => {
             this._remember(s);
-            void this._handle(ctx, s, { market, ledger, hub }).catch((e) =>
-              ctx.warn(e),
-            );
+            void this._handle(ctx, s, {
+              market,
+              ledger,
+              liveLedger,
+              hub,
+            }).catch((e) => ctx.warn(e));
           },
           onCancel: (c) => {
             if (this._live.get(c.signalId)?.oneClick)
@@ -396,7 +419,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           },
         },
       );
-      this._run = { ctx, market, ledger, hub };
+      this._run = { ctx, market, ledger, liveLedger, hub };
       try {
         await hub.run(ctx.signal);
       } finally {
@@ -406,7 +429,10 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       }
     } finally {
       for (const ac of this._inflight.values()) ac.abort('TASK_STOPPED');
+      await Promise.allSettled(this._decisions);
       await ledger.close();
+      if (liveLedger !== ledger) await liveLedger.close();
+      this._executor?.close();
     }
   }
 
@@ -455,6 +481,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     deps: {
       market: PolymarketMarketData;
       ledger: ExposureLedger;
+      liveLedger?: ExposureLedger;
       hub: ConsumerHubClient;
     },
     /** Xét lại kèo đã xử lý (đổi cấu hình / xóa lệnh): bỏ qua dấu "đã xử lý". */
@@ -475,7 +502,9 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     const ttl = Math.max(0, s.expiresAt - startedAt) + 3_600_000;
     if (
       source !== 'force' &&
-      !(await deps.ledger.claim(profileId, s.signalId, ttl))
+      !(await (
+        cfg.mode === 'live' ? (deps.liveLedger ?? deps.ledger) : deps.ledger
+      ).claim(profileId, s.signalId, ttl))
     ) {
       // đã xử lý trước đó. Kết quả lần trước chỉ nhớ trong phiên task này (không lưu Redis):
       // bị bỏ qua vì cấu hình mà cấu hình đã đổi / bỏ qua tạm thời → xét lại, không thì thôi
@@ -490,6 +519,8 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         source === 'hub' &&
         !!live.replayRedo &&
         live.last?.status !== 'paper_filled' &&
+        live.last?.status !== 'filled' &&
+        live.last?.status !== 'partial' &&
         !FILTER_SKIPS.has(reasonCode(live.last?.reason ?? null));
       if (source === 'hub') live.replayRedo = false;
       if (restoredNow || replay) source = 'restart';
@@ -503,7 +534,28 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       live.restored = true;
     this._handling.add(s.signalId);
     try {
-      await this._decide(ctx, s, deps, cfg, startedAt, live, manual, source);
+      const decision = this._decide(
+        ctx,
+        s,
+        {
+          ...deps,
+          ledger:
+            cfg.mode === 'live'
+              ? (deps.liveLedger ?? deps.ledger)
+              : deps.ledger,
+        },
+        cfg,
+        startedAt,
+        live,
+        manual,
+        source,
+      );
+      this._decisions.add(decision);
+      try {
+        await decision;
+      } finally {
+        this._decisions.delete(decision);
+      }
     } finally {
       this._handling.delete(s.signalId);
     }
@@ -689,6 +741,8 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
     };
 
     if (!cfg.active) return emit('skipped', `INACTIVE: ${cfg.inactiveReason}`);
+    if (cfg.mode === 'live' && (!cfg.execution || !this._executor))
+      return emit('skipped', 'LIVE_EXECUTION_UNAVAILABLE');
     if (deps.hub.paused) return emit('skipped', 'HUB_PAUSED');
     if (s.expiresAt <= startedAt) return emit('skipped', 'SIGNAL_EXPIRED');
     // "quá cũ" chỉ áp cho bản tin hub vừa giao; xét lại kèo còn sống (publisher chưa hủy, odds chưa
@@ -761,7 +815,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         ? Math.max(0, Math.min(...caps.map((c, i) => c.cap - (used[i] ?? 0))))
         : Number.POSITIVE_INFINITY;
 
-      const d = await strategy.decide({
+      let d = await strategy.decide({
         margin: s.margin,
         bookOdds: book.odds,
         book: ob,
@@ -804,6 +858,29 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           },
         });
 
+      if (cfg.mode === 'live') {
+        const stake = Math.floor((d.stake + 1e-9) * 100) / 100;
+        const totalCost = stake + d.polyCost;
+        const payout = Math.min(d.shares, stake * book.odds);
+        const profit = payout - totalCost;
+        if (
+          stake < pick.row.minStake ||
+          profit / totalCost < cfg.risk.minNetMargin
+        )
+          return emit(
+            'skipped',
+            'LIVE_ROUNDING_LIMIT: làm tròn tiền cược không còn đạt cấu hình',
+            { tokenId },
+          );
+        d = {
+          ...d,
+          stake,
+          totalCost,
+          payout,
+          profit,
+          netMargin: profit / totalCost,
+        };
+      }
       const filled: Result = {
         stake: d.stake,
         tokenId,
@@ -907,7 +984,16 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       // lấy suất của hạng trước (nguyên tử) rồi mới giữ hạn mức: kèo trùng cửa đến cùng lúc không vượt số lệnh
       if (!(await deps.ledger.acquire(entryKey, max, EXPOSURE_TTL_MS)))
         return quiet('ALREADY_ENTERED');
-      if (!(await deps.ledger.reserve(caps, d.totalCost, EXPOSURE_TTL_MS))) {
+      const polyLimit = d.levels.at(-1)?.price ?? d.avgPrice;
+      const liveFee =
+        Math.ceil(
+          d.shares * takerFeePerShare(Math.min(0.5, polyLimit), info.fee) * 1e6,
+        ) / 1e6;
+      const reserveCost =
+        cfg.mode === 'live'
+          ? d.stake + d.shares * polyLimit + liveFee
+          : d.totalCost;
+      if (!(await deps.ledger.reserve(caps, reserveCost, EXPOSURE_TTL_MS))) {
         await deps.ledger.giveBack(entryKey);
         return emit(
           'skipped',
@@ -917,7 +1003,133 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           },
         );
       }
-      return emit('paper_filled', null, filled);
+      if (cfg.mode === 'paper') return emit('paper_filled', null, filled);
+      if (this._config !== cfg || !this._config.active) {
+        await deps.ledger.release(
+          caps.map((c) => c.key),
+          reserveCost,
+        );
+        await deps.ledger.giveBack(entryKey);
+        return emit(
+          'cancelled',
+          'CONFIG_CHANGED: cấu hình đã đổi khi đang chuẩn bị',
+          { tokenId },
+        );
+      }
+      // Bản "giấy đối chiếu" của lệnh thật: cùng phân tích lúc quyết định, ghi thành một sự kiện riêng
+      // (mode 'shadow', không vào danh sách/thống kê lệnh) để cuối ngày so lãi thật ↔ giấy.
+      ctx.emit(
+        {
+          ...build('paper_filled', null, {
+            ...filled,
+            detail: { ...filled.detail, shadowOf: base.id },
+          }),
+          id: `${base.id}:shadow`,
+          mode: 'shadow',
+        },
+        CH_TRADE,
+      );
+      try {
+        const execution = await this._executor!.execute(
+          cfg.execution!,
+          {
+            // Same delivery always has the same durable key, including after reset_seen/restart.
+            id: createHash('sha256')
+              .update(`${profileId}:${s.signalId}:${s.issuedAt}`)
+              .digest('hex'),
+            bookRef: book.ref,
+            bookSide: book.side,
+            bookOdds: book.odds,
+            stake: d.stake,
+            tokenId,
+            shares: d.shares,
+            polyLimit,
+            polyFee: liveFee,
+            expiresAt: s.expiresAt,
+          },
+          signal,
+        );
+        if (
+          !execution.submitted ||
+          execution.fills.every((f) => f.status === 'rejected')
+        ) {
+          await deps.ledger.release(
+            caps.map((c) => c.key),
+            reserveCost,
+          );
+          await deps.ledger.giveBack(entryKey);
+        }
+        const [bf, pf] = execution.fills;
+        const totalCost = (bf?.cost ?? 0) + (pf?.cost ?? 0);
+        const payout =
+          execution.status === 'filled'
+            ? Math.min(
+                (bf?.filledAmount ?? 0) * (bf?.avgPrice ?? 0),
+                pf?.filledAmount ?? 0,
+              )
+            : 0;
+        if (execution.status === 'partial') {
+          this._config = {
+            ...cfg,
+            active: false,
+            inactiveReason: execution.reason,
+          };
+          ctx.warn(
+            'LIVE_RECONCILIATION_REQUIRED: dừng giao dịch để đối soát hai chân',
+          );
+          ctx.emit({ profileId }, CH_CONFIG_REQUEST);
+        }
+        return emit(execution.status, execution.reason, {
+          ...filled,
+          stake: bf?.filledAmount ?? 0,
+          shares: pf?.filledAmount ?? 0,
+          avgPrice: pf?.avgPrice ?? 0,
+          fee: pf?.fee ?? 0,
+          polyCost: pf?.cost ?? 0,
+          totalCost,
+          payout,
+          profit: execution.status === 'filled' ? payout - totalCost : 0,
+          netMargin:
+            execution.status === 'filled' && totalCost > 0
+              ? payout / totalCost - 1
+              : 0,
+          legs: filled.legs?.map((leg, i) => ({
+            ...leg,
+            ...(execution.fills[i] ?? {
+              status: 'cancelled',
+              filledAmount: 0,
+              avgPrice: 0,
+              fee: 0,
+              cost: 0,
+              error: execution.reason,
+            }),
+          })),
+          detail: {
+            ...filled.detail,
+            cash: execution.cash,
+            // Tài khoản trong cấu hình (tên đặt trong app) để đối chiếu với tài khoản thật ở cash[].account.
+            accounts: cfg.accounts,
+            submitted: execution.submitted,
+            feeEstimated: true,
+          },
+        });
+      } catch (e) {
+        // Executor may have submitted before losing its lock/Redis connection. Retain exposure.
+        const message = e instanceof Error ? e.message : 'LIVE_EXECUTION_ERROR';
+        this._config = {
+          ...cfg,
+          active: false,
+          inactiveReason: 'LIVE_EXECUTION_ERROR',
+        };
+        ctx.emit({ profileId }, CH_CONFIG_REQUEST);
+        return emit(
+          'error',
+          message.startsWith('CSGOEMPIRE_SESSION')
+            ? message
+            : 'LIVE_EXECUTION_ERROR',
+          { tokenId },
+        );
+      }
     } catch (e: unknown) {
       if (signal.aborted)
         return emit('cancelled', String(signal.reason), {

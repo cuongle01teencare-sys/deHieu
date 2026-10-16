@@ -1,0 +1,330 @@
+import { Logger } from '@nestjs/common';
+import type {
+  TraderExecutionConfigProvider,
+  EmpireBrowserGateway,
+  TradingAccountCheck,
+  TradingAccountChecker,
+} from '../../application/trading.ports.js';
+import {
+  readEmpireBalance,
+  readPolymarketBalance,
+} from '../../../../shared/infrastructure/trading/venue-orders.js';
+import type {
+  EmpireCredentials,
+  EmpireLoginStatus,
+  EmpireJwtPreview,
+} from '../../../../shared/application/empire-login.js';
+import { AesGcmSecretCipher } from '../../../../shared/infrastructure/trading/secret-cipher.js';
+import { SESSION_EXPIRED } from '../../../../shared/infrastructure/trading/empire-session.js';
+import { createHash, randomUUID } from 'node:crypto';
+import type { TraderRuntimeConfig } from '../../application/trader-config.js';
+import type { TradingAccount } from '../../domain/trading-account.js';
+import {
+  AccountLock,
+  accountResource,
+} from '../../../../shared/infrastructure/trading/account-lock.js';
+import {
+  closeAllProfiles,
+  EmpireSessions,
+} from '../../../../shared/infrastructure/trading/empire-session.js';
+
+export class LiveConfigProvider
+  implements
+    TraderExecutionConfigProvider,
+    EmpireBrowserGateway,
+    TradingAccountChecker
+{
+  private readonly jobs = new Map<
+    string,
+    {
+      state: EmpireLoginStatus;
+      abort: AbortController;
+      done: Promise<void>;
+      preview?: EmpireJwtPreview & { availableUntil: number };
+    }
+  >();
+  private readonly locks: AccountLock | null;
+  private readonly logger = new Logger('EmpireSession');
+  private readonly sessions: EmpireSessions | null;
+  constructor() {
+    this.locks = process.env.REDIS_URL
+      ? new AccountLock(process.env.REDIS_URL)
+      : null;
+    this.sessions = this.locks
+      ? new EmpireSessions(this.locks, (profile, error) =>
+          this.logger.warn(
+            `csgoempire ${profile}: làm mới phiên lỗi tạm thời (${error}), dùng tiếp token cũ còn hạn, thử lại sau 1 phút`,
+          ),
+        )
+      : null;
+  }
+  private credentials(account: TradingAccount): EmpireCredentials | undefined {
+    if (!account.secretCipher) return undefined;
+    const value = JSON.parse(
+      new AesGcmSecretCipher(process.env.TRADING_SECRET_KEY).decrypt(
+        account.secretCipher,
+      ),
+    ) as Partial<EmpireCredentials>;
+    if (
+      typeof value.username !== 'string' ||
+      !value.username ||
+      typeof value.password !== 'string' ||
+      !value.password
+    )
+      throw new Error('CSGOEMPIRE_LOGIN_CREDENTIALS_INVALID');
+    return { username: value.username, password: value.password };
+  }
+  private version(account: TradingAccount) {
+    return createHash('sha256')
+      .update(account.secretCipher ?? '')
+      .digest('hex');
+  }
+  loginStatus(profile: string) {
+    const job = this.jobs.get(profile);
+    if (!job) return null;
+    if (job.preview && Date.now() >= job.preview.availableUntil) {
+      delete job.preview;
+      job.state = { ...job.state, jwtAvailable: false };
+    }
+    return { ...job.state };
+  }
+  takeJwtPreview(profile: string, attemptId: string): EmpireJwtPreview | null {
+    this.loginStatus(profile); // Discard expired previews before returning one.
+    const job = this.jobs.get(profile);
+    if (!job || job.state.attemptId !== attemptId || !job.preview) return null;
+    const { token, expiresAt } = job.preview;
+    // Synchronous consumption: even concurrent requests can only receive it once.
+    delete job.preview;
+    job.state = { ...job.state, jwtAvailable: false };
+    return { token, expiresAt };
+  }
+  startLogin(account: TradingAccount): EmpireLoginStatus {
+    if (account.config.venue !== 'csgoempire')
+      throw new Error('CSGOEMPIRE_ACCOUNT_UNAVAILABLE');
+    const profile = account.config.browserProfile;
+    const previous = this.jobs.get(profile);
+    if (
+      previous &&
+      ['opening', 'signing_in', 'obtaining_session'].includes(
+        previous.state.stage,
+      )
+    )
+      return previous.state;
+    const job: {
+      state: EmpireLoginStatus;
+      abort: AbortController;
+      done: Promise<void>;
+      preview?: EmpireJwtPreview & { availableUntil: number };
+    } = {
+      state: {
+        stage: 'opening',
+        updatedAt: Date.now(),
+        expiresAt: null as number | null,
+        error: null as string | null,
+        attemptId: randomUUID(),
+        jwtAvailable: false,
+      },
+      abort: new AbortController(),
+      done: Promise.resolve(),
+    };
+    this.jobs.set(profile, job);
+    job.done = Promise.resolve()
+      .then(async () => {
+        if (!this.sessions || !this.locks)
+          throw new Error('LIVE_REDIS_REQUIRED');
+        if (!process.env.TRADING_SECRET_KEY)
+          throw new Error('TRADING_SECRET_KEY_REQUIRED');
+        const credentials = this.credentials(account);
+        if (!credentials)
+          throw new Error('CSGOEMPIRE_LOGIN_CREDENTIALS_MISSING');
+        const session = await this.sessions.get(profile, {
+          credentials,
+          credentialsVersion: this.version(account),
+          headed: true,
+          force: true,
+          signal: job.abort.signal,
+          onStage: (stage) => {
+            job.state = { ...job.state, stage, updatedAt: Date.now() };
+          },
+          onDiagnostic: (diagnostic) => {
+            job.state = { ...job.state, diagnostic, updatedAt: Date.now() };
+          },
+        });
+        await this.locks.clearHalt(
+          [accountResource('csgoempire', profile)],
+          SESSION_EXPIRED,
+        );
+        job.preview = {
+          token: session.token,
+          expiresAt: session.expiresAt,
+          availableUntil: Math.min(session.expiresAt, Date.now() + 5 * 60_000),
+        };
+        job.state = {
+          ...job.state,
+          stage: 'ready',
+          updatedAt: Date.now(),
+          expiresAt: session.expiresAt,
+          error: null,
+          jwtAvailable: true,
+        };
+      })
+      .catch((e: unknown) => {
+        const raw = e instanceof Error ? e.message.split(':')[0] : '';
+        const code =
+          /^(CSGOEMPIRE_[A-Z_]+|LIVE_REDIS_REQUIRED|TRADING_SECRET_KEY_REQUIRED|ACCOUNT_BUSY|TRADING_REDIS_UNAVAILABLE)$/.test(
+            raw,
+          )
+            ? raw
+            : 'CSGOEMPIRE_LOGIN_FAILED';
+        job.state = {
+          ...job.state,
+          stage: job.abort.signal.aborted
+            ? 'cancelled'
+            : code === 'CSGOEMPIRE_VERIFICATION_REQUIRED'
+              ? 'verification_required'
+              : 'error',
+          updatedAt: Date.now(),
+          expiresAt: null,
+          error: code,
+        };
+      });
+    return job.state;
+  }
+  async cancelLogin(profile: string) {
+    const job = this.jobs.get(profile);
+    if (!job) return null;
+    if (
+      ['opening', 'signing_in', 'obtaining_session'].includes(job.state.stage)
+    ) {
+      job.abort.abort();
+      await job.done;
+    }
+    return job.state;
+  }
+  async prepare(
+    config: TraderRuntimeConfig,
+    accounts: readonly TradingAccount[],
+  ): Promise<TraderRuntimeConfig> {
+    const inactive = (reason: string) => ({
+      ...config,
+      active: false,
+      inactiveReason: reason,
+    });
+    if (!this.locks || !this.sessions) return inactive('LIVE_REDIS_REQUIRED');
+    if (!process.env.TRADING_SECRET_KEY)
+      return inactive('TRADING_SECRET_KEY_REQUIRED');
+    const empire = accounts.find(
+      (a) => a.id === config.accounts.csgoempire?.id,
+    );
+    const poly = accounts.find((a) => a.id === config.accounts.polymarket?.id);
+    if (
+      empire?.config.venue !== 'csgoempire' ||
+      poly?.config.venue !== 'polymarket' ||
+      !poly.secretCipher
+    )
+      return inactive('LIVE_CREDENTIALS_MISSING');
+    const job = this.jobs.get(empire.config.browserProfile);
+    if (
+      job &&
+      ['opening', 'signing_in', 'obtaining_session'].includes(job.state.stage)
+    )
+      return inactive('CSGOEMPIRE_LOGIN_IN_PROGRESS');
+    try {
+      await this.locks.connect();
+      const reason = await this.locks.halted([
+        accountResource('csgoempire', empire.config.browserProfile),
+        accountResource(
+          'polymarket',
+          (
+            poly.config.funderAddress ?? poly.config.walletAddress
+          ).toLowerCase(),
+        ),
+      ]);
+      if (reason) return inactive(reason);
+      return {
+        ...config,
+        execution: {
+          empire: await this.sessions.get(empire.config.browserProfile, {
+            credentials: this.credentials(empire),
+            credentialsVersion: this.version(empire),
+          }),
+          polymarket: { ...poly.config, secretCipher: poly.secretCipher },
+        },
+      };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : '';
+      return inactive(
+        message.startsWith('CSGOEMPIRE_')
+          ? message
+          : 'LIVE_ACCOUNT_UNAVAILABLE',
+      );
+    }
+  }
+  async check(account: TradingAccount): Promise<TradingAccountCheck> {
+    if (!process.env.TRADING_SECRET_KEY)
+      throw new Error('TRADING_SECRET_KEY_REQUIRED');
+    const signal = AbortSignal.timeout(90_000);
+    const base = {
+      accountId: account.id,
+      venue: account.config.venue,
+      label: account.label,
+    };
+    if (account.config.venue === 'polymarket') {
+      if (!account.secretCipher) throw new Error('POLYMARKET_KEY_MISSING');
+      const r = await readPolymarketBalance(
+        { ...account.config, secretCipher: account.secretCipher },
+        signal,
+      );
+      return {
+        ...base,
+        remoteId: r.account.id,
+        remoteName: null,
+        wallet: r.account.wallet,
+        cash: r.cash,
+        allowance: r.allowance,
+        // readPolymarketBalance ném POLYMARKET_WALLET_MISMATCH nếu key không ra đúng ví.
+        matchesConfig: true,
+        checkedAt: Date.now(),
+      };
+    }
+    if (!this.sessions) throw new Error('LIVE_REDIS_REQUIRED');
+    const profile = account.config.browserProfile;
+    const job = this.jobs.get(profile);
+    if (
+      job &&
+      ['opening', 'signing_in', 'obtaining_session'].includes(job.state.stage)
+    )
+      throw new Error('CSGOEMPIRE_LOGIN_IN_PROGRESS');
+    const credentials = this.credentials(account);
+    const session = await this.sessions.get(profile, {
+      credentials,
+      credentialsVersion: this.version(account),
+    });
+    const r = await readEmpireBalance(session, signal);
+    const expected = credentials?.username.trim().toLowerCase();
+    return {
+      ...base,
+      remoteId: r.account.id,
+      remoteName: r.account.name,
+      wallet: null,
+      cash: r.cash,
+      allowance: null,
+      matchesConfig:
+        expected && (r.username || r.email)
+          ? [r.username, r.email].some(
+              (v) => v?.trim().toLowerCase() === expected,
+            )
+          : null,
+      checkedAt: Date.now(),
+    };
+  }
+  async onApplicationShutdown() {
+    for (const job of this.jobs.values()) job.abort.abort();
+    try {
+      await closeAllProfiles();
+    } finally {
+      await Promise.allSettled([...this.jobs.values()].map((j) => j.done));
+      this.locks?.close();
+    }
+  }
+}

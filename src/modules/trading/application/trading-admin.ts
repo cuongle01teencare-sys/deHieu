@@ -47,6 +47,8 @@ import type {
 } from './trading.ports.js';
 
 export interface AccountInput {
+  readonly loginUsername?: string;
+  readonly loginPassword?: string;
   readonly label: string;
   readonly enabled: boolean;
   readonly config: TradingAccountConfig;
@@ -144,7 +146,72 @@ export class TradingAdmin {
       return fail(`ACCOUNT_LABEL_TAKEN: đã có tài khoản "${label}"`);
 
     let secretCipher = old?.secretCipher ?? null;
+    const accountConfig = input.config;
+    if (
+      accountConfig.venue === 'csgoempire' &&
+      all.some(
+        (a) =>
+          a.id !== id &&
+          a.config.venue === 'csgoempire' &&
+          a.config.browserProfile === accountConfig.browserProfile,
+      )
+    )
+      return fail(
+        'BROWSER_PROFILE_TAKEN: hồ sơ trình duyệt đã thuộc tài khoản khác',
+      );
+    // Hai bản ghi trỏ vào CÙNG một ví thật → tiền bị tính hai lần, hạn mức tách đôi: chặn.
+    if (accountConfig.venue === 'polymarket') {
+      const own = (c: {
+        walletAddress: string;
+        funderAddress: string | null;
+      }) =>
+        [c.walletAddress, c.funderAddress]
+          .filter((v): v is string => !!v)
+          .map((v) => v.toLowerCase());
+      const mine = own(accountConfig);
+      const clash = all.find(
+        (a) =>
+          a.id !== id &&
+          a.config.venue === 'polymarket' &&
+          own(a.config).some((v) => mine.includes(v)),
+      );
+      if (clash)
+        return fail(`WALLET_TAKEN: ví này đã thuộc tài khoản "${clash.label}"`);
+    }
     const rawKey = input.privateKey?.trim();
+    if (
+      input.loginUsername !== undefined ||
+      input.loginPassword !== undefined
+    ) {
+      if (input.config.venue !== 'csgoempire') return fail('LOGIN_NOT_ALLOWED');
+      const username = input.loginUsername?.trim();
+      const password = input.loginPassword;
+      if (
+        !username ||
+        !password ||
+        username.length > 200 ||
+        password.length > 500
+      )
+        return fail(
+          'LOGIN_CREDENTIALS_REQUIRED: nhập cả tài khoản và mật khẩu',
+        );
+      if (!this._cipher.available())
+        return fail('SECRET_KEY_MISSING: chưa đặt TRADING_SECRET_KEY');
+      // Cùng một tài khoản csgoempire thật ở hai hồ sơ → hai phiên đặt cược trên một số dư: chặn.
+      const clash = all.find(
+        (a) =>
+          a.id !== id &&
+          a.config.venue === 'csgoempire' &&
+          this._loginOf(a) === username.toLowerCase(),
+      );
+      if (clash)
+        return fail(
+          `LOGIN_TAKEN: tài khoản đăng nhập này đã dùng ở "${clash.label}"`,
+        );
+      secretCipher = this._cipher.encrypt(
+        JSON.stringify({ username, password }),
+      );
+    }
     if (rawKey) {
       if (input.config.venue !== 'polymarket')
         return fail('SECRET_NOT_ALLOWED: chỉ ví polymarket lưu private key');
@@ -170,6 +237,21 @@ export class TradingAdmin {
       status: 'SUCEED',
       data: this._view(account, await this._profiles.list()),
     };
+  }
+
+  /** Email/username csgoempire đã lưu (chữ thường); null = chưa có / không giải mã được. */
+  private _loginOf(a: TradingAccount): string | null {
+    if (!a.secretCipher || !this._cipher.available()) return null;
+    try {
+      const v = JSON.parse(this._cipher.decrypt(a.secretCipher)) as {
+        username?: unknown;
+      };
+      return typeof v.username === 'string'
+        ? v.username.trim().toLowerCase()
+        : null;
+    } catch {
+      return null;
+    }
   }
 
   async deleteAccount(id: string): Promise<OperationStatus<true>> {

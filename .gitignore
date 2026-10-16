@@ -54,6 +54,8 @@ lerna-debug.log*
 .tmp
 
 # Runtime data
+.trading/
+*.har
 pids
 *.pid
 *.seed

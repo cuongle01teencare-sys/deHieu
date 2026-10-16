@@ -12,6 +12,7 @@ import {
   type TraderArbitrageParams,
 } from '../trader-arbitrage.task.js';
 import type { TraderConfig } from '../trader-config.schema.js';
+import type { ExecutionResult } from '../../../../../shared/infrastructure/trading/live-executor.js';
 
 const TOKEN = 'consumer-token-for-tests';
 
@@ -298,6 +299,7 @@ describe('TraderArbitrageTask (giấy)', () => {
     expect(tm.receivedAt).toBeGreaterThanOrEqual(tm.signalIssuedAt);
     expect(tm.marketDataAt).toBeGreaterThanOrEqual(tm.receivedAt);
     expect(tm.decidedAt).toBeGreaterThanOrEqual(tm.marketDataAt);
+    await until(() => hub.acks.length === 1);
     expect(hub.acks.length).toBe(1);
 
     // hub gửi lại (ít nhất một lần) → không xử lý lần hai
@@ -1006,4 +1008,90 @@ describe('TraderArbitrageTask (giấy)', () => {
   it('matchOf gộp mọi market của cùng trận', () => {
     expect(matchOf('room:cs2:a~b:map-1-winner')).toBe('cs2:a~b');
   });
+
+  it.each([false, true])(
+    'live: cash cancellation applies to auto/manual=%s and releases exposure',
+    async (manual) => {
+      const ledger = new InMemoryExposureLedger();
+      const execute = vi.fn((): Promise<ExecutionResult> =>
+        Promise.resolve({
+          status: 'cancelled',
+          reason: 'INSUFFICIENT_CASH: hủy cả hai chân',
+          submitted: false,
+          fills: [],
+          cash: [{ venue: 'polymarket', available: 0, required: 20 }],
+        }),
+      );
+      const t = start(
+        new TraderArbitrageTask({ ledger, executor: { execute, close() {} } }),
+        params('A'),
+      );
+      const cfg = config('A', {
+        mode: 'live',
+        matchExposureCapUsd: 100,
+        execution: {
+          empire: {
+            browserProfile: 'test',
+            token: 'token',
+            cookie: 'cookie',
+            expiresAt: Date.now() + 1_800_000,
+            apiUrl: 'https://api-h-c7818b61-608.sptpub.com',
+            brandId: '2432911154364948480',
+            sessionId: 'test',
+            minBet: 0.1,
+          },
+          polymarket: {
+            walletAddress: 'test',
+            funderAddress: null,
+            secretCipher: 'test',
+          },
+        },
+      });
+      if (manual) cfg.risk.oneClickMinPrice = 0.3;
+      await t.command('config', cfg);
+      await until(() => hub.consumers.has('trader:A'));
+      hub.broadcast({
+        type: 'signal',
+        kind: 'issued',
+        signal: signal('cash-test'),
+      });
+      if (manual) {
+        await until(() => t.emitted.some((e) => e.channel === 'oneclick'));
+        expect(execute).not.toHaveBeenCalled();
+        await t.command('manual_enter', { signalId: 'cash-test', by: 'alice' });
+      }
+      await until(() => trades(t).some((e) => e.status === 'cancelled'));
+      expect(execute).toHaveBeenCalledOnce();
+      const result = trades(t).find((e) => e.status === 'cancelled')!;
+      expect(result).toMatchObject({
+        mode: 'live',
+        totalCost: 0,
+        book: { stake: 0 },
+        polymarket: { shares: 0 },
+      });
+      expect(result.legs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ venue: 'csgoempire', status: 'cancelled' }),
+          expect.objectContaining({ venue: 'polymarket', status: 'cancelled' }),
+        ]),
+      );
+      expect(await ledger.used(['match:lol:alpha~beta'])).toEqual([0]);
+      expect(
+        await ledger.count(
+          'entry:A:room:lol:alpha~beta:match-winner:sptpub>0|polymarket>1:std',
+        ),
+      ).toBe(0);
+      // lệnh thật luôn kèm một bản giấy đối chiếu, cùng tài khoản, trỏ về lệnh thật
+      const shadow = trades(t).find((e) => e.mode === 'shadow')!;
+      expect(shadow).toMatchObject({
+        id: `${String(result.id)}:shadow`,
+        status: 'paper_filled',
+        detail: { shadowOf: result.id },
+        csgoempireAccountId: result.csgoempireAccountId,
+        polymarketAccountId: result.polymarketAccountId,
+      });
+      expect(shadow.totalCost).toBeGreaterThan(0);
+      await t.stop();
+    },
+  );
 });

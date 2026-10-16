@@ -23,6 +23,64 @@ type OneSignalLike = {
 
 /** Lỗi gần nhất khi bật / đăng ký (để chẩn đoán). */
 let lastError: string | null = null;
+/** Nhật ký ngắn: lời gọi pushManager.subscribe và lỗi / cảnh báo OneSignal in ra console. */
+const pushLog: string[] = [];
+const note = (m: string) => {
+  pushLog.push(`${new Date().toLocaleTimeString('en-GB')} ${m}`.slice(0, 300));
+  if (pushLog.length > 8) pushLog.shift();
+};
+
+/**
+ * Theo dõi (không đổi hành vi): pushManager.subscribe có được gọi không, lỗi gì; console.error/warn
+ * của OneSignal (vd Site URL không khớp). Chỉ để chẩn đoán đăng ký trên thiết bị (nhất là iOS).
+ */
+function instrumentPush(): void {
+  const w = window as unknown as { __arbopsPushInstrumented?: boolean };
+  if (w.__arbopsPushInstrumented) return;
+  w.__arbopsPushInstrumented = true;
+  const proto = (window as unknown as { PushManager?: { prototype: PushManager } }).PushManager?.prototype;
+  if (proto) {
+    const orig = proto.subscribe;
+    proto.subscribe = async function (this: PushManager, ...args: Parameters<PushManager['subscribe']>) {
+      note('pushManager.subscribe được gọi');
+      try {
+        const r = await orig.apply(this, args);
+        note('pushManager.subscribe thành công');
+        return r;
+      } catch (e) {
+        const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+        lastError = `pushManager.subscribe: ${msg}`;
+        note(lastError);
+        throw e;
+      }
+    };
+  }
+  for (const level of ['error', 'warn'] as const) {
+    const orig = console[level].bind(console);
+    console[level] = (...args: unknown[]) => {
+      const text = args
+        .map((a) =>
+          a instanceof Error
+            ? `${a.name}: ${a.message}`
+            : typeof a === 'string'
+              ? a
+              : (() => {
+                  try {
+                    return JSON.stringify(a);
+                  } catch {
+                    return String(a);
+                  }
+                })(),
+        )
+        .join(' ');
+      if (/onesignal/i.test(text)) {
+        lastError = text.slice(0, 300);
+        note(`console.${level}: ${lastError}`);
+      }
+      orig(...args);
+    };
+  }
+}
 declare global {
   interface Window {
     OneSignal?: OneSignalLike;
@@ -59,6 +117,7 @@ export interface PushDiagnostics {
   /** Service worker đã đăng ký: scope, đang chạy, có đăng ký push của trình duyệt không. */
   workers: { scope: string; active: boolean; push: boolean }[];
   lastError: string | null;
+  log: string[];
   origin: string;
 }
 
@@ -94,6 +153,7 @@ export async function pushDiagnostics(): Promise<PushDiagnostics> {
     hasToken: !!u?.PushSubscription.token,
     workers,
     lastError,
+    log: [...pushLog],
     origin: window.location.origin,
   };
 }
@@ -111,6 +171,7 @@ export function pushSubscribed(): boolean {
 export function initializePush(): Promise<void> {
   if (!pushConfigured() || pushSupport() !== 'supported') return Promise.resolve();
   if (initialization) return initialization;
+  instrumentPush();
 
   initialization = new Promise<OneSignalLike>((resolve, reject) => {
     if (window.OneSignal?.init) {
@@ -122,7 +183,7 @@ export function initializePush(): Promise<void> {
       script.remove();
       reject(new Error('Không tải được OneSignal. Kiểm tra kết nối rồi tải lại trang.'));
     }, 15_000);
-    const deferred = window.OneSignalDeferred ??= [];
+    const deferred = (window.OneSignalDeferred ??= []);
     deferred.push((oneSignal) => {
       clearTimeout(timeout);
       resolve(oneSignal);
@@ -135,23 +196,27 @@ export function initializePush(): Promise<void> {
       reject(new Error('Không tải được OneSignal. Kiểm tra kết nối rồi tải lại trang.'));
     };
     document.head.appendChild(script);
-  }).then(async (oneSignal) => {
-    await oneSignal.init({
-      appId: process.env.NEXT_PUBLIC_ONESIGNAL_APP_ID!.trim(),
-      serviceWorkerPath: 'push/onesignal/OneSignalSDKWorker.js',
-      serviceWorkerParam: { scope: '/push/onesignal/' },
-      allowLocalhostAsSecureOrigin: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1',
-      notifyButton: { enable: false },
-      welcomeNotification: { disable: true },
-      promptOptions: { slidedown: { prompts: [{ type: 'push', autoPrompt: false }] } },
+  })
+    .then(async (oneSignal) => {
+      await oneSignal.init({
+        appId: process.env.NEXT_PUBLIC_ONESIGNAL_APP_ID!.trim(),
+        serviceWorkerPath: 'push/onesignal/OneSignalSDKWorker.js',
+        serviceWorkerParam: { scope: '/push/onesignal/' },
+        allowLocalhostAsSecureOrigin: window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1',
+        notifyButton: { enable: false },
+        welcomeNotification: { disable: true },
+        promptOptions: { slidedown: { prompts: [{ type: 'push', autoPrompt: false }] } },
+      });
+      sdk = oneSignal;
+      sdkState = 'ready';
+      syncPrefs(loadPrefs());
+    })
+    .catch((error: unknown) => {
+      sdkState = 'error';
+      lastError = error instanceof Error ? error.message : String(error);
+      note(`init lỗi: ${lastError}`);
+      throw error;
     });
-    sdk = oneSignal;
-    sdkState = 'ready';
-    syncPrefs(loadPrefs());
-  }).catch((error: unknown) => {
-    sdkState = 'error';
-    throw error;
-  });
   return initialization;
 }
 

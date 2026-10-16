@@ -25,7 +25,6 @@ import { PurgeTradesDialog } from './trade-purge';
 
 const STATUS = TRADE_STATUS;
 const REASON = REASON_LABEL;
-const reasonLabel = (r: string | null) => reasonText({ reason: r });
 
 const usd = (n: number) => `${n < 0 ? '-' : ''}${Math.abs(n).toFixed(2)}$`;
 const PERIODS = { '24h': 86_400_000, '7d': 7 * 86_400_000, all: 0 } as const;
@@ -185,7 +184,7 @@ export function PaperTrades() {
                   {t.status === 'paper_filled' ? (
                     <span className={cn('num', t.profit >= 0 ? 'text-ok' : 'text-critical')}>{usd(t.profit)}</span>
                   ) : (
-                    <span className="truncate">{reasonLabel(t.reason)}</span>
+                    <span className="truncate" title={reasonText(t)}>{reasonText(t)}</span>
                   )}
                 </div>
               </ListRow>
@@ -233,8 +232,8 @@ export function PaperTrades() {
                       <span className="mt-0.5 block text-caption text-muted-fg">vào tay bởi {(t.detail as { manual: { by: string } }).manual.by}</span>
                     ) : null}
                     {t.status !== 'paper_filled' && t.reason ? (
-                      <Hint content={t.reason}>
-                        <span className="mt-0.5 block max-w-48 cursor-default truncate text-caption text-muted-fg">{reasonLabel(t.reason)}</span>
+                      <Hint content={reasonText(t)}>
+                        <span className="mt-0.5 block max-w-48 cursor-default truncate text-caption text-muted-fg">{reasonText(t)}</span>
                       </Hint>
                     ) : null}
                   </TD>

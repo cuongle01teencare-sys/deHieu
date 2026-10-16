@@ -6,6 +6,7 @@ import {
   Delete,
   Get,
   HttpCode,
+  Header,
   Inject,
   Param,
   Post,
@@ -35,10 +36,19 @@ import { TRADE_SOURCES, TRADE_STATUSES } from '../application/trade-attempt.js';
 import { STAKE_TRENDS } from '../domain/stake-plan.js';
 import { TRADER_MODES } from '../domain/trader-profile.js';
 import { unwrap } from './http-errors.js';
+import { EmpireLoginAdmin } from '../application/empire-login-admin.js';
+import { AccountCheckAdmin } from '../application/account-check-admin.js';
+import { AccountReportAdmin } from '../application/account-report-admin.js';
+import {
+  SETTLE_WINNERS,
+  SettlementAdmin,
+} from '../application/trade-settlement.js';
 
 const money = z.number().min(0).max(1_000_000);
 
 const AccountBody = z.object({
+  loginUsername: z.string().trim().min(1).max(200).optional(),
+  loginPassword: z.string().min(1).max(500).optional(),
   label: z.string().trim().min(1).max(80),
   enabled: z.boolean().default(true),
   config: z.discriminatedUnion('venue', [
@@ -139,6 +149,24 @@ const TradesQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
 });
 
+const AccountReportQuery = z.object({
+  /** live, shadow (giấy đối chiếu của lệnh thật), paper; phân tách bằng dấu phẩy. */
+  modes: z
+    .string()
+    .optional()
+    .transform((v) =>
+      v
+        ? v
+            .split(',')
+            .map((x) => x.trim())
+            .filter(Boolean)
+        : undefined,
+    ),
+  tz: z.string().max(64).optional(),
+  since: z.coerce.number().int().positive().optional(),
+});
+const SettlementBody = z.object({ winner: z.enum(SETTLE_WINNERS) });
+
 const PurgeBody = z.object({
   /** Một hoặc nhiều trạng thái (OR). */
   statuses: z
@@ -155,8 +183,12 @@ const PurgeBody = z.object({
 });
 
 const ExposureResetBody = z.union([
-  z.object({ match: z.string().trim().min(1).max(300) }),
   z.object({
+    match: z.string().trim().min(1).max(300),
+    mode: z.enum(TRADER_MODES).optional(),
+  }),
+  z.object({
+    mode: z.enum(TRADER_MODES).optional(),
     entry: z.object({
       profileId: z.string().min(1).max(100),
       room: z.string().min(1).max(300),
@@ -207,6 +239,12 @@ export class TradingController {
     @Inject(OneClickHistoryRecorder)
     private readonly _ocHistory: OneClickHistoryRecorder,
     @Inject(OneClickNotifier) private readonly _notifier: OneClickNotifier,
+    @Inject(EmpireLoginAdmin) private readonly _empireLogin: EmpireLoginAdmin,
+    @Inject(AccountCheckAdmin)
+    private readonly _accountCheck: AccountCheckAdmin,
+    @Inject(AccountReportAdmin)
+    private readonly _accountReport: AccountReportAdmin,
+    @Inject(SettlementAdmin) private readonly _settlement: SettlementAdmin,
   ) {}
 
   // ------------------------------------------------------------- tài khoản
@@ -227,7 +265,7 @@ export class TradingController {
   @ApiOperation({
     summary: 'Thêm tài khoản',
     description:
-      'Quyền: trading:manage. csgoempire: chỉ tên hồ sơ trình duyệt (không lưu mật khẩu). polymarket: địa chỉ ví + private key (mã hóa bằng TRADING_SECRET_KEY).',
+      'Quyền: trading:manage. csgoempire: hồ sơ Chromium, tùy chọn loginUsername/loginPassword mã hóa bằng TRADING_SECRET_KEY để tự đăng nhập. polymarket: địa chỉ ví + private key mã hóa. Không trả thông tin bí mật.',
   })
   @ApiZodBody(AccountBody, {
     csgoempire: {
@@ -276,6 +314,74 @@ export class TradingController {
   }
 
   // ------------------------------------------------------------- profile
+  @Post('accounts/:id/browser-login')
+  @HttpCode(202)
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Mở Chromium có giao diện, tự đăng nhập và lấy phiên',
+  })
+  async browserLogin(@Param('id') id: string) {
+    return unwrap(await this._empireLogin.start(id));
+  }
+
+  @Post('accounts/:id/check')
+  @HttpCode(200)
+  @Header('Cache-Control', 'private, no-store')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Đọc tài khoản thật + Cash trên sàn bằng đúng phiên/khóa bot dùng',
+    description:
+      'Quyền: trading:manage. csgoempire: user id, tên Steam, Cash (USD) và có khớp email/username đã lưu không. polymarket: ví ký lệnh, ví giữ tiền, Cash USDC, allowance. Không trả bí mật.',
+  })
+  async checkAccount(@Param('id') id: string) {
+    return unwrap(await this._accountCheck.check(id));
+  }
+
+  @Get('accounts/:id/report')
+  @RequirePermissions(P.READ)
+  @ApiOperation({
+    summary:
+      'Báo cáo tài khoản: lãi/lỗ theo ngày/tuần/tháng/quý/năm, từng lệnh, thật ↔ giấy',
+    description:
+      'Quyền: trading:read. Lãi/lỗ CHÂN của tài khoản và lãi CẢ CẶP tách riêng (lỗ một chân là bình thường). Chỉ lệnh có kết quả (đối soát từ Polymarket hoặc sửa tay) mới có lãi/lỗ thật.',
+  })
+  @ApiZodQuery(AccountReportQuery)
+  async accountReport(@Param('id') id: string, @Query() q: unknown) {
+    const b = AccountReportQuery.parse(q);
+    return unwrap(
+      await this._accountReport.report(id, {
+        modes: b.modes,
+        timeZone: b.tz,
+        since: b.since,
+      }),
+    );
+  }
+
+  @Get('accounts/:id/browser-login')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Trạng thái đăng nhập, không trả JWT hoặc thông tin đăng nhập',
+  })
+  async browserLoginStatus(@Param('id') id: string) {
+    return unwrap(await this._empireLogin.status(id));
+  }
+
+  @Post('accounts/:id/browser-login/jwt')
+  @HttpCode(200)
+  @Header('Cache-Control', 'private, no-store')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({ summary: 'Nhận JWT đúng một lần của lần đăng nhập vừa tạo' })
+  async takeBrowserJwt(@Param('id') id: string, @Body() body: unknown) {
+    const { attemptId } = z.object({ attemptId: z.uuid() }).parse(body);
+    return unwrap(await this._empireLogin.takeJwt(id, attemptId));
+  }
+
+  @Delete('accounts/:id/browser-login')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({ summary: 'Dừng đăng nhập và đóng Chromium' })
+  async cancelBrowserLogin(@Param('id') id: string) {
+    return unwrap(await this._empireLogin.cancel(id));
+  }
 
   @Get('profiles')
   @RequirePermissions(P.READ)
@@ -529,8 +635,8 @@ export class TradingController {
     description:
       'Quyền: trading:read. Số liệu trader dùng để quyết định, đọc thẳng từ Redis: tiền đã dùng theo trận (chung + riêng profile) và số lệnh đã vào mỗi cửa mỗi hạng, kèm TTL. Không phụ thuộc lịch sử lệnh trong DB (xóa lệnh không đổi sổ này). Chỉ có khi task trader bật sharedExposure (mặc định).',
   })
-  exposure() {
-    return this._exposure.view();
+  exposure(@Query('mode') mode?: string) {
+    return this._exposure.view(z.enum(TRADER_MODES).optional().parse(mode));
   }
 
   @Post('exposure/reset')
@@ -551,8 +657,8 @@ export class TradingController {
     const b = ExposureResetBody.parse(body);
     return unwrap(
       'match' in b
-        ? await this._exposure.resetMatch(b.match)
-        : await this._exposure.resetEntry(b.entry),
+        ? await this._exposure.resetMatch(b.match, b.mode)
+        : await this._exposure.resetEntry(b.entry, b.mode),
     );
   }
 
@@ -591,6 +697,50 @@ export class TradingController {
   })
   async deleteTrade(@Param('id') id: string) {
     return unwrap(await this._admin.deleteTrade(id));
+  }
+
+  @Post('settlements/run')
+  @HttpCode(200)
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Đối soát kết quả ngay (đọc market đã resolve trên Polymarket)',
+  })
+  async runSettlement() {
+    try {
+      return await this._settlement.run();
+    } catch (e) {
+      throw new BadRequestException(
+        e instanceof Error ? e.message : 'SETTLEMENT_FAILED',
+      );
+    }
+  }
+
+  @Put('trades/:id/settlement')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Sửa tay kết quả lệnh (cửa thắng / hủy trận)',
+    description:
+      'Quyền: trading:manage. winner: polymarket | csgoempire | void. Ghi đè kết quả tự động.',
+  })
+  @ApiZodBody(SettlementBody)
+  async setSettlement(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @CurrentPrincipal() principal?: { id: string },
+  ) {
+    const { winner } = SettlementBody.parse(body);
+    return unwrap(
+      await this._settlement.setManual(id, winner, principal?.id ?? 'unknown'),
+    );
+  }
+
+  @Delete('trades/:id/settlement')
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Bỏ kết quả lệnh (lượt đối soát sau lấy lại từ Polymarket)',
+  })
+  async clearSettlement(@Param('id') id: string) {
+    return unwrap(await this._settlement.clear(id));
   }
 
   @Get('trades/:id')

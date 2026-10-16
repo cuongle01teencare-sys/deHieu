@@ -346,4 +346,93 @@ describe('Postgres: auto trade', () => {
     expect((await r.list({ limit: 5 }))[0]?.legs).toHaveLength(2);
     expect(await r.get('missing')).toBeNull();
   });
+
+  it('giấy đối chiếu của lệnh thật: không vào sổ lệnh / thống kê, xóa lệnh thật xóa luôn', async () => {
+    const r = new DrizzleTradeAttemptRepository(tx);
+    await r.record(trade('L', { mode: 'live', status: 'filled' }));
+    await r.record(
+      trade('L:shadow', { mode: 'shadow', detail: { shadowOf: 'L' } }),
+    );
+    expect((await r.list({ limit: 10 })).map((t) => t.id)).toEqual(['L']);
+    expect((await r.stats({})).attempts).toBe(1);
+    expect(await r.delete('L')).toBe(true);
+    expect(await r.get('L:shadow')).toBeNull();
+  });
+
+  it('kết quả lệnh: hàng chờ đối soát, lưu / ghi đè / xóa, báo cáo theo tài khoản', async () => {
+    const r = new DrizzleTradeAttemptRepository(tx);
+    const poly = {
+      tenant: 'polymarket',
+      side: 1,
+      pick: 'b',
+      odds: 2.2,
+      url: null,
+      startsAt: null,
+      tournament: null,
+      tokenId: 'tok-1',
+      shares: 50,
+      avgPrice: 0.4,
+      fee: 0.5,
+      cost: 20.5,
+    };
+    const old = Date.now() - 3_600_000;
+    await r.record(
+      trade('T1', {
+        polymarket: poly,
+        createdAt: old,
+        csgoempireAccountId: 'e1',
+        polymarketAccountId: 'p1',
+      }),
+    );
+    // của tài khoản khác → không lẫn vào báo cáo e1
+    await r.record(
+      trade('T2', {
+        polymarket: poly,
+        createdAt: old,
+        csgoempireAccountId: 'e2',
+        polymarketAccountId: 'p2',
+      }),
+    );
+    await r.record(
+      trade('T3', {
+        status: 'skipped',
+        polymarket: poly,
+        createdAt: old,
+        csgoempireAccountId: 'e1',
+      }),
+    );
+    expect(
+      (await r.pendingSettlement(Date.now(), 10)).map((t) => t.id).sort(),
+    ).toEqual(['T1', 'T2']);
+    const base = {
+      attemptId: 'T1',
+      profileId: 'p1',
+      mode: 'paper',
+      winner: 'polymarket' as const,
+      polyPrice: 1,
+      bookResult: 'lost' as const,
+      bookPnl: -25,
+      polyPnl: 29.5,
+      pnl: 4.5,
+      source: 'polymarket' as const,
+      by: null,
+      resolvedAt: Date.now(),
+    };
+    await r.saveSettlement(base);
+    await r.saveSettlement({ ...base, source: 'manual', by: 'alice' });
+    expect(await r.getSettlement('T1')).toMatchObject({
+      source: 'manual',
+      by: 'alice',
+      pnl: 4.5,
+    });
+    expect(
+      (await r.pendingSettlement(Date.now(), 10)).map((t) => t.id),
+    ).toEqual(['T2']);
+    const rows = await r.accountTrades({ accountId: 'e1', limit: 10 });
+    expect(rows.map((x) => [x.trade.id, x.settlement?.pnl])).toEqual([
+      ['T1', 4.5],
+    ]);
+    expect(await r.deleteSettlement('T1')).toBe(true);
+    expect(await r.getSettlement('T1')).toBeNull();
+  });
 });

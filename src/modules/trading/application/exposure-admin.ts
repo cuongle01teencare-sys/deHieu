@@ -56,7 +56,7 @@ export class ExposureAdmin {
     if (this._sync) await this._sync.broadcast('exposure_freed', profileId);
   }
 
-  async view(): Promise<ExposureView> {
+  async view(mode?: 'paper' | 'live'): Promise<ExposureView> {
     const [profiles, tiers, settings] = await Promise.all([
       this._profiles.list(),
       this._tiers.listTiers(),
@@ -64,7 +64,7 @@ export class ExposureAdmin {
     ]);
     let snap;
     try {
-      snap = await this._reader.snapshot();
+      snap = await this._reader.snapshot(mode);
     } catch (e: unknown) {
       return {
         available: false,
@@ -104,15 +104,21 @@ export class ExposureAdmin {
     };
   }
 
-  async resetMatch(match: string): Promise<OperationStatus<{ keys: number }>> {
+  async resetMatch(
+    match: string,
+    mode?: 'paper' | 'live',
+  ): Promise<OperationStatus<{ keys: number }>> {
     if (!match.trim()) return { status: 'FAILED', reason: 'MATCH_REQUIRED' };
-    const keys = await this._reader.resetMatch(match);
+    const keys = await this._reader.resetMatch(match, mode);
     await this._freed();
     return { status: 'SUCEED', data: { keys } };
   }
 
-  async resetEntry(e: EntryRef): Promise<OperationStatus<{ keys: number }>> {
-    const keys = await this._reader.resetEntry(e);
+  async resetEntry(
+    e: EntryRef,
+    mode?: 'paper' | 'live',
+  ): Promise<OperationStatus<{ keys: number }>> {
+    const keys = await this._reader.resetEntry(e, mode);
     await this._freed(e.profileId);
     return { status: 'SUCEED', data: { keys } };
   }

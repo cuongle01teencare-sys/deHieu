@@ -1,11 +1,17 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule, ObserveInstrument, observeEnabled } from './app.module.js';
 import { setupOpenApi } from './shared/presentation/openapi-document.js';
+import { httpDiagnostics } from './shared/presentation/http-diagnostics.js';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     ...(observeEnabled ? { instrument: ObserveInstrument } : {}),
   });
+  app.use(
+    httpDiagnostics({
+      logSuccess: process.env.HTTP_DIAGNOSTICS_LOG_SUCCESS === 'true',
+    }),
+  );
   // Tài liệu API (Swagger UI) tại /docs. Tắt bằng API_DOCS_ENABLED=false.
   if (process.env.API_DOCS_ENABLED !== 'false') setupOpenApi(app);
   await app.listen(

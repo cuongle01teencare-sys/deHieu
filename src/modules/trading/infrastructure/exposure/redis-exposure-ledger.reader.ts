@@ -21,7 +21,12 @@ export class RedisExposureLedgerReader implements ExposureLedgerReader {
     private readonly _ns = 'trade:paper',
   ) {}
 
-  async snapshot(): Promise<ExposureSnapshot> {
+  async snapshot(mode?: 'paper' | 'live'): Promise<ExposureSnapshot> {
+    if (mode)
+      return new RedisExposureLedgerReader(
+        this._redis,
+        `trade:${mode}`,
+      ).snapshot();
     const keys = (
       await Promise.all(
         ['match:*', 'profile:*', 'slot:entry:*'].map((p) =>
@@ -74,7 +79,12 @@ export class RedisExposureLedgerReader implements ExposureLedgerReader {
     };
   }
 
-  async resetMatch(match: string): Promise<number> {
+  async resetMatch(match: string, mode?: 'paper' | 'live'): Promise<number> {
+    if (mode)
+      return new RedisExposureLedgerReader(
+        this._redis,
+        `trade:${mode}`,
+      ).resetMatch(match);
     const keys = [
       `${this._ns}:match:${match}`,
       ...(await this._scan(`${this._ns}:profile:*:match:${escapeGlob(match)}`)),
@@ -82,7 +92,12 @@ export class RedisExposureLedgerReader implements ExposureLedgerReader {
     return this._redis.del(...keys);
   }
 
-  resetEntry(e: EntryRef): Promise<number> {
+  resetEntry(e: EntryRef, mode?: 'paper' | 'live'): Promise<number> {
+    if (mode)
+      return new RedisExposureLedgerReader(
+        this._redis,
+        `trade:${mode}`,
+      ).resetEntry(e);
     return this._redis.del(
       `${this._ns}:slot:entry:${e.profileId}:${e.room}:${e.comboId}:${e.tierId}`,
     );

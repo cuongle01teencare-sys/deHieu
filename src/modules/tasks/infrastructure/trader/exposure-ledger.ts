@@ -21,6 +21,7 @@ export interface ExposureLedger {
   count(key: string): Promise<number>;
   /** Trả lại một suất (vào lệnh thất bại sau khi đã lấy suất). */
   giveBack(key: string): Promise<void>;
+  release(keys: readonly string[], amount: number): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -125,6 +126,19 @@ export class RedisExposureLedger implements ExposureLedger {
   async close() {
     await this._redis.quit().catch(() => this._redis.disconnect());
   }
+
+  async release(keys: readonly string[], amount: number) {
+    if (!keys.length) return;
+    await this._redis.eval(
+      `for _, key in ipairs(KEYS) do
+      local cur = tonumber(redis.call('GET', key) or '0')
+      if cur > 0 then redis.call('SET', key, math.max(0, cur - tonumber(ARGV[1])), 'KEEPTTL') end
+    end return 1`,
+      keys.length,
+      ...keys.map((k) => `${this._ns}:${k}`),
+      String(amount),
+    );
+  }
 }
 
 export class InMemoryExposureLedger implements ExposureLedger {
@@ -146,6 +160,18 @@ export class InMemoryExposureLedger implements ExposureLedger {
   giveBack(key: string) {
     const v = this._slots.get(key);
     if (v && v.n > 0) this._slots.set(key, { ...v, n: v.n - 1 });
+    return Promise.resolve();
+  }
+
+  release(keys: readonly string[], amount: number) {
+    for (const key of keys) {
+      const old = this._v.get(key);
+      if (old)
+        this._v.set(key, {
+          ...old,
+          amount: Math.max(0, this._get(key) - amount),
+        });
+    }
     return Promise.resolve();
   }
 

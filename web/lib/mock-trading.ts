@@ -10,6 +10,11 @@ import {
   type TradeStats,
   type TradingAccountView,
   type TraderProfile,
+  type AccountReport,
+  type ReportBucket,
+  type ReportMode,
+  type ReportPeriod,
+  type ReportTrade,
 } from './trading-types';
 
 /** Dữ liệu mẫu cho trang Auto trade (chế độ mẫu, không có backend). */
@@ -151,6 +156,31 @@ export function mockTrading(method: string, path: string, search: string, body: 
   const q = new URLSearchParams(search);
   const p = path.slice('trading/'.length);
   const b = (body ?? {}) as Record<string, unknown>;
+
+  const reportId = /^accounts\/([^/]+)\/report$/.exec(p)?.[1];
+  if (method === 'GET' && reportId) {
+    const acc = accounts.find((a) => a.id === decodeURIComponent(reportId));
+    return acc ? ok(mockAccountReport(acc, (q.get('modes') ?? 'live').split(',') as ReportMode[])) : { status: 404, body: { message: 'Not Found' } };
+  }
+  const checkId = /^accounts\/([^/]+)\/check$/.exec(p)?.[1];
+  if (method === 'POST' && checkId) {
+    const acc = accounts.find((a) => a.id === decodeURIComponent(checkId));
+    if (!acc) return { status: 404, body: { message: 'Not Found' } };
+    return ok({
+      accountId: acc.id,
+      venue: acc.venue,
+      label: acc.label,
+      remoteId: acc.venue === 'csgoempire' ? '7712039' : acc.config.venue === 'polymarket' ? acc.config.walletAddress : null,
+      remoteName: acc.venue === 'csgoempire' ? 'arb_trader_01' : null,
+      wallet: acc.config.venue === 'polymarket' ? (acc.config.funderAddress ?? acc.config.walletAddress) : null,
+      cash: acc.venue === 'csgoempire' ? 1284.37 : 942.15,
+      allowance: acc.venue === 'polymarket' ? 1e9 : null,
+      matchesConfig: true,
+      checkedAt: Date.now(),
+    });
+  }
+  if (method === 'POST' && p === 'settlements/run') return ok({ checked: 4, settled: 2 });
+  if ((method === 'PUT' || method === 'DELETE') && /^trades\/[^/]+\/settlement$/.test(p)) return ok(true);
 
   if (method === 'GET') {
     if (p === 'accounts') return ok(accounts.map(withUse));
@@ -361,4 +391,123 @@ export function mockTrading(method: string, path: string, search: string, body: 
     return ok({ matchExposureCapUsd });
   }
   return { status: 404, body: { message: 'Not Found' } };
+}
+
+/** Báo cáo tài khoản mẫu: ~7 tháng lệnh, cặp arbitrage lãi đều, mỗi chân lúc thắng lúc thua. */
+function mockAccountReport(acc: TradingAccountView, modes: ReportMode[]): AccountReport {
+  const DAY = 86_400_000;
+  const now = Date.now();
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const teams: [string, string][] = [['NAVI', 'FaZe'], ['G2', 'Vitality'], ['T1', 'Gen.G'], ['Spirit', 'MOUZ'], ['Liquid', 'Cloud9']];
+  const rows: { t: ReportTrade; mode: ReportMode; totalCost: number }[] = [];
+  for (let i = 0; i < 240; i++) {
+    const createdAt = now - Math.floor(rnd() * 210 * DAY);
+    const stake = 20 + Math.round(rnd() * 60);
+    const odds = 1.7 + rnd() * 0.8;
+    const price = Math.round((1 - 1 / odds) * (0.9 + rnd() * 0.07) * 1000) / 1000;
+    const shares = Math.round((stake * odds) * 100) / 100;
+    const polyCost = Math.round(shares * price * 100) / 100 + 0.3;
+    const settled = createdAt < now - DAY / 2 || rnd() > 0.6;
+    const bookWins = rnd() < 1 / odds;
+    const bookPnl = settled ? (bookWins ? stake * (odds - 1) : -stake) : null;
+    const polyPnl = settled ? (bookWins ? -polyCost : shares - polyCost) : null;
+    const expected = Math.min(stake * odds, shares) - stake - polyCost;
+    const mode: ReportMode = i % 3 === 0 ? 'shadow' : i % 7 === 0 ? 'paper' : 'live';
+    const book = { venue: 'csgoempire' as const, pick: teams[i % 5]![0], amount: stake, price: odds, cost: stake, result: settled ? (bookWins ? ('won' as const) : ('lost' as const)) : null, pnl: bookPnl };
+    const poly = { venue: 'polymarket' as const, pick: teams[i % 5]![1], amount: shares, price, cost: polyCost, result: settled ? (bookWins ? ('lost' as const) : ('won' as const)) : null, pnl: polyPnl };
+    rows.push({
+      mode,
+      totalCost: stake + polyCost,
+      t: {
+        id: `mock-${i}`,
+        createdAt,
+        mode,
+        status: mode === 'live' ? 'filled' : 'paper_filled',
+        profileId: 'p1',
+        room: 'room:cs2:x~y:match-winner',
+        market: 'match-winner',
+        teams: teams[i % 5]!,
+        leg: acc.venue === 'csgoempire' ? book : poly,
+        other: acc.venue === 'csgoempire' ? poly : book,
+        expected: Math.round(expected * 100) / 100,
+        pairPnl: settled ? Math.round(((bookPnl ?? 0) + (polyPnl ?? 0)) * 100) / 100 : null,
+        settlement: settled ? { winner: bookWins ? 'csgoempire' : 'polymarket', source: i % 17 === 0 ? 'manual' : 'polymarket', by: null, resolvedAt: createdAt + DAY / 4, polyPrice: bookWins ? 0 : 1 } : null,
+        pairedWith: null,
+      },
+    });
+  }
+  rows.sort((a, b) => b.t.createdAt - a.t.createdAt);
+  const sum = (list: typeof rows) => ({
+    trades: list.length,
+    settled: list.filter((r) => r.t.settlement).length,
+    staked: list.reduce((n, r) => n + r.t.leg.cost, 0),
+    totalCost: list.reduce((n, r) => n + r.totalCost, 0),
+    expected: list.reduce((n, r) => n + r.t.expected, 0),
+    legPnl: list.reduce((n, r) => n + (r.t.leg.pnl ?? 0), 0),
+    pairPnl: list.reduce((n, r) => n + (r.t.pairPnl ?? 0), 0),
+  });
+  const picked = rows.filter((r) => modes.includes(r.mode));
+  const key = (at: number, p: ReportPeriod) => {
+    const d = new Date(at + 7 * 3_600_000);
+    const y = d.getUTCFullYear();
+    const m = d.getUTCMonth() + 1;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    if (p === 'day') return `${y}-${pad(m)}-${pad(d.getUTCDate())}`;
+    if (p === 'week') {
+      d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+      return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+    }
+    if (p === 'month') return `${y}-${pad(m)}`;
+    if (p === 'quarter') return `${y}-Q${Math.ceil(m / 3)}`;
+    return String(y);
+  };
+  const series = Object.fromEntries(
+    (['day', 'week', 'month', 'quarter', 'year'] as const).map((p) => {
+      const map = new Map<string, ReportBucket>();
+      for (const { t } of picked) {
+        const k = key(t.createdAt, p);
+        const b = map.get(k) ?? { key: k, trades: 0, settled: 0, staked: 0, legPnl: 0, pairPnl: 0, expected: 0, legWins: 0, legLosses: 0 };
+        b.trades++;
+        b.settled += t.settlement ? 1 : 0;
+        b.staked += t.leg.cost;
+        b.legPnl += t.leg.pnl ?? 0;
+        b.pairPnl += t.pairPnl ?? 0;
+        b.expected += t.expected;
+        b.legWins += t.leg.result === 'won' ? 1 : 0;
+        b.legLosses += t.leg.result === 'lost' ? 1 : 0;
+        map.set(k, b);
+      }
+      return [p, [...map.values()].sort((a, b) => a.key.localeCompare(b.key)).slice(-60)];
+    }),
+  ) as Record<ReportPeriod, ReportBucket[]>;
+  const totals = sum(picked);
+  const legs = picked.map((r) => r.t.leg).filter((l) => l.pnl !== null);
+  return {
+    accountId: acc.id,
+    venue: acc.venue,
+    label: acc.label,
+    timeZone: 'Asia/Ho_Chi_Minh',
+    modes,
+    generatedAt: now,
+    truncated: false,
+    totals: {
+      ...totals,
+      legWins: legs.filter((l) => l.result === 'won').length,
+      legLosses: legs.filter((l) => l.result === 'lost').length,
+      legVoids: 0,
+      bestLeg: legs.length ? Math.max(...legs.map((l) => l.pnl!)) : null,
+      worstLeg: legs.length ? Math.min(...legs.map((l) => l.pnl!)) : null,
+    },
+    series,
+    compare: {
+      byMode: {
+        live: sum(rows.filter((r) => r.mode === 'live')),
+        shadow: sum(rows.filter((r) => r.mode === 'shadow')),
+        paper: sum(rows.filter((r) => r.mode === 'paper')),
+      },
+      paired: { count: 74, liveExpected: 182.4, shadowExpected: 196.1, bothSettled: 70, livePnl: 171.2, shadowPnl: 188.9, shadowOnly: 6 },
+    },
+    trades: picked.slice(0, 300).map((r) => r.t),
+  };
 }

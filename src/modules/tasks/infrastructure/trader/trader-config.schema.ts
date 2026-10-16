@@ -13,7 +13,26 @@ export const TraderConfigSchema = z.object({
   profileName: z.string(),
   active: z.boolean(),
   inactiveReason: z.string().nullable(),
-  mode: z.literal('paper'),
+  mode: z.enum(['paper', 'live']),
+  execution: z
+    .object({
+      empire: z.object({
+        browserProfile: z.string().min(1),
+        token: z.string().min(1),
+        expiresAt: nonNeg,
+        apiUrl: z.literal('https://api-h-c7818b61-608.sptpub.com'),
+        brandId: z.literal('2432911154364948480'),
+        sessionId: z.string(),
+        minBet: nonNeg,
+        cookie: z.string(),
+      }),
+      polymarket: z.object({
+        walletAddress: z.string(),
+        funderAddress: z.string().nullable(),
+        secretCipher: z.string().min(1),
+      }),
+    })
+    .optional(),
   accounts: z.object({
     csgoempire: z.object({ id: z.string(), label: z.string() }).nullable(),
     polymarket: z.object({ id: z.string(), label: z.string() }).nullable(),

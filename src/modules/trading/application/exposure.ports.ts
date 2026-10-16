@@ -42,10 +42,10 @@ export interface EntryRef {
 
 export interface ExposureLedgerReader {
   /** Ném lỗi khi không đọc được (Redis không chạy...). */
-  snapshot(): Promise<ExposureSnapshot>;
+  snapshot(mode?: 'paper' | 'live'): Promise<ExposureSnapshot>;
   /** Xóa mọi khóa tiền của trận (chung + riêng từng profile). Trả số khóa đã xóa. */
-  resetMatch(match: string): Promise<number>;
+  resetMatch(match: string, mode?: 'paper' | 'live'): Promise<number>;
   /** Xóa bộ đếm số lệnh của một cửa + hạng. */
-  resetEntry(e: EntryRef): Promise<number>;
+  resetEntry(e: EntryRef, mode?: 'paper' | 'live'): Promise<number>;
 }
 export const EXPOSURE_LEDGER_READER = Symbol('EXPOSURE_LEDGER_READER');

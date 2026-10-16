@@ -5,7 +5,10 @@ import {
   eq,
   gte,
   inArray,
+  isNull,
   lt,
+  ne,
+  or,
   sql,
   type SQL,
 } from 'drizzle-orm';
@@ -41,6 +44,14 @@ import type {
   TradeStats,
   TradeStatus,
 } from '../../../application/trade-attempt.js';
+import {
+  SETTLEABLE_STATUSES,
+  type SettleWinner,
+  type LegResult,
+  type SettleSource,
+  type TradeSettlement,
+  type TradeSettlementRepository,
+} from '../../../application/trade-settlement.js';
 import type {
   TradeAttemptRepository,
   TraderProfileRepository,
@@ -50,6 +61,7 @@ import type {
 import {
   drizzleTradeAttemptsTable as trades,
   drizzleTradeLegsTable as legs,
+  drizzleTradeSettlementsTable as settlements,
   drizzleTraderProfilesTable as profiles,
   drizzleTradingAccountsTable as accounts,
   drizzleTradingSettingsTable as settings,
@@ -265,7 +277,30 @@ const sourceIs = (s: TradeSource): SQL =>
     ? sql`(${trades.detail} -> 'manual') is not null`
     : sql`(${trades.detail} -> 'manual') is null`;
 
-export class DrizzleTradeAttemptRepository implements TradeAttemptRepository {
+type SettlementRow = typeof settlements.$inferSelect;
+const toSettlement = (r: SettlementRow): TradeSettlement => ({
+  attemptId: r.attemptId,
+  profileId: r.profileId,
+  mode: r.mode,
+  winner: r.winner as SettleWinner,
+  polyPrice: r.polyPrice,
+  bookResult: r.bookResult as LegResult,
+  bookPnl: r.bookPnl,
+  polyPnl: r.polyPnl,
+  pnl: r.pnl,
+  source: r.source as SettleSource,
+  by: r.by,
+  resolvedAt: r.resolvedAt.getTime(),
+});
+
+/** Bản giấy đối chiếu của lệnh thật: chỉ dùng cho báo cáo thật ↔ giấy, không vào sổ lệnh thường. */
+const notShadow = ne(trades.mode, 'shadow');
+/** Chỉ hỏi kết quả lệnh trong chừng này (market không bao giờ resolve không nghẽn hàng đợi). */
+const SETTLE_WINDOW_MS = 60 * 24 * 3_600_000;
+
+export class DrizzleTradeAttemptRepository
+  implements TradeAttemptRepository, TradeSettlementRepository
+{
   constructor(private readonly _tx: TransactionContext) {}
 
   /** Lệnh + các chân trong MỘT transaction; trùng id (worker gửi lại) = bỏ qua cả hai. */
@@ -330,7 +365,7 @@ export class DrizzleTradeAttemptRepository implements TradeAttemptRepository {
   }
 
   async list(q: TradeAttemptQuery): Promise<TradeAttempt[]> {
-    const where: SQL[] = [];
+    const where: SQL[] = [notShadow];
     if (q.profileId) where.push(eq(trades.profileId, q.profileId));
     if (q.status) where.push(eq(trades.status, q.status));
     if (q.source) where.push(sourceIs(q.source));
@@ -345,7 +380,7 @@ export class DrizzleTradeAttemptRepository implements TradeAttemptRepository {
   }
 
   async stats(q: TradeStatsQuery): Promise<TradeStats> {
-    const where: SQL[] = [];
+    const where: SQL[] = [notShadow];
     if (q.profileId) where.push(eq(trades.profileId, q.profileId));
     if (q.source) where.push(sourceIs(q.source));
     if (q.since) where.push(gte(trades.createdAt, new Date(q.since)));
@@ -372,7 +407,7 @@ export class DrizzleTradeAttemptRepository implements TradeAttemptRepository {
     };
     for (const r of rows) {
       s.attempts += r.n;
-      if (r.status === 'paper_filled') {
+      if (r.status === 'paper_filled' || r.status === 'filled') {
         s.filled += r.n;
         s.totalCost += r.cost;
         s.profit += r.profit;
@@ -407,19 +442,21 @@ export class DrizzleTradeAttemptRepository implements TradeAttemptRepository {
   purge(f: TradePurgeFilter): Promise<number> {
     return this._tx.run(async () => {
       const where = this._purgeWhere(f);
-      if (where)
+      if (where) {
+        const ids = this._tx.executor
+          .select({ id: trades.id })
+          .from(trades)
+          .where(where);
         await this._tx.executor
           .delete(legs)
-          .where(
-            inArray(
-              legs.attemptId,
-              this._tx.executor
-                .select({ id: trades.id })
-                .from(trades)
-                .where(where),
-            ),
-          );
-      else await this._tx.executor.delete(legs);
+          .where(inArray(legs.attemptId, ids));
+        await this._tx.executor
+          .delete(settlements)
+          .where(inArray(settlements.attemptId, ids));
+      } else {
+        await this._tx.executor.delete(legs);
+        await this._tx.executor.delete(settlements);
+      }
       const rows = await this._tx.executor
         .delete(trades)
         .where(where)
@@ -428,14 +465,99 @@ export class DrizzleTradeAttemptRepository implements TradeAttemptRepository {
     });
   }
 
+  /** Xóa lệnh kèm các chân, kết quả và bản giấy đối chiếu của nó. */
   delete(id: string): Promise<boolean> {
     return this._tx.run(async () => {
-      await this._tx.executor.delete(legs).where(eq(legs.attemptId, id));
+      const ids = [id, `${id}:shadow`];
+      await this._tx.executor.delete(legs).where(inArray(legs.attemptId, ids));
+      await this._tx.executor
+        .delete(settlements)
+        .where(inArray(settlements.attemptId, ids));
+      await this._tx.executor
+        .delete(trades)
+        .where(eq(trades.id, `${id}:shadow`));
       const rows = await this._tx.executor
         .delete(trades)
         .where(eq(trades.id, id))
         .returning({ id: trades.id });
       return rows.length > 0;
+    });
+  }
+
+  // ------------------------------------------------------------- kết quả lệnh
+
+  async pendingSettlement(before: number, limit: number) {
+    const rows = await this._tx.executor
+      .select({ t: trades })
+      .from(trades)
+      .leftJoin(settlements, eq(settlements.attemptId, trades.id))
+      .where(
+        and(
+          isNull(settlements.attemptId),
+          inArray(trades.status, SETTLEABLE_STATUSES),
+          lt(trades.createdAt, new Date(before)),
+          gte(trades.createdAt, new Date(before - SETTLE_WINDOW_MS)),
+          sql`coalesce(${trades.polymarket} ->> 'tokenId', '') <> ''`,
+        ),
+      )
+      .orderBy(asc(trades.createdAt))
+      .limit(limit);
+    return this._withLegs(rows.map((r) => r.t));
+  }
+
+  async getSettlement(attemptId: string) {
+    const [r] = await this._tx.executor
+      .select()
+      .from(settlements)
+      .where(eq(settlements.attemptId, attemptId));
+    return r ? toSettlement(r) : null;
+  }
+
+  async saveSettlement(st: TradeSettlement) {
+    const row = { ...st, resolvedAt: new Date(st.resolvedAt) };
+    const set: Partial<typeof row> = { ...row };
+    delete set.attemptId;
+    await this._tx.executor
+      .insert(settlements)
+      .values(row)
+      .onConflictDoUpdate({
+        target: settlements.attemptId,
+        set: { ...set, updatedAt: new Date() },
+      });
+  }
+
+  async deleteSettlement(attemptId: string) {
+    const rows = await this._tx.executor
+      .delete(settlements)
+      .where(eq(settlements.attemptId, attemptId))
+      .returning({ id: settlements.attemptId });
+    return rows.length > 0;
+  }
+
+  async accountTrades(q: {
+    readonly accountId: string;
+    readonly since?: number;
+    readonly limit: number;
+  }) {
+    const where: SQL[] = [
+      or(
+        eq(trades.csgoempireAccountId, q.accountId),
+        eq(trades.polymarketAccountId, q.accountId),
+      )!,
+      inArray(trades.status, SETTLEABLE_STATUSES),
+    ];
+    if (q.since) where.push(gte(trades.createdAt, new Date(q.since)));
+    const rows = await this._tx.executor
+      .select({ t: trades, s: settlements })
+      .from(trades)
+      .leftJoin(settlements, eq(settlements.attemptId, trades.id))
+      .where(and(...where))
+      .orderBy(desc(trades.createdAt))
+      .limit(q.limit);
+    const withLegs = await this._withLegs(rows.map((r) => r.t));
+    return withLegs.map((trade, i) => {
+      const st = rows[i].s;
+      return { trade, settlement: st ? toSettlement(st) : null };
     });
   }
 }

@@ -39,7 +39,8 @@ export async function callBackend(
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
     cache: 'no-store',
-    signal: AbortSignal.timeout(15_000),
+    // Kiểm tra tài khoản có thể phải mở Chromium lấy phiên csgoempire mới: chờ lâu hơn.
+    signal: AbortSignal.timeout(/^trading\/accounts\/[^/]+\/check$/.test(path) ? 100_000 : 15_000),
   });
   const text = await res.text();
   let parsed: unknown = null;
