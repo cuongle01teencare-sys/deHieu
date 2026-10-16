@@ -2,13 +2,13 @@ import type { LiveTradingConfig } from '../../application/live-trading.js';
 import { accountResource, type AccountLock } from './account-lock.js';
 import {
   ApiVenueOrders,
+  maskSecrets,
   type OrderPlan,
   type VenueFill,
   type EmpireBalanceStore,
   type VenueAccountIdentity,
   type VenueOrders,
 } from './venue-orders.js';
-import { SESSION_EXPIRED } from './empire-session.js';
 
 export interface ExecutionResult {
   status: 'filled' | 'partial' | 'cancelled' | 'error';
@@ -90,11 +90,24 @@ export class LiveOrderExecutor implements LiveExecutor {
             e instanceof Error
               ? e.message.split(':')[0]
               : 'LIVE_PREFLIGHT_FAILED';
+          // Giữ CHI TIẾT sau mã (endpoint, HTTP, lý do sàn trả) để biết vì sao hủy, không chỉ mã trơn.
+          const detail =
+            e instanceof Error
+              ? maskSecrets(e.message.slice(code.length + 1).trim()).slice(
+                  0,
+                  240,
+                )
+              : '';
+          const reason = /^[A-Z_0-9]+$/.test(code)
+            ? detail
+              ? `${code}: ${detail}`
+              : code
+            : 'LIVE_PREFLIGHT_FAILED';
           if (code === 'CSGOEMPIRE_SESSION_EXPIRED')
-            await this.locks.halt([resources[0]], SESSION_EXPIRED);
+            await this.locks.halt([resources[0]], reason);
           return {
             status: 'cancelled',
-            reason: /^[A-Z_0-9]+$/.test(code) ? code : 'LIVE_PREFLIGHT_FAILED',
+            reason,
             submitted: false,
             fills: [],
           };

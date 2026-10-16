@@ -95,14 +95,58 @@ async function json(
   )
     throw new Error(`CSGOEMPIRE_HTTP_REJECTED: HTTP ${response.status}`);
   if (response.status === 401 || response.status === 403)
-    throw new Error(SESSION_EXPIRED);
-  if (!response.ok) throw new Error(`VENUE_HTTP_${response.status}`);
+    throw new Error(
+      `${SESSION_EXPIRED} — BetBy ${endpoint(url)} HTTP ${response.status}${await bodyHint(response)}`,
+    );
+  if (!response.ok)
+    throw new Error(
+      `VENUE_HTTP_${response.status}: ${endpoint(url)}${await bodyHint(response)}`,
+    );
   try {
     return (await response.json()) as Record<string, unknown>;
   } catch {
     throw new Error(`VENUE_NOT_JSON: HTTP ${response.status}`);
   }
 }
+/** Đường dẫn API (không query) để biết endpoint nào lỗi. */
+function endpoint(url: string) {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return '?';
+  }
+}
+
+/** Che chuỗi giống token / khóa trước khi đưa vào lý do lỗi. */
+export function maskSecrets(s: string) {
+  return s
+    .replace(/eyJ[\w-]+\.[\w-]+\.[\w-]+/g, '[ẩn]')
+    .replace(/(0x)?[0-9a-fA-F]{64,}/g, '[ẩn]')
+    .replace(/[A-Za-z0-9+/_=-]{40,}/g, '[ẩn]');
+}
+
+/** Mã / thông điệp lỗi sàn trả về (đã che, tối đa 160 ký tự) — để biết VÌ SAO bị từ chối. */
+async function bodyHint(response: Response) {
+  try {
+    const text = (await response.text()).trim();
+    if (!text) return '';
+    let hint = text;
+    try {
+      const j = JSON.parse(text) as Record<string, unknown>;
+      const parts = ['code', 'error', 'message', 'msg', 'reason', 'detail']
+        .map((k) => j[k])
+        .filter((v) => typeof v === 'string' || typeof v === 'number')
+        .map(String);
+      if (parts.length) hint = parts.join(' · ');
+    } catch {
+      // không phải JSON: dùng chữ thô
+    }
+    return ` — ${maskSecrets(hint).replace(/\s+/g, ' ').slice(0, 160)}`;
+  } catch {
+    return '';
+  }
+}
+
 function finite(value: unknown): number {
   const n =
     typeof value === 'string' || typeof value === 'number'
@@ -306,7 +350,14 @@ export class ApiVenueOrders implements VenueOrders {
     p: OrderPlan,
     signal: AbortSignal,
   ): Promise<PreparedOrder> {
-    if (c.expiresAt <= Date.now() + 20_000) throw new Error(SESSION_EXPIRED);
+    if (c.expiresAt <= Date.now() + 20_000)
+      throw new Error(
+        `${SESSION_EXPIRED} — JWT BetBy ${
+          c.expiresAt <= Date.now()
+            ? `đã hết hạn ${Math.round((Date.now() - c.expiresAt) / 1000)} giây trước`
+            : `chỉ còn ${Math.round((c.expiresAt - Date.now()) / 1000)} giây`
+        }, chưa được làm mới kịp`,
+      );
     if (!p.bookRef.e || !p.bookRef.m || !p.bookRef[`o${p.bookSide}`])
       throw new Error('CSGOEMPIRE_REF_MISSING');
     if (Math.abs(p.stake * 100 - Math.round(p.stake * 100)) > 1e-6)

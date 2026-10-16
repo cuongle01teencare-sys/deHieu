@@ -50,10 +50,11 @@ export class AccountLock {
   async resume(resource: string) {
     await this.redis.del(`trade:halt:${resource}`);
   }
+  /** Gỡ khóa nếu lý do đúng `expected` (hoặc `expected` kèm chi tiết phía sau: "<expected> — …"). */
   async clearHalt(resources: readonly string[], expected: string) {
     for (const resource of resources)
       await this.redis.eval(
-        "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0",
+        "local v = redis.call('GET', KEYS[1]) if v and (v == ARGV[1] or string.sub(v, 1, string.len(ARGV[1]) + 5) == ARGV[1] .. ' — ') then return redis.call('DEL', KEYS[1]) end return 0",
         1,
         `trade:halt:${resource}`,
         expected,

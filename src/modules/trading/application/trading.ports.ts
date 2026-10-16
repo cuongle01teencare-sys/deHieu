@@ -113,6 +113,11 @@ export interface TradingAccountCheck {
    */
   readonly positions: number | null;
   /**
+   * Tài khoản đang bị KHÓA vào lệnh (vd BetBy từ chối phiên, lệnh chưa rõ kết quả): lý do khóa;
+   * null = không khóa. Số dư đọc được KHÔNG có nghĩa là bot vào lệnh được khi đang khóa.
+   */
+  readonly halted: string | null;
+  /**
    * Khớp với cấu hình đã lưu? csgoempire: tài khoản đăng nhập trên sàn = email/username đã lưu;
    * polymarket: private key ký ra đúng địa chỉ ví đã lưu. null = không đủ dữ liệu để so.
    */

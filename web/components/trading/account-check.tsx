@@ -68,6 +68,22 @@ const ERROR_LABEL: Record<string, string> = {
   ACCOUNT_BUSY: 'Tài khoản đang bận vào lệnh, thử lại sau',
   ACCOUNT_CHECK_FAILED: 'Kiểm tra tài khoản lỗi',
 };
+/** Lý do khóa vào lệnh: nhãn + chi tiết (endpoint, HTTP…) + cách gỡ. */
+function haltText(reason: string) {
+  const head = reason.split(':')[0].trim();
+  const rest = reason.slice(head.length + 1).trim();
+  if (head === 'LIVE_RECONCILIATION_REQUIRED')
+    return 'Có lệnh chưa rõ kết quả — đối soát hai chân trên sàn rồi chạy pnpm trading:resume … --reconciled';
+  const dash = rest.indexOf(' — ');
+  const extra =
+    dash >= 0 ? rest.slice(dash + 3) : ERROR_LABEL[head] ? '' : rest;
+  const label =
+    head === 'CSGOEMPIRE_SESSION_EXPIRED'
+      ? 'BetBy từ chối phiên — bấm Đăng nhập để lấy phiên mới và gỡ khóa'
+      : (ERROR_LABEL[head] ?? head);
+  return `${label}${extra ? ` (${extra})` : ''}`;
+}
+
 /** Nhãn dễ đọc + phần chi tiết sau dấu ":" (vd mã HTTP), không chỉ mã lỗi trơn. */
 const errorText = (code: string) => {
   const head = code.split(':')[0]!.trim();
@@ -182,6 +198,12 @@ export function AccountCheckLine({
         <span className="num text-warn">allowance {usd(d.allowance)}</span>
       ) : null}
       <span className="num text-faint">lúc {fmtStamp(d.checkedAt)}</span>
+      {d.halted ? (
+        <div className="flex w-full flex-wrap items-center gap-x-2 gap-y-1">
+          <Pill tone="critical">Đang khóa vào lệnh</Pill>
+          <span className="text-critical">{haltText(d.halted)}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

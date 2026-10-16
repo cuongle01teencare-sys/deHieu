@@ -211,6 +211,30 @@ describe('live pair execution', () => {
     );
     for (const submit of s.submit) expect(submit).toHaveBeenCalledOnce();
   });
+  it('BetBy từ chối phiên: hủy, khóa tài khoản csgoempire VÀ giữ chi tiết (endpoint, HTTP) trong lý do', async () => {
+    const s = setup([100, 100]);
+    s.venues.empire.mockRejectedValueOnce(
+      new Error(
+        'CSGOEMPIRE_SESSION_EXPIRED: Phiên csgoempire hết hạn — BetBy /api/v1/coupon/max HTTP 401 — token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln',
+      ),
+    );
+    const result = await s.executor.execute(
+      credentials,
+      plan,
+      new AbortController().signal,
+    );
+    expect(result.status).toBe('cancelled');
+    expect(result.reason).toContain(
+      'CSGOEMPIRE_SESSION_EXPIRED: Phiên csgoempire hết hạn — BetBy /api/v1/coupon/max HTTP 401',
+    );
+    expect(result.reason).not.toContain('eyJ');
+    expect(s.locks.halt).toHaveBeenCalledWith(
+      [expect.stringMatching(/^csgoempire:/)],
+      result.reason,
+    );
+    for (const submit of s.submit) expect(submit).not.toHaveBeenCalled();
+  });
+
   it('does not send expired signals', async () => {
     const s = setup();
     expect(

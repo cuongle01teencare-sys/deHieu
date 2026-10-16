@@ -85,6 +85,14 @@ export function reasonText(
     const why = rest(t.reason);
     return `Kèo bị hủy: ${CANCEL_REASONS[why] ?? why}`;
   }
+  if (c === 'INACTIVE') {
+    // "Profile đứng yên" kèm LÝ DO (vd phiên csgoempire hết hạn) thay vì chỉ nhãn chung
+    const why = rest(t.reason);
+    const inner = REASON_LABEL[code(why)];
+    return why
+      ? `${REASON_LABEL.INACTIVE}: ${inner ?? why}`
+      : REASON_LABEL.INACTIVE;
+  }
   return REASON_LABEL[c] ?? c;
 }
 

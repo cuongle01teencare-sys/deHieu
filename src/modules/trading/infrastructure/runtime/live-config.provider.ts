@@ -310,6 +310,8 @@ export class LiveConfigProvider
       venue: account.config.venue,
       label: account.label,
     };
+    // Khóa vào lệnh đang có trên tài khoản (đọc trước: kể cả khi đọc số dư lỗi phía sau cũng không sao)
+    const halted = await this.haltedReason(account);
     if (account.config.venue === 'polymarket') {
       if (!account.secretCipher) throw new Error('POLYMARKET_KEY_MISSING');
       const r = await readPolymarketBalance(
@@ -324,6 +326,7 @@ export class LiveConfigProvider
         cash: r.cash,
         allowance: r.allowance,
         positions: r.positions,
+        halted,
         // readPolymarketBalance ném POLYMARKET_WALLET_MISMATCH nếu key không ra đúng ví.
         matchesConfig: true,
         checkedAt: Date.now(),
@@ -360,6 +363,7 @@ export class LiveConfigProvider
       cash: r.cash,
       allowance: null,
       positions: null,
+      halted,
       matchesConfig:
         expected && (r.username || r.email)
           ? [r.username, r.email].some(
@@ -371,6 +375,25 @@ export class LiveConfigProvider
             : null,
       checkedAt: Date.now(),
     };
+  }
+  /** Lý do khóa vào lệnh của tài khoản (Redis); không đọc được Redis → null (không chặn nút kiểm tra). */
+  private async haltedReason(account: TradingAccount): Promise<string | null> {
+    if (!this.locks) return null;
+    const resource =
+      account.config.venue === 'polymarket'
+        ? accountResource(
+            'polymarket',
+            (
+              account.config.funderAddress ?? account.config.walletAddress
+            ).toLowerCase(),
+          )
+        : accountResource('csgoempire', account.config.browserProfile);
+    try {
+      await this.locks.connect();
+      return await this.locks.halted([resource]);
+    } catch {
+      return null;
+    }
   }
   async onApplicationShutdown() {
     for (const job of this.jobs.values()) job.abort.abort();
