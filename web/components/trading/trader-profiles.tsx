@@ -706,6 +706,22 @@ function ProfileForm({
               }
             />
           </Field>
+          <Field
+            label="Bỏ kèo margin cao bất thường (%)"
+            htmlFor="pf-maxnet"
+            help="Margin kèo hoặc lãi ròng tính ra vượt số này → nghi giá cũ / sổ lệnh lỗi, bỏ qua, kể cả lệnh bấm tay ở On click. Kèo quá đẹp thường biến mất trước khi lệnh tới sàn (một chân khớp, chân kia không). Mặc định 15; 0 = tắt."
+          >
+            <NumInput
+              id="pf-maxnet"
+              value={+((risk.maxNetMargin ?? 0) * 100).toFixed(4)}
+              onValue={(v) =>
+                v !== undefined &&
+                v >= 0 &&
+                v <= 1000 &&
+                setRisk({ ...risk, maxNetMargin: v / 100 })
+              }
+            />
+          </Field>
         </div>
         <Field
           label="Vẫn vào lệnh khi kèo bị hủy vì"

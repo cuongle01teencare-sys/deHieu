@@ -12,6 +12,7 @@ import {
   updateBalanceAllowance,
 } from '@polymarket/client/actions';
 import { privateKey } from '@polymarket/client/viem';
+import { createHash } from 'node:crypto';
 import type { LiveTradingConfig } from '../../application/live-trading.js';
 import { AesGcmSecretCipher } from './secret-cipher.js';
 import { SESSION_EXPIRED } from './empire-session.js';
@@ -59,7 +60,13 @@ export interface PreparedOrder {
   cash: number;
   requiredCash: number;
   account: VenueAccountIdentity;
-  submit(): Promise<VenueFill>;
+  /**
+   * Gửi lệnh. csgoempire: `hedge` = chân Polymarket ĐÃ khớp (share, chi phí thật). Vé ở odds gốc bị
+   * từ chối (thường do odds giảm) thì đặt lại MỘT lần với tiền cược + odds sàn tính từ hedgeBet.
+   */
+  submit(options?: {
+    hedge?: { shares: number; cost: number };
+  }): Promise<VenueFill>;
 }
 export interface VenueOrders {
   empire(
@@ -108,6 +115,34 @@ async function json(
     throw new Error(`VENUE_NOT_JSON: HTTP ${response.status}`);
   }
 }
+/**
+ * Đặt bù BetBy khi đã có S share Polymarket (chi phí Cₚ) mà odds BetBy giảm.
+ *  - Cửa BetBy thắng: x·k ≥ x + Cₚ  ⇔ x ≥ Cₚ / (k − 1)
+ *  - Cửa Polymarket thắng: S ≥ x + Cₚ ⇔ x ≤ S − Cₚ
+ * Tiền cược x = S/k cho cả hai cửa nhận về như nhau; còn bù được khi k ≥ S/(S − Cₚ) (odds sàn).
+ * Đặt ở odds sàn (làm tròn lên 0.01), x làm tròn XUỐNG tới cent, kiểm lại cả hai điều kiện sau làm
+ * tròn. Odds thật cao hơn odds sàn (BetBy nhận nhờ "higher") thì cửa BetBy còn trả nhiều hơn.
+ * null = không có odds nào thấp hơn odds gốc mà còn bù được.
+ */
+export function hedgeBet(
+  shares: number,
+  polyCost: number,
+  plannedOdds: number,
+): { odds: number; stake: number } | null {
+  if (!(shares > polyCost && polyCost >= 0)) return null;
+  let odds = Math.ceil((shares / (shares - polyCost)) * 100 - 1e-9) / 100;
+  for (; odds < plannedOdds - 1e-9; odds = Math.round(odds * 100 + 1) / 100) {
+    const stake = Math.floor((shares / odds) * 100 + 1e-9) / 100;
+    if (
+      stake > 0 &&
+      stake * odds + 1e-9 >= stake + polyCost &&
+      shares + 1e-9 >= stake + polyCost
+    )
+      return { odds, stake };
+  }
+  return null;
+}
+
 /** Đường dẫn API (không query) để biết endpoint nào lỗi. */
 function endpoint(url: string) {
   try {
@@ -422,51 +457,100 @@ export class ApiVenueOrders implements VenueOrders {
       cash,
       requiredCash: p.stake,
       account,
-      submit: async () => {
-        const sentAt = Date.now();
-        const result = await json(
-          `${c.apiUrl}/api/v2/coupon/brand/${c.brandId}/bet/place`,
-          { method: 'POST', headers, body: JSON.stringify([coupon]) },
-          new AbortController().signal,
+      submit: async (options = {}) => {
+        // Một lần đặt vé ở odds `k` (BetBy nhận nếu odds hiện tại ≥ k, nhờ odds_change "higher").
+        const place = async (k: number, stake: number, requestId: string) => {
+          const body = {
+            ...coupon,
+            sum: stake.toFixed(2),
+            k: String(k),
+            bet_request_id: requestId,
+            selections: coupon.selections.map((sel) => ({
+              ...sel,
+              k: String(k),
+              timestamp: Date.now(),
+            })),
+          };
+          const sentAt = Date.now();
+          const result = await json(
+            `${c.apiUrl}/api/v2/coupon/brand/${c.brandId}/bet/place`,
+            { method: 'POST', headers, body: JSON.stringify([body]) },
+            new AbortController().signal,
+          );
+          const ackedAt = Date.now();
+          const accepted = Array.isArray(result.accepted)
+            ? (result.accepted.find(
+                (v: { bet_request_id?: string }) =>
+                  v.bet_request_id === requestId,
+              ) as { bet_id?: string } | undefined)
+            : undefined;
+          if (accepted?.bet_id) {
+            // trừ ngay vào số dư đã đọc, để lệnh kế tiếp không dùng lại cùng số tiền
+            await this.empireBalances
+              ?.spendEmpire(resource, stake)
+              .catch(() => undefined);
+            return {
+              status: 'filled',
+              orderRef: accepted.bet_id,
+              filledAmount: stake,
+              // odds đã yêu cầu = mức thấp nhất được nhận (BetBy có thể trả odds cao hơn)
+              avgPrice: k,
+              fee: 0,
+              cost: stake,
+              sentAt,
+              ackedAt,
+              filledAt: ackedAt,
+              error: null,
+            } satisfies VenueFill;
+          }
+          if (Array.isArray(result.error) && result.error.length)
+            return {
+              status: 'rejected',
+              orderRef: null,
+              filledAmount: 0,
+              avgPrice: 0,
+              fee: 0,
+              cost: 0,
+              sentAt,
+              ackedAt,
+              filledAt: null,
+              // giữ lời BetBy (vd odds đổi, vượt hạn mức) để biết vì sao vé không vào
+              error: `CSGOEMPIRE_ORDER_REJECTED: odds ${k} — ${maskSecrets(JSON.stringify(result.error)).slice(0, 200)}`,
+            } satisfies VenueFill;
+          throw new Error('CSGOEMPIRE_ORDER_UNKNOWN');
+        };
+        const first = await place(p.bookOdds, p.stake, p.id);
+        if (first.status !== 'rejected' || !options.hedge) return first;
+        // Bị từ chối (thường do odds giảm) khi Polymarket ĐÃ khớp: đặt lại ở odds sàn còn bù được cả
+        // hai cửa, với tiền cược ĐỔI theo odds đó (x = share / odds) — xem hedgeBet.
+        const h = hedgeBet(
+          options.hedge.shares,
+          options.hedge.cost,
+          p.bookOdds,
         );
-        const ackedAt = Date.now();
-        const accepted = Array.isArray(result.accepted)
-          ? (result.accepted.find(
-              (v: { bet_request_id?: string }) => v.bet_request_id === p.id,
-            ) as { bet_id?: string } | undefined)
-          : undefined;
-        if (accepted?.bet_id) {
-          // trừ ngay vào số dư đã đọc, để lệnh kế tiếp không dùng lại cùng số tiền
-          await this.empireBalances
-            ?.spendEmpire(resource, p.stake)
-            .catch(() => undefined);
-          return {
-            status: 'filled',
-            orderRef: accepted.bet_id,
-            filledAmount: p.stake,
-            avgPrice: p.bookOdds,
-            fee: 0,
-            cost: p.stake,
-            sentAt,
-            ackedAt,
-            filledAt: ackedAt,
-            error: null,
-          };
-        }
-        if (Array.isArray(result.error) && result.error.length)
-          return {
-            status: 'rejected',
-            orderRef: null,
-            filledAmount: 0,
-            avgPrice: 0,
-            fee: 0,
-            cost: 0,
-            sentAt,
-            ackedAt,
-            filledAt: null,
-            error: 'CSGOEMPIRE_ORDER_REJECTED',
-          };
-        throw new Error('CSGOEMPIRE_ORDER_UNKNOWN');
+        const why = !h
+          ? 'không có odds nào thấp hơn odds gốc mà còn bù được cả hai cửa'
+          : h.stake < c.minBet
+            ? `tiền bù ${h.stake}$ dưới cược tối thiểu ${c.minBet}$`
+            : h.stake > finite(limit.max_bet)
+              ? `tiền bù ${h.stake}$ vượt hạn mức BetBy ${finite(limit.max_bet)}$`
+              : h.stake > cash
+                ? `tiền bù ${h.stake}$ vượt Cash csgoempire ${cash.toFixed(2)}$`
+                : null;
+        if (why || !h)
+          return { ...first, error: `${first.error} · không đặt bù: ${why}` };
+        // Mã yêu cầu mới, dẫn xuất cố định từ mã cũ (lần đầu bị từ chối hẳn → không có vé trùng).
+        const retry = await place(
+          h.odds,
+          h.stake,
+          createHash('sha256').update(`${p.id}:hedge`).digest('hex'),
+        );
+        return retry.status === 'rejected'
+          ? {
+              ...retry,
+              error: `${first.error} · đặt bù ${h.stake}$ ở odds sàn ${h.odds}: ${retry.error}`,
+            }
+          : retry;
       },
     };
   }
@@ -516,7 +600,8 @@ export class ApiVenueOrders implements VenueOrders {
             sentAt,
             ackedAt,
             filledAt: null,
-            error: `POLYMARKET_REJECTED:${response.code}`,
+            // giữ cả lời giải thích của sàn (vd FOK không khớp đủ) để biết vì sao chân này hỏng
+            error: `POLYMARKET_REJECTED:${response.code} — ${maskSecrets(response.message).slice(0, 200)}`,
           };
         const filledAmount = finite(response.takingAmount);
         const notional = finite(response.makingAmount);
@@ -547,7 +632,10 @@ export class ApiVenueOrders implements VenueOrders {
           sentAt,
           ackedAt,
           filledAt: status === 'filled' ? Date.now() : null,
-          error: status === 'filled' ? null : 'POLYMARKET_FILL_UNCONFIRMED',
+          error:
+            status === 'filled'
+              ? null
+              : `POLYMARKET_FILL_UNCONFIRMED: trạng thái ${response.status}, khớp ${filledAmount}/${p.shares} share`,
         };
       },
     };

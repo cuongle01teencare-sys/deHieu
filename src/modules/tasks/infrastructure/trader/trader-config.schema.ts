@@ -68,6 +68,8 @@ export const TraderConfigSchema = z.object({
     markets: z.array(z.string()).nullable().default(null),
     // giá bán thấp nhất Polymarket ≥ số này → không tự vào, chuyển On click; 0 = tắt (app cũ không gửi)
     oneClickMinPrice: z.number().min(0).max(1).default(0),
+    // margin kèo / lãi ròng vượt số này → nghi giá cũ, bỏ qua; 0 = tắt (app cũ không gửi)
+    maxNetMargin: z.number().min(0).max(10).default(0),
   }),
   matchExposureCapUsd: nonNeg,
 });

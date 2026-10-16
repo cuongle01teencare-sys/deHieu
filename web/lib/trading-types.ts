@@ -117,6 +117,8 @@ export interface RiskLimits {
   markets: string[] | null;
   /** Giá bán thấp nhất Polymarket ≥ ngưỡng này → bot không tự vào, chuyển sang On click chờ người vào. 0 = tắt. */
   oneClickMinPrice: number;
+  /** Margin kèo / lãi ròng vượt số này (vd 0.15) → nghi giá cũ, bỏ qua (cả vào tay). 0 = tắt. */
+  maxNetMargin: number;
 }
 
 export const DEFAULT_RISK: RiskLimits = {
@@ -127,6 +129,7 @@ export const DEFAULT_RISK: RiskLimits = {
   ignoreCancelReasons: ['better_opportunity'],
   markets: null,
   oneClickMinPrice: 0.5,
+  maxNetMargin: 0.15,
 };
 
 /** Kết quả của kèo On click (lọc lịch sử). */
@@ -235,6 +238,15 @@ export interface TradeDetail {
   };
   submitted?: boolean;
   feeEstimated?: boolean;
+  /** Lệnh thật: mốc thời gian (ms). Polymarket gửi trước, BetBy chỉ gửi khi Polymarket khớp đủ. */
+  execution?: {
+    prepareMs: number | null;
+    /** Tuổi kèo khi lệnh Polymarket rời app. */
+    fireAgeMs: number | null;
+    polymarketMs: number | null;
+    csgoempireMs: number | null;
+    gapMs: number | null;
+  };
   signalAgeMs?: number;
   targetStake?: number | null;
   bestAsk?: number | null;

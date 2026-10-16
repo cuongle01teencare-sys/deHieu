@@ -81,6 +81,7 @@ const CONFIG_SKIPS: Readonly<Record<string, (c: TraderConfig) => unknown>> = {
   BUDGET_EXHAUSTED: (c) => [c.matchExposureCapUsd, c.risk.matchCapUsd],
   CAP_REACHED: (c) => [c.matchExposureCapUsd, c.risk.matchCapUsd],
   STALE_SIGNAL: (c) => c.risk.maxSignalAgeMs,
+  SUSPICIOUS_MARGIN: (c) => c.risk.maxNetMargin,
   // tăng số lệnh mỗi hạng → cửa đang bị chặn được xét lại
   ALREADY_ENTERED: (c) => [
     c.risk.maxEntriesPerTier,
@@ -243,6 +244,31 @@ const tournamentOf = (l: HubLeg) => {
  * Paper ghi mô phỏng; live kiểm tra Cash rồi gửi hai API trong khóa tài khoản.
  * Kèo bị hủy trước khi gửi → bỏ; đã gửi thì ghi nhận kết quả để đối soát.
  */
+/** Mốc thời gian lệnh thật (ms). Polymarket gửi trước, BetBy chỉ gửi khi Polymarket khớp đủ. */
+function executionTiming(
+  issuedAt: number,
+  e: {
+    timing?: { startedAt: number; preparedAt: number };
+    fills: { sentAt: number; ackedAt: number }[];
+  },
+) {
+  const [book, poly] = e.fills;
+  const leg = (f?: { sentAt: number; ackedAt: number }) =>
+    f && f.sentAt > 0 ? f.ackedAt - f.sentAt : null;
+  return {
+    prepareMs: e.timing ? e.timing.preparedAt - e.timing.startedAt : null,
+    /** Tuổi kèo (từ lúc publisher phát) khi lệnh Polymarket rời app. */
+    fireAgeMs: poly && poly.sentAt > 0 ? poly.sentAt - issuedAt : null,
+    polymarketMs: leg(poly),
+    csgoempireMs: leg(book),
+    /** Từ lúc Polymarket trả lời tới lúc gửi BetBy. */
+    gapMs:
+      poly && book && book.sentAt > 0 && poly.ackedAt > 0
+        ? book.sentAt - poly.ackedAt
+        : null,
+  };
+}
+
 export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
   private _executor: LiveExecutor | null = null;
   private _config: TraderConfig | null = null;
@@ -757,6 +783,13 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         'skipped',
         `STALE_SIGNAL: ${startedAt - s.issuedAt}ms > ${cfg.risk.maxSignalAgeMs}ms`,
       );
+    // margin quá đẹp = thường là giá cũ / sổ lệnh lỗi, biến mất trước khi lệnh tới sàn (kể cả vào tay)
+    const maxMargin = cfg.risk.maxNetMargin;
+    if (maxMargin > 0 && s.margin > maxMargin)
+      return emit(
+        'skipped',
+        `SUSPICIOUS_MARGIN: margin kèo ${(s.margin * 100).toFixed(2)}% > ngưỡng ${(maxMargin * 100).toFixed(2)}% — nghi giá cũ`,
+      );
     if (cfg.risk.markets && !cfg.risk.markets.includes(s.market))
       return emit(
         'skipped',
@@ -858,6 +891,13 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           },
         });
 
+      // lãi ròng tính trên sổ lệnh thật cũng quá đẹp → cùng lý do
+      if (maxMargin > 0 && d.netMargin > maxMargin)
+        return emit(
+          'skipped',
+          `SUSPICIOUS_MARGIN: lãi ròng tính ra ${(d.netMargin * 100).toFixed(2)}% > ngưỡng ${(maxMargin * 100).toFixed(2)}% — nghi giá cũ`,
+          { tokenId },
+        );
       if (cfg.mode === 'live') {
         const stake = Math.floor((d.stake + 1e-9) * 100) / 100;
         const totalCost = stake + d.polyCost;
@@ -1061,6 +1101,16 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
         }
         const [bf, pf] = execution.fills;
         const totalCost = (bf?.cost ?? 0) + (pf?.cost ?? 0);
+        // Đặt bù BetBy (odds giảm → cược nhiều hơn dự kiến) có thể làm tổng tiền vượt phần đã giữ:
+        // ghi thêm phần vượt vào sổ hạn mức trận (đã vào rồi nên không chặn, cap 0 = luôn ghi được).
+        if (execution.submitted && totalCost > reserveCost + 0.005)
+          await deps.ledger
+            .reserve(
+              caps.map((c) => ({ key: c.key, cap: 0 })),
+              totalCost - reserveCost,
+              EXPOSURE_TTL_MS,
+            )
+            .catch(() => false);
         const payout =
           execution.status === 'filled'
             ? Math.min(
@@ -1111,6 +1161,9 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
             accounts: cfg.accounts,
             submitted: execution.submitted,
             feeEstimated: true,
+            // Số liệu để chỉnh chiến lược (đua giá hay chờ): tuổi kèo lúc bắn Polymarket, thời gian
+            // chuẩn bị, thời gian sàn phản hồi từng chân. null = chân không được gửi.
+            execution: executionTiming(s.issuedAt, execution),
           },
         });
       } catch (e) {

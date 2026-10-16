@@ -91,6 +91,7 @@ const config = (
     ignoreCancelReasons: ['better_opportunity'],
     markets: null,
     oneClickMinPrice: 0,
+    maxNetMargin: 0,
   },
   matchExposureCapUsd: 0,
   ...over,
@@ -373,6 +374,7 @@ describe('TraderArbitrageTask (giấy)', () => {
           ignoreCancelReasons: [],
           markets: null,
           oneClickMinPrice: 0,
+          maxNetMargin: 0,
         },
       }),
     );
@@ -542,6 +544,23 @@ describe('TraderArbitrageTask (giấy)', () => {
       tierName: 'Thường',
     });
     expect(trades(t)[0]?.reason).toMatch(/^TIER_NOT_SELECTED:/);
+    await t.stop();
+  });
+
+  it('margin kèo vượt ngưỡng "đẹp bất thường" → bỏ qua SUSPICIOUS_MARGIN, không đọc sổ lệnh', async () => {
+    const t = start(new TraderArbitrageTask(), params('A'));
+    const base = config('A');
+    await t.command(
+      'config',
+      config('A', { risk: { ...base.risk, maxNetMargin: 0.01 } }),
+    );
+    await until(() => hub.consumers.has('trader:A'));
+    hub.broadcast({ type: 'signal', kind: 'issued', signal: signal('s6m') });
+    await until(() => trades(t).length === 1);
+    expect(trades(t)[0]?.status).toBe('skipped');
+    expect(trades(t)[0]?.reason).toMatch(
+      /^SUSPICIOUS_MARGIN: margin kèo .*% > ngưỡng 1\.00% — nghi giá cũ$/,
+    );
     await t.stop();
   });
 

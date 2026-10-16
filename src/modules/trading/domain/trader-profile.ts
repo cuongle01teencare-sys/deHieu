@@ -42,6 +42,12 @@ export interface RiskLimits {
    * cho người vào lệnh. 0 = tắt (bot vào mọi kèo).
    */
   readonly oneClickMinPrice: number;
+  /**
+   * Margin kèo / lãi ròng tính ra VƯỢT số này (vd 0.15 = 15%) → nghi giá cũ hoặc sổ lệnh lỗi, bỏ qua
+   * (kể cả lệnh vào tay ở On click). Kèo thật hiếm khi lãi vậy; kèo "đẹp" quá thường biến mất trước khi
+   * lệnh tới sàn → một chân khớp một chân không. 0 = tắt.
+   */
+  readonly maxNetMargin: number;
 }
 
 export const DEFAULT_RISK_LIMITS: RiskLimits = {
@@ -52,6 +58,7 @@ export const DEFAULT_RISK_LIMITS: RiskLimits = {
   ignoreCancelReasons: ['better_opportunity'],
   markets: null,
   oneClickMinPrice: 0.5,
+  maxNetMargin: 0.15,
 };
 
 /** Profile có vào market này không. */
@@ -80,6 +87,10 @@ export function validateRiskLimits(r: RiskLimits): string | null {
     return 'maxEntriesPerTier phải là số nguyên ≥ 1';
   if (!(r.oneClickMinPrice >= 0 && r.oneClickMinPrice <= 1))
     return 'oneClickMinPrice phải trong [0, 1] (0 = tắt)';
+  if (!(r.maxNetMargin >= 0 && r.maxNetMargin <= 10))
+    return 'maxNetMargin phải trong [0, 10] (0 = tắt)';
+  if (r.maxNetMargin > 0 && r.maxNetMargin <= r.minNetMargin)
+    return 'maxNetMargin phải lớn hơn minNetMargin (hoặc 0 = tắt)';
   if (r.markets !== null && r.markets.length > 100)
     return 'markets tối đa 100 market';
   return null;

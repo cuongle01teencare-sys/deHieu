@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiVenueOrders,
   readPolymarketBalance,
+  hedgeBet,
   empireCoins,
   empireBalanceFrom,
   type OrderPlan,
@@ -74,6 +75,25 @@ describe('direct venue APIs', () => {
       }),
     ),
     spendEmpire: vi.fn((_r: string, _amount: number) => Promise.resolve()),
+  });
+
+  it('đặt bù: cả hai cửa không lỗ sau làm tròn; ví dụ 20 share / 8.5$ → odds 1.74, cược 11.49$', () => {
+    expect(hedgeBet(20, 8.5, 2)).toEqual({ odds: 1.74, stake: 11.49 });
+    expect(hedgeBet(20, 12, 2)).toBeNull();
+    expect(hedgeBet(5, 6, 3)).toBeNull();
+    // bất biến trên nhiều bộ số
+    for (let shares = 3; shares <= 400; shares += 7.3)
+      for (const ratio of [0.3, 0.45, 0.6, 0.75, 0.9])
+        for (const planned of [1.5, 2, 3.2, 6]) {
+          const cost = Math.round(shares * ratio * 100) / 100;
+          const h = hedgeBet(shares, cost, planned);
+          if (!h) continue;
+          expect(h.odds).toBeLessThan(planned);
+          expect(h.stake * h.odds).toBeGreaterThanOrEqual(
+            h.stake + cost - 1e-9,
+          );
+          expect(shares).toBeGreaterThanOrEqual(h.stake + cost - 1e-9);
+        }
   });
 
   it('tính số dư từ metadata + tỷ giá mà Chrome đọc được', () => {
@@ -195,6 +215,93 @@ describe('direct venue APIs', () => {
       expect.stringMatching(/^csgoempire:/),
       10,
     );
+  });
+
+  it('BetBy từ chối vé (odds giảm) khi Polymarket đã khớp: đặt bù MỘT lần ở odds sàn, tiền cược theo odds đó', async () => {
+    const placed: { k: string; id: string; selK: string; sum: string }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (url.endsWith('/coupon/max'))
+          return Promise.resolve(Response.json({ max_bet: '30' }));
+        const [body] = JSON.parse(
+          typeof init?.body === 'string' ? init.body : '[]',
+        ) as {
+          k: string;
+          sum: string;
+          bet_request_id: string;
+          selections: { k: string }[];
+        }[];
+        placed.push({
+          k: body.k,
+          sum: body.sum,
+          id: body.bet_request_id,
+          selK: body.selections[0].k,
+        });
+        return Promise.resolve(
+          placed.length === 1
+            ? Response.json({ accepted: [], error: [{ code: 'odds_changed' }] })
+            : Response.json({
+                accepted: [
+                  { bet_request_id: body.bet_request_id, bet_id: 'ticket-2' },
+                ],
+                error: [],
+              }),
+        );
+      }),
+    );
+    const order = await new ApiVenueOrders(store({ cash: 100 })).empire(
+      session,
+      plan,
+      new AbortController().signal,
+    );
+    // 20 share Polymarket, chi phí 8.5$ → odds sàn 20/11.5 = 1.739 → 1.74; cược 20/1.74 = 11.49$
+    const r = await order.submit({ hedge: { shares: 20, cost: 8.5 } });
+    expect(r).toMatchObject({
+      status: 'filled',
+      orderRef: 'ticket-2',
+      avgPrice: 1.74,
+      filledAmount: 11.49,
+      cost: 11.49,
+    });
+    expect(placed.map((x) => [x.k, x.selK, x.sum])).toEqual([
+      ['2', '2', '10.00'],
+      ['1.74', '1.74', '11.49'],
+    ]);
+    expect(placed[0].id).toBe('request-123');
+    expect(placed[1].id).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('BetBy từ chối mà không đặt bù được (không có odds sàn thấp hơn / thiếu Cash): không gửi thêm, nói rõ vì sao', async () => {
+    const fetcher = vi.fn((url: string) =>
+      Promise.resolve(
+        url.endsWith('/coupon/max')
+          ? Response.json({ max_bet: '30' })
+          : Response.json({ accepted: [], error: [{ code: 'limit' }] }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetcher);
+    const order = await new ApiVenueOrders(store({ cash: 100 })).empire(
+      session,
+      plan,
+      new AbortController().signal,
+    );
+    // 20 share, chi phí 12$ → odds sàn 2.5 ≥ odds gốc 2: không có mức nào bù được
+    const r = await order.submit({ hedge: { shares: 20, cost: 12 } });
+    expect(r.status).toBe('rejected');
+    expect(r.error).toContain('"code":"limit"');
+    expect(r.error).toContain('không đặt bù: không có odds nào');
+    // cần 11.49$ mà Cash chỉ 11$
+    const poor = await new ApiVenueOrders(store({ cash: 11 })).empire(
+      session,
+      plan,
+      new AbortController().signal,
+    );
+    const r2 = await poor.submit({ hedge: { shares: 20, cost: 8.5 } });
+    expect(r2.error).toContain('vượt Cash csgoempire 11.00$');
+    expect(
+      fetcher.mock.calls.filter(([u]) => u.endsWith('/bet/place')),
+    ).toHaveLength(2);
   });
 
   it('số dư quá cũ / chưa đọc được / không có kho: không vào lệnh, nói rõ lý do', async () => {
@@ -410,5 +517,16 @@ describe('direct venue APIs', () => {
       orderType: 'FOK',
     });
     expect(client.waitForOrderFillSettlement).toHaveBeenCalledOnce();
+    // FOK bị giết: giữ mã + lời sàn để đối soát biết vì sao chân Polymarket không vào
+    client.postOrder.mockResolvedValueOnce({
+      ok: false,
+      code: 'FOK_ORDER_NOT_FILLED',
+      message: "order couldn't be fully filled",
+    } as never);
+    expect(await fundedOrder.submit()).toMatchObject({
+      status: 'rejected',
+      error:
+        "POLYMARKET_REJECTED:FOK_ORDER_NOT_FILLED — order couldn't be fully filled",
+    });
   });
 });

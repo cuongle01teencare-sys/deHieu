@@ -48,6 +48,8 @@ export const REASON_LABEL: Record<string, string> = {
   CSGOEMPIRE_HTTP_REJECTED:
     'csgoempire từ chối yêu cầu đọc số dư — hủy cả hai chân',
   BOTH_ORDERS_REJECTED: 'Hai sàn từ chối lệnh',
+  POLYMARKET_NOT_FILLED: 'Polymarket không khớp — không vào BetBy',
+  SUSPICIOUS_MARGIN: 'Margin cao bất thường — nghi giá cũ',
   LIVE_ALREADY_SUBMITTED: 'Cặp lệnh đã được gửi',
   NO_EDGE: 'Hết lãi sau phí',
   INSUFFICIENT_DEPTH: 'Sổ lệnh mỏng',
@@ -133,6 +135,7 @@ function explain(t: TradeAttempt, d: Detail): string {
   }
 }
 
+const msv = (v: number | null) => (v === null ? '—' : `${v} ms`);
 const usd = (n: number) => `${n < 0 ? '-' : ''}${Math.abs(n).toFixed(2)}$`;
 
 /** "Trận 8/12 · iem-cologne" theo một sàn. */
@@ -540,6 +543,26 @@ export function TradeDetailPanel({
                     'Tổng (phát → quyết định)',
                     ms(tm.signalIssuedAt, tm.decidedAt),
                   ],
+                  ...(d.execution
+                    ? ([
+                        [
+                          'Chuẩn bị lệnh thật (số dư, hạn mức, ký)',
+                          msv(d.execution.prepareMs),
+                        ],
+                        [
+                          'Tuổi kèo lúc bắn Polymarket',
+                          msv(d.execution.fireAgeMs),
+                        ],
+                        ['Polymarket phản hồi', msv(d.execution.polymarketMs)],
+                        ['Polymarket → gửi BetBy', msv(d.execution.gapMs)],
+                        [
+                          'BetBy phản hồi',
+                          d.execution.csgoempireMs === null
+                            ? 'không gửi'
+                            : msv(d.execution.csgoempireMs),
+                        ],
+                      ] as [string, string][])
+                    : []),
                 ]}
               />
             ) : (

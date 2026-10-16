@@ -23,6 +23,8 @@ export interface ExecutionResult {
     required: number;
     account?: VenueAccountIdentity;
   }[];
+  /** Mốc thời gian (ms epoch): bắt đầu khóa + chuẩn bị, chuẩn bị xong (đọc số dư, coupon/max, ký lệnh). */
+  timing?: { startedAt: number; preparedAt: number };
 }
 export interface LiveExecutor {
   execute(
@@ -59,6 +61,7 @@ export class LiveOrderExecutor implements LiveExecutor {
     signal: AbortSignal,
   ): Promise<ExecutionResult> {
     let didSubmit = false;
+    const startedAt = Date.now();
     const resources = [
       accountResource('csgoempire', c.empire.browserProfile),
       accountResource(
@@ -80,11 +83,13 @@ export class LiveOrderExecutor implements LiveExecutor {
           };
         // Both preparations are read-only (cash, limits, signing); neither submits an order.
         let prepared;
+        let preparedAt: number;
         try {
           prepared = await Promise.all([
             this.venues.empire(c.empire, p, signal),
             this.venues.polymarket(c.polymarket, p, signal),
           ]);
+          preparedAt = Date.now();
         } catch (e) {
           const code =
             e instanceof Error
@@ -169,50 +174,48 @@ export class LiveOrderExecutor implements LiveExecutor {
         signal.throwIfAborted();
         await checkLock();
         didSubmit = true;
-        const fills = await Promise.all(
-          prepared.map(async (order) => {
-            const sentAt = Date.now();
-            let timer: ReturnType<typeof setTimeout> | undefined;
-            try {
-              return await Promise.race([
-                order.submit(),
-                new Promise<never>((_, reject) => {
-                  timer = setTimeout(
-                    () => reject(new Error('ORDER_RESULT_UNKNOWN')),
-                    30_000,
-                  );
-                }),
-              ]);
-            } catch {
-              // A network failure is an unknown outcome, never an automatic retry.
-              return {
-                status: 'error' as const,
-                orderRef: null,
-                filledAmount: 0,
-                avgPrice: 0,
-                fee: 0,
-                cost: 0,
-                sentAt,
-                ackedAt: Date.now(),
-                filledAt: null,
-                error: 'ORDER_RESULT_UNKNOWN',
-              };
-            } finally {
-              if (timer) clearTimeout(timer);
-            }
-          }),
-        );
-        const success = fills.every((f) => f.status === 'filled');
-        const rejected = fills.every((f) => f.status === 'rejected');
+        const [bookOrder, polyOrder] = prepared;
+        // Polymarket TRƯỚC: FOK khớp đủ hoặc không khớp gì → thua cuộc đua giá thì dừng, không mất gì.
+        // Chỉ khi Polymarket khớp đủ mới đặt BetBy (odds BetBy sống lâu hơn, nhưng vé không bán lại được).
+        const polyFill = await this.submitLeg(() => polyOrder.submit());
+        let bookFill: VenueFill;
+        let halt: string | null = null;
+        if (polyFill.status === 'filled') {
+          // Odds BetBy giảm → đặt bù với tiền cược theo odds mới sao cho không lỗ ở cả hai cửa
+          bookFill = await this.submitLeg(() =>
+            bookOrder.submit({
+              hedge: { shares: polyFill.filledAmount, cost: polyFill.cost },
+            }),
+          );
+          if (bookFill.status !== 'filled')
+            halt = `${marker} — CHỈ chân Polymarket khớp (${polyFill.filledAmount} share, ${polyFill.cost.toFixed(2)}$); BetBy ${bookFill.status}: ${bookFill.error ?? '—'}. Bán lại share Polymarket hoặc bù tay chân BetBy, rồi chạy pnpm trading:resume … --reconciled`;
+        } else {
+          bookFill = notSent(
+            `NOT_SENT: không gửi BetBy vì Polymarket ${polyFill.status}`,
+          );
+          // Bị từ chối hẳn = không có gì trên sàn. Còn lại (lỗi mạng, khớp một phần, chưa rõ) = có thể
+          // đang có share Polymarket → giữ khóa để đối soát.
+          if (polyFill.status !== 'rejected')
+            halt = `${marker} — Polymarket ${polyFill.status}: ${polyFill.error ?? '—'}; chưa gửi BetBy. Kiểm tra lệnh trên Polymarket, rồi chạy pnpm trading:resume … --reconciled`;
+        }
+        const fills = [bookFill, polyFill];
+        const success = !halt && bookFill.status === 'filled';
         const result: ExecutionResult = {
-          status: success ? 'filled' : rejected ? 'cancelled' : 'partial',
-          reason: success ? null : rejected ? 'BOTH_ORDERS_REJECTED' : marker,
+          status: success ? 'filled' : halt ? 'partial' : 'cancelled',
+          reason: success
+            ? null
+            : halt
+              ? marker
+              : `POLYMARKET_NOT_FILLED: ${polyFill.error ?? polyFill.status} — không gửi BetBy`,
           submitted: true,
           fills,
           cash,
+          timing: { startedAt, preparedAt },
         };
         await this.locks.saveResult(p.id, { plan: p, result });
-        if (success || rejected) await this.locks.clearHalt(resources, marker);
+        // giữ khóa kèm lý do đọc được (vẫn gỡ được bằng resume / clearHalt theo marker)
+        if (halt) await this.locks.halt(resources, halt);
+        else await this.locks.clearHalt(resources, marker);
         return result;
       });
     } catch (e) {
@@ -228,7 +231,58 @@ export class LiveOrderExecutor implements LiveExecutor {
       };
     }
   }
+  /** Gửi một chân, chờ tối đa 30 giây; lỗi mạng / quá hạn = KHÔNG RÕ kết quả (không bao giờ tự gửi lại). */
+  private async submitLeg(send: () => Promise<VenueFill>): Promise<VenueFill> {
+    const sentAt = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        send(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error('ORDER_RESULT_UNKNOWN')),
+            30_000,
+          );
+        }),
+      ]);
+    } catch (e) {
+      const why =
+        e instanceof Error && e.message !== 'ORDER_RESULT_UNKNOWN'
+          ? `: ${e.name} — ${maskSecrets(e.message).slice(0, 200)}`
+          : ': không có phản hồi sau 30 giây';
+      return {
+        status: 'error',
+        orderRef: null,
+        filledAmount: 0,
+        avgPrice: 0,
+        fee: 0,
+        cost: 0,
+        sentAt,
+        ackedAt: Date.now(),
+        filledAt: null,
+        error: `ORDER_RESULT_UNKNOWN${why}`,
+      };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
   close() {
     this.locks.close();
   }
+}
+
+/** Chân không được gửi (vì chân kia chưa khớp): không có gì trên sàn. */
+function notSent(error: string): VenueFill {
+  return {
+    status: 'rejected',
+    orderRef: null,
+    filledAmount: 0,
+    avgPrice: 0,
+    fee: 0,
+    cost: 0,
+    sentAt: 0,
+    ackedAt: 0,
+    filledAt: null,
+    error,
+  };
 }

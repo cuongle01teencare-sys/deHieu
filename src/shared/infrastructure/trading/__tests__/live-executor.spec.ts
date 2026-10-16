@@ -193,7 +193,7 @@ describe('live pair execution', () => {
     ).toBe(false);
     for (const submit of s.submit) expect(submit).not.toHaveBeenCalled();
   });
-  it('retains a persistent halt on both accounts after an unknown submission', async () => {
+  it('Polymarket không rõ kết quả (lỗi mạng): KHÔNG gửi BetBy, khóa cả hai tài khoản kèm lý do', async () => {
     const s = setup();
     s.submit[1].mockRejectedValue(new Error('network failure'));
     const r = await s.executor.execute(
@@ -202,15 +202,123 @@ describe('live pair execution', () => {
       new AbortController().signal,
     );
     expect(r).toMatchObject({ status: 'partial', submitted: true });
-    expect(r.fills.map((f) => f.status)).toEqual(['filled', 'error']);
+    expect(r.fills.map((f) => f.status)).toEqual(['rejected', 'error']);
+    // giữ lý do thật của chân lỗi để đối soát, không chỉ ORDER_RESULT_UNKNOWN
+    expect(r.fills[1].error).toBe(
+      'ORDER_RESULT_UNKNOWN: Error — network failure',
+    );
+    expect(r.fills[0].error).toMatch(/^NOT_SENT/);
+    expect(s.submit[0]).not.toHaveBeenCalled();
     expect(s.halted.size).toBe(2);
+    expect([...s.halted.values()][0]).toMatch(
+      /^LIVE_RECONCILIATION_REQUIRED:delivery-1 — Polymarket error/,
+    );
     await s.executor.execute(
       credentials,
       { ...plan, id: 'delivery-2' },
       new AbortController().signal,
     );
-    for (const submit of s.submit) expect(submit).toHaveBeenCalledOnce();
+    expect(s.submit[1]).toHaveBeenCalledOnce();
+    expect(s.submit[0]).not.toHaveBeenCalled();
   });
+
+  it('gửi Polymarket TRƯỚC, khớp đủ mới gửi BetBy kèm thông tin để đặt bù', async () => {
+    const s = setup();
+    const order: string[] = [];
+    s.submit[0].mockImplementation(() => {
+      order.push('csgoempire');
+      return Promise.resolve({ ...fill });
+    });
+    s.submit[1].mockImplementation(() => {
+      order.push('polymarket');
+      return Promise.resolve({
+        ...fill,
+        filledAmount: 20,
+        avgPrice: 0.4,
+        cost: 8.5,
+      });
+    });
+    const r = await s.executor.execute(
+      credentials,
+      plan,
+      new AbortController().signal,
+    );
+    expect(r.status).toBe('filled');
+    expect(order).toEqual(['polymarket', 'csgoempire']);
+    // BetBy nhận số share + chi phí Polymarket thật để tự tính tiền đặt bù nếu odds giảm
+    expect(s.submit[0]).toHaveBeenCalledWith({
+      hedge: { shares: 20, cost: 8.5 },
+    });
+    expect(r.timing?.preparedAt).toBeGreaterThanOrEqual(r.timing!.startedAt);
+    expect(s.halted.size).toBe(0);
+  });
+
+  it('kèo bị hủy (stale) SAU khi đã gửi Polymarket: vẫn đặt chân BetBy (kèm thông tin đặt bù), không bỏ dở', async () => {
+    const s = setup();
+    const ac = new AbortController();
+    s.submit[1].mockImplementation(() => {
+      // hub/publisher hủy kèo đúng lúc lệnh Polymarket đang bay
+      ac.abort('stale');
+      return Promise.resolve({
+        ...fill,
+        filledAmount: 20,
+        avgPrice: 0.4,
+        cost: 8.5,
+      });
+    });
+    const r = await s.executor.execute(credentials, plan, ac.signal);
+    expect(r.status).toBe('filled');
+    expect(s.submit[0]).toHaveBeenCalledWith({
+      hedge: { shares: 20, cost: 8.5 },
+    });
+    expect(s.halted.size).toBe(0);
+  });
+
+  it('Polymarket bị từ chối (FOK không khớp): không gửi BetBy, hủy gọn, gỡ khóa', async () => {
+    const s = setup();
+    s.submit[1].mockResolvedValue({
+      ...fill,
+      status: 'rejected',
+      orderRef: null,
+      filledAmount: 0,
+      cost: 0,
+      error: 'POLYMARKET_REJECTED:FOK_ORDER_NOT_FILLED — not filled',
+    });
+    const r = await s.executor.execute(
+      credentials,
+      plan,
+      new AbortController().signal,
+    );
+    expect(r.status).toBe('cancelled');
+    expect(r.reason).toMatch(/^POLYMARKET_NOT_FILLED: POLYMARKET_REJECTED/);
+    expect(r.fills.every((f) => f.status === 'rejected')).toBe(true);
+    expect(s.submit[0]).not.toHaveBeenCalled();
+    expect(s.halted.size).toBe(0);
+  });
+
+  it('Polymarket khớp nhưng BetBy từ chối: khóa đối soát, lý do nói rõ chỉ còn chân Polymarket', async () => {
+    const s = setup();
+    s.submit[0].mockResolvedValue({
+      ...fill,
+      status: 'rejected',
+      orderRef: null,
+      filledAmount: 0,
+      cost: 0,
+      error: 'CSGOEMPIRE_ORDER_REJECTED: odds 2 — [odds changed]',
+    });
+    const r = await s.executor.execute(
+      credentials,
+      plan,
+      new AbortController().signal,
+    );
+    expect(r).toMatchObject({
+      status: 'partial',
+      reason: 'LIVE_RECONCILIATION_REQUIRED:delivery-1',
+    });
+    expect(s.halted.size).toBe(2);
+    expect([...s.halted.values()][0]).toContain('CHỈ chân Polymarket khớp');
+  });
+
   it('BetBy từ chối phiên: hủy, khóa tài khoản csgoempire VÀ giữ chi tiết (endpoint, HTTP) trong lý do', async () => {
     const s = setup([100, 100]);
     s.venues.empire.mockRejectedValueOnce(

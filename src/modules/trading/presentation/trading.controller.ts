@@ -126,6 +126,8 @@ const ProfileBody = z.object({
         .default(null),
       /** Giá bán thấp nhất Polymarket ≥ số này → chuyển On click (bot không tự vào); 0 = tắt. */
       oneClickMinPrice: z.number().min(0).max(1).default(0.5),
+      /** Margin / lãi ròng vượt số này → nghi giá cũ, bỏ qua (cả vào tay); 0 = tắt. */
+      maxNetMargin: z.number().min(0).max(10).default(0.15),
     })
     .default({
       minNetMargin: 0.01,
@@ -135,6 +137,7 @@ const ProfileBody = z.object({
       ignoreCancelReasons: ['better_opportunity'],
       markets: null,
       oneClickMinPrice: 0.5,
+      maxNetMargin: 0.15,
     }),
 });
 
