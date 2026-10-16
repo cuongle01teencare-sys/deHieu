@@ -80,6 +80,7 @@ export interface LaunchProfileOptions {
    * khi có chỗ hoặc bị hủy (đăng nhập tay); làm mới phiên nền đặt hạn để không treo hàng đợi.
    */
   slotWaitMs?: number;
+  visible?: boolean;
 }
 
 /** Số Chrome tối đa cùng mở trong một tiến trình (mỗi cái vài trăm MB RAM). */
@@ -277,12 +278,18 @@ async function openProfile(
   // existing persistent context. Keep the native Playwright path for --har.
   if (engine === 'seleniumbase' && !options.har)
     return launchSeleniumContext(path, {
-      headless: !options.login && process.env.TRADING_BROWSER_HEADED !== '1',
+      headless:
+        !options.login &&
+        !options.visible &&
+        process.env.TRADING_BROWSER_HEADED !== '1',
       port: options.port,
       signal: options.signal,
     });
   return chromium.launchPersistentContext(path, {
-    headless: !options.login && process.env.TRADING_BROWSER_HEADED !== '1',
+    headless:
+      !options.login &&
+      !options.visible &&
+      process.env.TRADING_BROWSER_HEADED !== '1',
     executablePath: process.env.TRADING_CHROMIUM_PATH || undefined,
     acceptDownloads: false,
     args: [
@@ -351,6 +358,16 @@ export class EmpireSessions {
       browserProfile: string,
       error: string,
     ) => void,
+    /** Thông tin thăm dò (API trang gọi, vị trí trường số dư) sau khi lấy phiên xong, để ghi log. */
+    private readonly onProbe?: (browserProfile: string, info: string) => void,
+    /**
+     * Hồ sơ đang được dùng ở nơi khác trong tiến trình (Chrome nền đọc số dư): `acquire` đóng nó
+     * trước khi mở Chrome làm mới phiên, `release` cho mở lại sau đó.
+     */
+    private readonly profileHooks?: {
+      acquire(browserProfile: string): Promise<void>;
+      release(browserProfile: string): void;
+    },
   ) {}
 
   async get(
@@ -449,6 +466,7 @@ export class EmpireSessions {
       [accountResource('csgoempire', browserProfile)],
       async () => {
         let context: BrowserContext | undefined;
+        let acquired = false;
         const signal = options.signal ?? new AbortController().signal;
         /** Lần này app có gõ tài khoản/mật khẩu đã lưu vào form không (hay dùng phiên có sẵn). */
         let typedCredentials = false;
@@ -480,6 +498,8 @@ export class EmpireSessions {
           signal.throwIfAborted();
           stage('opening');
           checkpoint('browser');
+          await this.profileHooks?.acquire(browserProfile);
+          acquired = true;
           context = await launchProfile(browserProfile, {
             login: options.headed,
             signal,
@@ -489,7 +509,7 @@ export class EmpireSessions {
           signal.throwIfAborted();
           const page = context.pages()[0] ?? (await context.newPage());
           // Ghi lại các API csgoempire mà CHÍNH trang gọi (đường dẫn + mã HTTP, không lưu nội dung),
-          // và giữ phản hồi /api/v2/user của trang nếu có: trang gửi đúng header sàn yêu cầu.
+          // và giữ phản hồi /api/v2/metadata (người dùng) của trang nếu có.
           const seen = observeSiteApi(page);
           let sessionReceived = false;
           const response = page.waitForResponse(
@@ -667,6 +687,10 @@ export class EmpireSessions {
             geo?: { blocked?: boolean };
             blocked_rm?: boolean;
           };
+          const identifyFields = [
+            ...Object.keys(who).slice(0, 30),
+            ...balanceFields(who).map((f) => `[số dư] ${f}`),
+          ].join(', ');
           if (who.geo?.blocked || who.blocked_rm)
             throw new Error('CSGOEMPIRE_SESSION_ACCESS_BLOCKED');
           if (who.currency !== 'USD')
@@ -697,19 +721,22 @@ export class EmpireSessions {
               email?: string;
             };
             const expected = options.credentials.username.trim().toLowerCase();
+            const identities = [account.username, account.email].filter(
+              (v): v is string => typeof v === 'string' && !!v.trim(),
+            );
+            // chỉ kết luận "tài khoản khác" khi sàn THỰC SỰ trả email/username để so
             const wrongAccount =
               !issue &&
-              ![account.username, account.email].some(
-                (value) =>
-                  typeof value === 'string' &&
-                  value.trim().toLowerCase() === expected,
-              );
-            // Sàn không cho đọc thông tin tài khoản (403, trang HTML, lỗi mạng): không có dữ liệu để so.
+              identities.length > 0 &&
+              !identities.some((v) => v.trim().toLowerCase() === expected);
+            // Sàn không cho đọc, hoặc đọc được nhưng không có email/username để so: không tự xác nhận
+            // được → dùng việc gõ đúng tài khoản đã lưu / dấu đã xác nhận trước đó.
             const unreadable =
               issue === 'http_error' ||
               issue === 'challenge' ||
               issue === 'not_json' ||
-              issue === 'network';
+              issue === 'network' ||
+              (!issue && identities.length === 0);
             const apiNote = `API trang đã gọi: ${seen.summary() || 'không thấy'}`;
             const verifiedBefore =
               unreadable &&
@@ -718,15 +745,15 @@ export class EmpireSessions {
             if (verifiedBefore) {
               // phiên có sẵn trong hồ sơ, đã được xác nhận ở lần đăng nhập trước: không đăng nhập lại
               checkpoint('account', inPage.status || undefined, undefined, {
-                accountIssue: issue,
-                cause: `Không đọc được thông tin tài khoản (${inPage.detail ?? issue}); dùng phiên đã xác nhận ở lần đăng nhập trước.`,
+                ...(issue ? { accountIssue: issue } : {}),
+                cause: `Không đọc được thông tin tài khoản (${inPage.detail ?? issue ?? 'sàn không trả email'}); dùng phiên đã xác nhận ở lần đăng nhập trước.`,
               });
             } else if (unreadable && typedCredentials) {
               // Vừa gõ đúng email/mật khẩu đã lưu và sàn cấp phiên → phiên này là của tài khoản đó.
               checkpoint('account', inPage.status || undefined, undefined, {
-                accountIssue: issue,
+                ...(issue ? { accountIssue: issue } : {}),
                 cause:
-                  `Không đọc được thông tin tài khoản (${inPage.detail ?? issue}); đã xác nhận bằng việc đăng nhập bằng email đã lưu. ${apiNote}`.slice(
+                  `Không đọc được thông tin tài khoản (${inPage.detail ?? issue ?? 'sàn không trả email'}); đã xác nhận bằng việc đăng nhập bằng email đã lưu. ${apiNote}`.slice(
                     0,
                     400,
                   ),
@@ -745,7 +772,7 @@ export class EmpireSessions {
                   cause: wrongAccount
                     ? 'Hồ sơ đang đăng nhập tài khoản khác — xóa phiên cũ, đăng nhập lại'
                     : unreadable
-                      ? `Không đọc được tài khoản của phiên có sẵn (${inPage.detail ?? issue}) — đăng nhập lại bằng email đã lưu để xác nhận`
+                      ? `Không đọc được tài khoản của phiên có sẵn (${inPage.detail ?? issue ?? 'sàn không trả email'}) — đăng nhập lại bằng email đã lưu để xác nhận`
                       : 'Phiên trong hồ sơ đã cũ — xóa phiên cũ, đăng nhập lại',
                 });
                 await context.clearCookies({
@@ -756,10 +783,10 @@ export class EmpireSessions {
               }
               checkpoint('account', inPage.status || undefined, undefined, {
                 ...(issue ? { accountIssue: issue } : {}),
-                ...(issue
+                ...(issue || unreadable
                   ? {
                       cause:
-                        `${inPage.detail ? `${inPage.detail}. ` : ''}${apiNote}`.slice(
+                        `${issue ? '' : 'Sàn không trả email/username để so với tài khoản đã lưu. '}${inPage.detail ? `${inPage.detail}. ` : ''}${apiNote}`.slice(
                           0,
                           400,
                         ),
@@ -767,7 +794,9 @@ export class EmpireSessions {
                   : {}),
               });
               if (inPage.status === 401) throw new Error(SESSION_EXPIRED);
-              if (issue) throw new Error('CSGOEMPIRE_SESSION_ACCOUNT_FAILED');
+              // không đọc được / sàn không trả email để so, và không gõ form được → không xác nhận được
+              if (issue || unreadable)
+                throw new Error('CSGOEMPIRE_SESSION_ACCOUNT_FAILED');
               if (wrongAccount)
                 throw new Error('CSGOEMPIRE_LOGIN_ACCOUNT_MISMATCH');
             }
@@ -804,6 +833,11 @@ export class EmpireSessions {
                 : issued + (expiresAt - issued) * 0.8,
           });
           stage('ready');
+          if (options.headed)
+            this.onProbe?.(
+              browserProfile,
+              `identify BetBy gồm: ${identifyFields || '—'} || API trang đã gọi: ${seen.summary() || 'không thấy'} || trường giống số dư: ${seen.balances() || 'không thấy'}`,
+            );
           return session;
         } catch (e) {
           if (signal.aborted)
@@ -847,6 +881,7 @@ export class EmpireSessions {
         } finally {
           signal.removeEventListener('abort', onAbort);
           await context?.close();
+          if (acquired) this.profileHooks?.release(browserProfile);
         }
       },
       { waitMs: LOCK_WAIT_MS, signal: options.signal },
@@ -878,7 +913,7 @@ interface InPageUser {
   detail: string | null;
 }
 
-/** GET /api/v2/user trong chính trang csgoempire (fetch của trình duyệt, kèm cookie của nó). */
+/** GET /api/v2/metadata trong chính trang csgoempire (fetch của trình duyệt, kèm cookie của nó). */
 async function readUserInPage(page: {
   evaluate: <R>(fn: () => Promise<R>) => Promise<R>;
 }): Promise<InPageUser> {
@@ -886,14 +921,20 @@ async function readUserInPage(page: {
     return await page.evaluate(async () => {
       const userAgent = navigator.userAgent;
       try {
-        const r = await fetch('https://csgoempire.com/api/v2/user', {
+        // endpoint trang dùng để lấy người dùng + số dư (đã thấy trong log thăm dò)
+        const r = await fetch('https://csgoempire.com/api/v2/metadata', {
           credentials: 'include',
           headers: { Accept: 'application/json' },
         });
         const text = await r.text();
         let body: unknown = null;
         try {
-          body = JSON.parse(text);
+          const meta = JSON.parse(text) as { user?: unknown };
+          // chuẩn hóa: { success, ...user } — khách (chưa đăng nhập) không có user
+          body =
+            meta && typeof meta.user === 'object' && meta.user !== null
+              ? { success: true, ...meta.user }
+              : { success: false };
         } catch {
           body = null;
         }
@@ -981,14 +1022,55 @@ export function describeCause(
   return msg.slice(0, 300);
 }
 
+/** Đường dẫn API đã bỏ query và thay các đoạn định danh (số dài, uuid, token) bằng :id. */
+function apiPath(url: URL) {
+  return url.pathname
+    .split('/')
+    .map((seg) =>
+      /^\d{3,}$/.test(seg) ||
+      /^[0-9a-f-]{20,}$/i.test(seg) ||
+      /^[\w-]{32,}$/.test(seg)
+        ? ':id'
+        : seg,
+    )
+    .join('/');
+}
+
+/** Vị trí các trường có tên giống số dư trong một JSON (chỉ đường dẫn + kiểu, KHÔNG lấy giá trị). */
+export function balanceFields(body: unknown, limit = 6): string[] {
+  const out: string[] = [];
+  const walk = (v: unknown, path: string, depth: number) => {
+    if (out.length >= limit || depth > 5 || v === null || typeof v !== 'object')
+      return;
+    const entries = Array.isArray(v)
+      ? v.slice(0, 3).map((x, i) => [String(i), x] as const)
+      : Object.entries(v as Record<string, unknown>);
+    for (const [k, x] of entries) {
+      const p = path ? `${path}.${k}` : k;
+      if (
+        /balance|wallet|funds|available/i.test(k) &&
+        x !== null &&
+        typeof x !== 'object'
+      )
+        out.push(`${p}:${typeof x}`);
+      else walk(x, p, depth + 1);
+      if (out.length >= limit) return;
+    }
+  };
+  walk(body, '', 0);
+  return out;
+}
+
 /**
- * Theo dõi các request API csgoempire do chính trang gửi (đường dẫn + mã HTTP, không lưu nội dung,
- * không lưu query). Nếu trang tự gọi /api/v2/user thành công thì giữ lại thân phản hồi để dùng.
+ * Theo dõi các request API csgoempire + BetBy (sptpub) do chính trang gửi: đường dẫn + mã HTTP, không
+ * lưu nội dung/query. Ghi lại VỊ TRÍ các trường giống số dư (không ghi số tiền) để tìm nguồn đọc số dư.
+ * Nếu trang tự gọi /api/v2/metadata thành công thì giữ lại người dùng trong đó để dùng.
  */
 function observeSiteApi(page: {
   on?: (event: 'response', fn: (r: BrowserResponse) => void) => unknown;
 }) {
   const calls: string[] = [];
+  const balances: string[] = [];
   let user: InPageUser | null = null;
   page.on?.('response', (r: BrowserResponse) => {
     let url: URL;
@@ -997,20 +1079,22 @@ function observeSiteApi(page: {
     } catch {
       return;
     }
-    if (
-      !/(^|\.)csgoempire\.com$/.test(url.hostname) ||
-      !url.pathname.startsWith('/api/')
-    )
-      return;
-    const path = url.pathname.replace(/\/\d{3,}(?=\/|$)/g, '/:id');
-    if (calls.length < 40) calls.push(`${path} ${r.status()}`);
-    if (url.pathname === '/api/v2/user' && r.ok())
+    const empire =
+      /(^|\.)csgoempire\.com$/.test(url.hostname) &&
+      url.pathname.startsWith('/api/');
+    const betby = /(^|\.)sptpub\.com$/.test(url.hostname);
+    if (!empire && !betby) return;
+    const label = `${betby ? 'betby' : 'empire'}${apiPath(url)}`;
+    if (calls.length < 60) calls.push(`${label} ${r.status()}`);
+    if (empire && url.pathname === '/api/v2/metadata' && r.ok())
       void r
         .json()
-        .then((body: unknown) => {
+        .then((meta: { user?: unknown } | null) => {
+          if (!meta || typeof meta.user !== 'object' || meta.user === null)
+            return; // khách: để bước đọc trong trang kết luận
           user = {
             status: r.status(),
-            body,
+            body: { success: true, ...meta.user },
             html: false,
             challenge: false,
             userAgent: '',
@@ -1018,9 +1102,19 @@ function observeSiteApi(page: {
           };
         })
         .catch(() => undefined);
+    const type = r.headers()['content-type'] ?? '';
+    if (r.ok() && /json/i.test(type) && balances.length < 12)
+      void r
+        .json()
+        .then((body: unknown) => {
+          const fields = balanceFields(body);
+          if (fields.length) balances.push(`${label} → ${fields.join(', ')}`);
+        })
+        .catch(() => undefined);
   });
   return {
     user: () => user,
-    summary: () => [...new Set(calls)].slice(0, 15).join(', '),
+    summary: () => [...new Set(calls)].slice(0, 25).join(', '),
+    balances: () => [...new Set(balances)].join(' | '),
   };
 }

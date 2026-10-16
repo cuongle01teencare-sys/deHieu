@@ -108,6 +108,11 @@ export interface TradingAccountCheck {
   /** polymarket: allowance USDC cho sàn. */
   readonly allowance: number | null;
   /**
+   * polymarket: giá trị vị thế đang mở (USD) — chỉ hiển thị; Portfolio = cash + positions.
+   * null = sàn không trả / không áp dụng (csgoempire).
+   */
+  readonly positions: number | null;
+  /**
    * Khớp với cấu hình đã lưu? csgoempire: tài khoản đăng nhập trên sàn = email/username đã lưu;
    * polymarket: private key ký ra đúng địa chỉ ví đã lưu. null = không đủ dữ liệu để so.
    */

@@ -51,6 +51,8 @@ const ERROR_LABEL: Record<string, string> = {
   CSGOEMPIRE_BALANCE_TYPE_UNSUPPORTED: 'Tài khoản không dùng số dư coin',
   CSGOEMPIRE_BROWSER_UNAVAILABLE: 'Không mở được Chromium của hồ sơ',
   POLYMARKET_WALLET_MISMATCH: 'Private key KHÔNG ra đúng địa chỉ ví đã lưu',
+  POLYMARKET_FUNDER_MISMATCH:
+    'Ví funder KHÔNG phải ví Polymarket của private key này — điền địa chỉ trong link trang Profile Polymarket',
   POLYMARKET_KEY_MISSING: 'Chưa lưu private key',
   TRADING_SECRET_KEY_REQUIRED: 'Backend chưa đặt TRADING_SECRET_KEY',
   LIVE_REDIS_REQUIRED: 'Backend chưa có Redis',
@@ -58,10 +60,13 @@ const ERROR_LABEL: Record<string, string> = {
   CSGOEMPIRE_CLOUDFLARE_BLOCKED:
     'Cloudflare của csgoempire chặn yêu cầu đọc số dư (trang chống bot)',
   VENUE_NOT_JSON: 'Sàn trả trang web thay vì dữ liệu',
+  CSGOEMPIRE_HTTP_REJECTED: 'csgoempire từ chối yêu cầu đọc số dư',
+  CSGOEMPIRE_BALANCE_READ_FAILED: 'Chrome nền không đọc được số dư',
   CSGOEMPIRE_SESSION_ACCOUNT_FAILED:
     'Không đọc được tài khoản trên csgoempire — bấm Đăng nhập để xem lý do chi tiết',
   CSGOEMPIRE_BROWSER_SLOTS_BUSY: 'Đang có quá nhiều Chromium mở, thử lại sau',
   ACCOUNT_BUSY: 'Tài khoản đang bận vào lệnh, thử lại sau',
+  ACCOUNT_CHECK_FAILED: 'Kiểm tra tài khoản lỗi',
 };
 /** Nhãn dễ đọc + phần chi tiết sau dấu ":" (vd mã HTTP), không chỉ mã lỗi trơn. */
 const errorText = (code: string) => {
@@ -166,6 +171,13 @@ export function AccountCheckLine({
       <span className="num text-fg">
         Cash <span className="font-medium">{usd(d.cash)}</span>
       </span>
+      {d.positions !== null ? (
+        <span className="num text-fg">
+          Portfolio{' '}
+          <span className="font-medium">{usd(d.cash + d.positions)}</span>
+          <span className="text-faint"> (vị thế {usd(d.positions)})</span>
+        </span>
+      ) : null}
       {d.allowance !== null && d.allowance < d.cash ? (
         <span className="num text-warn">allowance {usd(d.allowance)}</span>
       ) : null}

@@ -111,7 +111,7 @@ App dùng chính luồng phiên của trang để nhận JWT mới, gọi identi
 ## Cash và kết quả hai chân
 
 - Polymarket: đọc balance collateral của đúng ví funder, đơn vị USD; không đọc Portfolio hoặc định giá vị thế. Kiểm tra allowance và yêu cầu Cash đủ cho giá giới hạn cùng phí ước tính.
-- csgoempire: đọc số dư hiện tại qua `/api/v2/user`, quy đổi coins → USD bằng tỷ giá API, kiểm tra cược tối thiểu và `coupon/max`.
+- csgoempire: đọc số dư hiện tại qua `/api/v2/metadata` (`user.balance`, đối chiếu `balances[].balance_coins`; `/api/v2/user` cũ trả 403), quy đổi coins → USD bằng tỷ giá API, kiểm tra cược tối thiểu và `coupon/max`.
 - Trong khóa của cả hai tài khoản, chuẩn bị và kiểm tra Cash hai sàn trước mọi request đặt lệnh. **Một bên thiếu Cash: hủy cả cặp, không gửi chân nào.** Không tự giảm tiền vì thiếu Cash. Màn hình chi tiết ghi Cash hiện có và số tiền cần từng sàn.
 - csgoempire chỉ chấp nhận odds bằng hoặc tốt hơn; Polymarket dùng FOK với số share và giá giới hạn. Lưu mã lệnh, số lượng, thời gian và trạng thái riêng mỗi chân. Phí Polymarket hiện vẫn là ước tính bảo thủ; lợi nhuận hiển thị là dự kiến theo hai cửa, chưa phải tiền đã quyết toán trận.
 - Hai sàn không hỗ trợ commit nguyên tử. Số dư/giá có thể đổi sau kiểm tra. Nếu đã gửi mà có chân bị từ chối, chưa khớp hoặc mất phản hồi: ghi **Cần đối soát**, khóa bền vững cả hai tài khoản và ngừng lệnh mới. Không tự cược lại, cashout hay đảo vị thế.

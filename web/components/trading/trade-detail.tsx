@@ -43,6 +43,10 @@ export const REASON_LABEL: Record<string, string> = {
   CSGOEMPIRE_CLOUDFLARE_BLOCKED:
     'Cloudflare của csgoempire chặn yêu cầu đọc số dư — hủy cả hai chân',
   VENUE_NOT_JSON: 'Sàn trả trang web thay vì dữ liệu — hủy cả hai chân',
+  CSGOEMPIRE_BALANCE_UNAVAILABLE:
+    'Chưa có số dư csgoempire mới (Chrome nền) — hủy cả hai chân',
+  CSGOEMPIRE_HTTP_REJECTED:
+    'csgoempire từ chối yêu cầu đọc số dư — hủy cả hai chân',
   BOTH_ORDERS_REJECTED: 'Hai sàn từ chối lệnh',
   LIVE_ALREADY_SUBMITTED: 'Cặp lệnh đã được gửi',
   NO_EDGE: 'Hết lãi sau phí',

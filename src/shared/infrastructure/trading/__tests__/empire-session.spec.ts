@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  balanceFields,
   browserSlotUsage,
   closeAllProfiles,
   closeProfile,
@@ -884,6 +885,20 @@ describe('xác nhận tài khoản trong Chromium (đã / chưa đăng nhập)',
     },
   );
 
+  it('sàn trả người dùng nhưng KHÔNG có email/username để so: không tự nhận là đúng — đăng nhập lại để xác nhận', async () => {
+    const s = setup();
+    const noIdentity = { status: 200, body: { success: true, id: 1 } };
+    profile(s, noIdentity, noIdentity);
+    const diagnostic = vi.fn();
+    await expect(
+      s.sessions.get('noid', { credentials: login, onDiagnostic: diagnostic }),
+    ).rejects.toThrow('CSGOEMPIRE_SESSION_ACCOUNT_FAILED');
+    expect(s.clearCookies).toHaveBeenCalledOnce();
+    expect(
+      String((diagnostic.mock.lastCall?.[0] as { cause?: string }).cause),
+    ).toContain('không trả email');
+  });
+
   it('phiên có sẵn đã được xác nhận ở lần trước: sàn không cho đọc tài khoản vẫn dùng tiếp, không đăng nhập lại', async () => {
     const s = setup();
     const hash = createHash('sha256').update('me@example.test').digest('hex');
@@ -922,5 +937,80 @@ describe('describeCause', () => {
     expect(
       describeCause(e, { username: 'me@example.test', password: 'pw-secret' }),
     ).toBe('locator.fill: typing "***" for ***');
+  });
+});
+
+describe('thăm dò nguồn số dư', () => {
+  it('chỉ lấy VỊ TRÍ + kiểu của trường giống số dư, không lấy giá trị', () => {
+    const body = {
+      data: { balance: 1234.5, user: { id: 7 } },
+      wallets: [{ available_balance: '3.10', currency: 'USD' }],
+    };
+    expect(balanceFields(body)).toEqual([
+      'data.balance:number',
+      'wallets.0.available_balance:string',
+    ]);
+    expect(JSON.stringify(balanceFields(body))).not.toMatch(/1234|3\.10/);
+  });
+
+  it('ghi log thăm dò sau khi lấy phiên xong', async () => {
+    const s = setup();
+    const probe = vi.fn();
+    const sessions = new EmpireSessions(
+      s.locks as unknown as AccountLock,
+      undefined,
+      probe,
+    );
+    // chỉ ghi khi đăng nhập tay (không ghi mỗi lần làm mới nền)
+    await sessions.get('probe-bg');
+    expect(probe).not.toHaveBeenCalled();
+    // đăng nhập có giao diện đọc file Preferences của hồ sơ
+    mocks.revision.mockImplementation(((path: string) =>
+      Promise.resolve(
+        String(path).endsWith('Preferences') ? '{}' : 'revision-1',
+      )) as never);
+    await sessions.get('probe-profile', { headed: true, force: true });
+    mocks.revision.mockImplementation(() => Promise.resolve('revision-1'));
+    expect(probe).toHaveBeenCalledWith(
+      'probe-profile',
+      expect.stringContaining('identify BetBy gồm: currency'),
+    );
+  });
+});
+
+describe('dùng chung hồ sơ với Chrome nền đọc số dư', () => {
+  it('làm mới phiên: nhường hồ sơ (đóng Chrome nền) TRƯỚC khi mở Chrome, trả lại SAU khi đóng', async () => {
+    const s = setup();
+    const order: string[] = [];
+    const impl = mocks.launch.getMockImplementation()!;
+    mocks.launch.mockImplementation((...args: unknown[]) => {
+      order.push('launch');
+      return (impl as (...a: unknown[]) => Promise<unknown>)(...args);
+    });
+    s.close.mockImplementation(() => {
+      order.push('close');
+      return Promise.resolve();
+    });
+    const sessions = new EmpireSessions(
+      s.locks as unknown as AccountLock,
+      undefined,
+      undefined,
+      {
+        acquire: (p) => {
+          order.push(`acquire:${p}`);
+          return Promise.resolve();
+        },
+        release: (p) => {
+          order.push(`release:${p}`);
+        },
+      },
+    );
+    await sessions.get('shared');
+    expect(order).toEqual([
+      'acquire:shared',
+      'launch',
+      'close',
+      'release:shared',
+    ]);
   });
 });

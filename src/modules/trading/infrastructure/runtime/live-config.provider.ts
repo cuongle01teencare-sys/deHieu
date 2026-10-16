@@ -5,10 +5,8 @@ import type {
   TradingAccountCheck,
   TradingAccountChecker,
 } from '../../application/trading.ports.js';
-import {
-  readEmpireBalance,
-  readPolymarketBalance,
-} from '../../../../shared/infrastructure/trading/venue-orders.js';
+import { readPolymarketBalance } from '../../../../shared/infrastructure/trading/venue-orders.js';
+import { EmpireBalanceWatcher } from '../../../../shared/infrastructure/trading/empire-balance-watcher.js';
 import type {
   EmpireCredentials,
   EmpireLoginStatus,
@@ -46,15 +44,35 @@ export class LiveConfigProvider
   private readonly locks: AccountLock | null;
   private readonly logger = new Logger('EmpireSession');
   private readonly sessions: EmpireSessions | null;
+  /** Chrome nền đọc số dư csgoempire vào Redis (worker vào lệnh đọc ở đó). */
+  private readonly balances: EmpireBalanceWatcher | null;
   constructor() {
     this.locks = process.env.REDIS_URL
       ? new AccountLock(process.env.REDIS_URL)
       : null;
+    this.balances = this.locks
+      ? new EmpireBalanceWatcher(this.locks, (message) =>
+          this.logger.warn(message),
+        )
+      : null;
     this.sessions = this.locks
-      ? new EmpireSessions(this.locks, (profile, error) =>
-          this.logger.warn(
-            `csgoempire ${profile}: làm mới phiên lỗi tạm thời (${error}), dùng tiếp token cũ còn hạn, thử lại sau 1 phút`,
-          ),
+      ? new EmpireSessions(
+          this.locks,
+          (profile, error) =>
+            this.logger.warn(
+              `csgoempire ${profile}: làm mới phiên lỗi tạm thời (${error}), dùng tiếp token cũ còn hạn, thử lại sau 1 phút`,
+            ),
+          (profile, info) =>
+            this.logger.log(
+              `csgoempire ${profile}: thăm dò sau đăng nhập — ${info}`,
+            ),
+          // làm mới phiên / đăng nhập dùng chung hồ sơ với Chrome nền: tạm đóng Chrome nền
+          this.balances
+            ? {
+                acquire: (profile) => this.balances!.pause(profile),
+                release: (profile) => this.balances!.resume(profile),
+              }
+            : undefined,
         )
       : null;
   }
@@ -255,13 +273,22 @@ export class LiveConfigProvider
         ),
       ]);
       if (reason) return inactive(reason);
+      const empireSession = await this.sessions.get(
+        empire.config.browserProfile,
+        {
+          credentials: this.credentials(empire),
+          credentialsVersion: this.version(empire),
+        },
+      );
+      // profile chạy thật cần số dư Empire: giữ Chrome nền đọc số dư (nhịp đối chiếu gọi lại mỗi 30 giây)
+      this.balances?.want(
+        empire.config.browserProfile,
+        this.credentials(empire)?.username ?? null,
+      );
       return {
         ...config,
         execution: {
-          empire: await this.sessions.get(empire.config.browserProfile, {
-            credentials: this.credentials(empire),
-            credentialsVersion: this.version(empire),
-          }),
+          empire: empireSession,
           polymarket: { ...poly.config, secretCipher: poly.secretCipher },
         },
       };
@@ -296,6 +323,7 @@ export class LiveConfigProvider
         wallet: r.account.wallet,
         cash: r.cash,
         allowance: r.allowance,
+        positions: r.positions,
         // readPolymarketBalance ném POLYMARKET_WALLET_MISMATCH nếu key không ra đúng ví.
         matchesConfig: true,
         checkedAt: Date.now(),
@@ -310,11 +338,19 @@ export class LiveConfigProvider
     )
       throw new Error('CSGOEMPIRE_LOGIN_IN_PROGRESS');
     const credentials = this.credentials(account);
-    const session = await this.sessions.get(profile, {
+    // bảo đảm hồ sơ đang đăng nhập đúng tài khoản (xác nhận ở bước lấy phiên)
+    await this.sessions.get(profile, {
       credentials,
       credentialsVersion: this.version(account),
     });
-    const r = await readEmpireBalance(session, signal);
+    if (!this.balances) throw new Error('LIVE_REDIS_REQUIRED');
+    signal.throwIfAborted();
+    // csgoempire chỉ trả số dư cho trình duyệt thật: đọc bằng Chrome nền
+    // (ném CSGOEMPIRE_ACCOUNT_MISMATCH + chặn vào lệnh nếu sàn báo tài khoản khác)
+    const r = await this.balances.readNow(
+      profile,
+      credentials?.username ?? null,
+    );
     const expected = credentials?.username.trim().toLowerCase();
     return {
       ...base,
@@ -323,18 +359,23 @@ export class LiveConfigProvider
       wallet: null,
       cash: r.cash,
       allowance: null,
+      positions: null,
       matchesConfig:
         expected && (r.username || r.email)
           ? [r.username, r.email].some(
               (v) => v?.trim().toLowerCase() === expected,
             )
-          : null,
+          : // sàn không trả email: phiên đã được xác nhận ở bước lấy phiên (gõ đúng tài khoản đã lưu)
+            expected
+            ? true
+            : null,
       checkedAt: Date.now(),
     };
   }
   async onApplicationShutdown() {
     for (const job of this.jobs.values()) job.abort.abort();
     try {
+      await this.balances?.closeAll();
       await closeAllProfiles();
     } finally {
       await Promise.allSettled([...this.jobs.values()].map((j) => j.done));

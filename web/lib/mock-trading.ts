@@ -175,6 +175,7 @@ export function mockTrading(method: string, path: string, search: string, body: 
       wallet: acc.config.venue === 'polymarket' ? (acc.config.funderAddress ?? acc.config.walletAddress) : null,
       cash: acc.venue === 'csgoempire' ? 1284.37 : 942.15,
       allowance: acc.venue === 'polymarket' ? 1e9 : null,
+      positions: acc.venue === 'polymarket' ? 57.3 : null,
       matchesConfig: true,
       checkedAt: Date.now(),
     });

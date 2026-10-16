@@ -4,6 +4,7 @@ import {
   ApiVenueOrders,
   type OrderPlan,
   type VenueFill,
+  type EmpireBalanceStore,
   type VenueAccountIdentity,
   type VenueOrders,
 } from './venue-orders.js';
@@ -44,7 +45,12 @@ export class LiveOrderExecutor implements LiveExecutor {
       | 'saveResult'
       | 'close'
     >,
-    private readonly venues: VenueOrders = new ApiVenueOrders(),
+    // AccountLock (Redis) cũng là kho số dư csgoempire do Chrome nền ghi
+    private readonly venues: VenueOrders = new ApiVenueOrders(
+      'readEmpireBalance' in locks
+        ? (locks as unknown as EmpireBalanceStore)
+        : undefined,
+    ),
   ) {}
 
   async execute(

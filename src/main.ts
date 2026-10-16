@@ -1,12 +1,10 @@
 import { NestFactory } from '@nestjs/core';
-import { AppModule, ObserveInstrument, observeEnabled } from './app.module.js';
+import { AppModule } from './app.module.js';
 import { setupOpenApi } from './shared/presentation/openapi-document.js';
 import { httpDiagnostics } from './shared/presentation/http-diagnostics.js';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, {
-    ...(observeEnabled ? { instrument: ObserveInstrument } : {}),
-  });
+  const app = await NestFactory.create(AppModule);
   app.use(
     httpDiagnostics({
       logSuccess: process.env.HTTP_DIAGNOSTICS_LOG_SUCCESS === 'true',

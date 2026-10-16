@@ -35,6 +35,8 @@ export interface TradingAccountCheck {
   wallet: string | null;
   cash: number;
   allowance: number | null;
+  /** polymarket: giá trị vị thế đang mở; Portfolio = cash + positions. null = không áp dụng. */
+  positions: number | null;
   /** Khớp cấu hình đã lưu (email/username csgoempire; key ↔ ví Polymarket). null = không so được. */
   matchesConfig: boolean | null;
   checkedAt: number;

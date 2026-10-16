@@ -151,9 +151,90 @@ export class AccountLock {
       await releaseAcquired();
     }
   }
+  // ------------------------------------------------- số dư csgoempire (Chrome nền đọc, worker dùng)
+
+  /** Số dư Chrome nền vừa đọc (giữ 3 phút; quá cũ thì worker tự từ chối dùng). */
+  async saveEmpireBalance(resource: string, snapshot: EmpireBalanceSnapshot) {
+    await this.redis.set(
+      `trade:empire-balance:${resource}`,
+      JSON.stringify(snapshot),
+      'PX',
+      BALANCE_KEEP_MS,
+    );
+  }
+  /** Lần đọc gần nhất bị lỗi: ghi lý do để worker báo đúng thay vì "không có số dư". */
+  async saveEmpireBalanceError(resource: string, error: string) {
+    await this.redis.set(
+      `trade:empire-balance-error:${resource}`,
+      JSON.stringify({ error, at: Date.now() }),
+      'PX',
+      BALANCE_KEEP_MS,
+    );
+  }
+  async readEmpireBalance(resource: string): Promise<EmpireBalanceRead> {
+    const [snap, err] = await this.redis.mget(
+      `trade:empire-balance:${resource}`,
+      `trade:empire-balance-error:${resource}`,
+    );
+    const parse = <T>(v: string | null): T | null => {
+      try {
+        return v ? (JSON.parse(v) as T) : null;
+      } catch {
+        return null;
+      }
+    };
+    const snapshot = parse<EmpireBalanceSnapshot>(snap);
+    let spent = 0;
+    if (snapshot) {
+      // mọi lần bot cược từ LÚC BẮT ĐẦU đọc (trừ hao 5 giây) có thể chưa có trong số dư đọc được
+      const members = await this.redis.zrangebyscore(
+        `trade:empire-spends:${resource}`,
+        snapshot.at - SPEND_MARGIN_MS,
+        '+inf',
+      );
+      for (const m of members) spent += Number(m.split(':')[2]) || 0;
+    }
+    return {
+      snapshot,
+      lastError: parse<{ error: string; at: number }>(err),
+      spent,
+    };
+  }
+  /** Ghi nhận bot vừa cược `amount` (theo thời điểm; giữ 10 phút). */
+  async spendEmpire(resource: string, amount: number) {
+    const key = `trade:empire-spends:${resource}`;
+    const now = Date.now();
+    await this.redis
+      .multi()
+      .zadd(key, now, `${now}:${randomUUID()}:${amount}`)
+      .zremrangebyscore(key, '-inf', now - SPEND_KEEP_MS)
+      .pexpire(key, SPEND_KEEP_MS)
+      .exec();
+  }
+
   close() {
     this.redis.disconnect();
   }
+}
+
+const BALANCE_KEEP_MS = 180_000;
+const SPEND_KEEP_MS = 10 * 60_000;
+/** Trừ hao: cược ngay TRƯỚC lúc đọc có thể chưa kịp vào số dư sàn trả về → vẫn trừ (an toàn). */
+const SPEND_MARGIN_MS = 5_000;
+
+/** Số dư csgoempire do Chrome nền đọc (không có cookie/token, không có thông tin đăng nhập). */
+export interface EmpireBalanceSnapshot {
+  /** USD dùng được. */
+  cash: number;
+  coins: number;
+  /** Lúc BẮT ĐẦU đọc (ms): cược từ mốc này trở đi được trừ thêm khi dùng. */
+  at: number;
+  account: { id: string | null; name: string | null };
+}
+export interface EmpireBalanceRead {
+  snapshot: EmpireBalanceSnapshot | null;
+  lastError: { error: string; at: number } | null;
+  spent: number;
 }
 
 const sleep = (ms: number, signal?: AbortSignal) =>
