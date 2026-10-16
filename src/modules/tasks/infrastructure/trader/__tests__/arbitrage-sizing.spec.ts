@@ -5,6 +5,7 @@ import {
   sizeArbitrage,
   takerFeePerShare,
   type SizingInput,
+  polymarketBuyShares,
 } from '../arbitrage-sizing.js';
 
 const FEE = { enabled: true, rate: 0.05, exponent: 1 };
@@ -105,5 +106,21 @@ describe('depthSummary', () => {
     expect(d.maxStakeAtEdge).toBe(75);
     expect(d.targetShares).toBe(200);
     expect(d.levels[0].netMargin).toBeCloseTo(1 / 0.912 - 1, 6);
+  });
+});
+
+describe('số share hợp lệ cho lệnh mua FOK Polymarket', () => {
+  it('tiền (share × giá) tối đa 2 số lẻ, làm tròn XUỐNG', () => {
+    expect(polymarketBuyShares(20.5, 0.37)).toBe(20);
+    expect(polymarketBuyShares(12.34, 0.5)).toBe(12.34);
+    expect(polymarketBuyShares(7.777, 0.375)).toBe(7.76);
+    expect(polymarketBuyShares(0.004, 0.5)).toBe(0);
+    for (const price of [0.01, 0.37, 0.375, 0.4567, 0.99])
+      for (let x = 1; x < 300; x += 3.137) {
+        const s = polymarketBuyShares(x, price);
+        expect(s).toBeLessThanOrEqual(x);
+        const usd = s * price * 100;
+        expect(Math.abs(usd - Math.round(usd))).toBeLessThan(1e-6);
+      }
   });
 });

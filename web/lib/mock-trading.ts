@@ -358,6 +358,7 @@ export function mockTrading(method: string, path: string, search: string, body: 
   }
 
   if (method === 'POST' && /^profiles\/[^/]+\/reevaluate$/.test(p)) return ok({ tasks: 1 });
+  if (method === 'POST' && /^profiles\/[^/]+\/reconciled$/.test(p)) return ok({ cleared: ['LIVE_RECONCILIATION_REQUIRED:demo'] });
   const profileId = /^profiles\/([^/]+)$/.exec(p)?.[1];
   if ((method === 'POST' && p === 'profiles') || (method === 'PUT' && profileId)) {
     const old = profiles.find((x) => x.id === profileId);

@@ -214,7 +214,11 @@ export class LiveOrderExecutor implements LiveExecutor {
         };
         await this.locks.saveResult(p.id, { plan: p, result });
         // giữ khóa kèm lý do đọc được (vẫn gỡ được bằng resume / clearHalt theo marker)
-        if (halt) await this.locks.halt(resources, halt);
+        if (halt)
+          await this.locks.halt(
+            resources,
+            `${halt} (khóa lúc ${new Date().toISOString()})`,
+          );
         else await this.locks.clearHalt(resources, marker);
         return result;
       });

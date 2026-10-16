@@ -24,7 +24,11 @@ import {
 } from './exposure-ledger.js';
 import { PolymarketMarketData } from './polymarket-market-data.js';
 import { TRADE_STRATEGIES } from './trade-strategies.js';
-import { depthSummary, takerFeePerShare } from './arbitrage-sizing.js';
+import {
+  depthSummary,
+  polymarketBuyShares,
+  takerFeePerShare,
+} from './arbitrage-sizing.js';
 import {
   TraderConfigSchema,
   type TraderConfig,
@@ -899,21 +903,33 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           { tokenId },
         );
       if (cfg.mode === 'live') {
-        const stake = Math.floor((d.stake + 1e-9) * 100) / 100;
-        const totalCost = stake + d.polyCost;
-        const payout = Math.min(d.shares, stake * book.odds);
+        // Polymarket chỉ nhận lệnh mua có tiền (share × giá giới hạn) 2 số lẻ: làm tròn XUỐNG số share
+        // tới mức hợp lệ, co tiền cược + chi phí theo cùng tỉ lệ để hai chân vẫn cân.
+        const limitPrice = d.levels.at(-1)?.price ?? d.avgPrice;
+        const shares = polymarketBuyShares(d.shares, limitPrice);
+        const ratio = d.shares > 0 ? shares / d.shares : 0;
+        const polyCost = d.polyCost * ratio;
+        const stake = Math.floor((d.stake * ratio + 1e-9) * 100) / 100;
+        const totalCost = stake + polyCost;
+        const payout = Math.min(shares, stake * book.odds);
         const profit = payout - totalCost;
+        const minShares = Math.max(info.minShares, ob.minShares ?? 0);
         if (
+          shares <= 0 ||
+          shares < minShares ||
           stake < pick.row.minStake ||
           profit / totalCost < cfg.risk.minNetMargin
         )
           return emit(
             'skipped',
-            'LIVE_ROUNDING_LIMIT: làm tròn tiền cược không còn đạt cấu hình',
+            `LIVE_ROUNDING_LIMIT: làm tròn cho sàn (${+shares.toFixed(4)} share × ${limitPrice}, cược ${stake}$) không còn đạt cấu hình`,
             { tokenId },
           );
         d = {
           ...d,
+          shares,
+          polyCost,
+          fee: d.fee * ratio,
           stake,
           totalCost,
           payout,

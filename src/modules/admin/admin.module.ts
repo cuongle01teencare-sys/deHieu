@@ -77,6 +77,7 @@ import {
 } from './application/odds-transition.recorder.js';
 import { OpsWatchdog } from './application/ops-watchdog.js';
 import { ReconcileIncidentRelay } from './application/reconcile-incident.relay.js';
+import { TradingReconcileIncidentRelay } from './application/trading-reconcile-incident.relay.js';
 import { RetentionJob } from './application/retention-job.js';
 import { PurgeSignalHistoryHandler } from '../odds/application/commands/purge-signal-history.command.js';
 import { GetAdminSnapshotHandler } from './application/queries/get-admin-snapshot.query.js';
@@ -236,6 +237,12 @@ const ADMIN_QUEUE = Symbol('ADMIN_QUEUE');
           incidents,
         );
       },
+    },
+    {
+      provide: TradingReconcileIncidentRelay,
+      inject: [OPS_EVENT_BUS, IncidentTracker],
+      useFactory: (ops: OpsEventBus, incidents: IncidentTracker) =>
+        new TradingReconcileIncidentRelay(ops, incidents),
     },
     {
       provide: ReconcileIncidentRelay,
@@ -428,6 +435,8 @@ export class AdminModule implements OnModuleInit, OnApplicationShutdown {
     @Inject(ADMIN_QUEUE) private readonly _queue: BackgroundQueue,
     @Inject(ReconcileIncidentRelay)
     private readonly _reconcile: ReconcileIncidentRelay,
+    @Inject(TradingReconcileIncidentRelay)
+    private readonly _tradingReconcile: TradingReconcileIncidentRelay,
     @Inject(RetentionJob) private readonly _retention: RetentionJob,
   ) {}
 
@@ -440,6 +449,7 @@ export class AdminModule implements OnModuleInit, OnApplicationShutdown {
     }
     this._transitions.start();
     this._unsubscribers.push(this._reconcile.start());
+    this._unsubscribers.push(this._tradingReconcile.start());
     this._hub.listen();
 
     await this._health.check();

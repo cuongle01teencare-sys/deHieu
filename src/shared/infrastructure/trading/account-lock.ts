@@ -50,6 +50,26 @@ export class AccountLock {
   async resume(resource: string) {
     await this.redis.del(`trade:halt:${resource}`);
   }
+  /**
+   * Gỡ khóa có lý do BẮT ĐẦU bằng `prefix` (vd 'LIVE_RECONCILIATION_REQUIRED'); khóa khác (vd phiên
+   * hết hạn — phải đăng nhập lại) giữ nguyên. Trả lý do các khóa đã gỡ.
+   */
+  async clearHaltPrefix(
+    resources: readonly string[],
+    prefix: string,
+  ): Promise<string[]> {
+    const removed: string[] = [];
+    for (const resource of resources) {
+      const v = (await this.redis.eval(
+        "local v = redis.call('GET', KEYS[1]) if v and string.sub(v, 1, string.len(ARGV[1])) == ARGV[1] then redis.call('DEL', KEYS[1]) return v end return false",
+        1,
+        `trade:halt:${resource}`,
+        prefix,
+      )) as string | null;
+      if (typeof v === 'string') removed.push(v);
+    }
+    return removed;
+  }
   /** Gỡ khóa nếu lý do đúng `expected` (hoặc `expected` kèm chi tiết phía sau: "<expected> — …"). */
   async clearHalt(resources: readonly string[], expected: string) {
     for (const resource of resources)

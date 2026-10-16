@@ -19,11 +19,15 @@ const resource = accountResource(
   venue === 'polymarket' ? identity.toLowerCase() : identity,
 );
 try {
-  await locks.with([resource], async () => {
+  const was = await locks.with([resource], async () => {
+    const reason = await locks.halted([resource]);
     await locks.resume(resource);
+    return reason;
   });
   console.log(
-    'Đã gỡ trạng thái dừng cho tài khoản đã đối soát. App kiểm tra lại trong tối đa 30 giây.',
+    was
+      ? `Đã gỡ khóa: ${was}\nApp kiểm tra lại trong tối đa 30 giây.`
+      : 'Tài khoản này KHÔNG có khóa nào (kiểm tra lại tên hồ sơ / địa chỉ ví funder).',
   );
 } finally {
   locks.close();

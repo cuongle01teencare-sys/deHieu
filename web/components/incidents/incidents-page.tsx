@@ -21,7 +21,7 @@ import { JsonBlock } from '../ui/code';
 import { IncidentList, sortIncidents, useAck } from './incident-list';
 import { cn } from '@/lib/utils';
 
-const KINDS = ['task.failed', 'task.flapping', 'source.stale', 'node.down', 'infra.down', 'consumer.down', 'consumer.backlog', 'lane.backlog', 'odds.mass_removal'];
+const KINDS = ['task.failed', 'task.flapping', 'source.stale', 'node.down', 'infra.down', 'consumer.down', 'consumer.backlog', 'lane.backlog', 'odds.mass_removal', 'trading.reconcile'];
 
 export function IncidentsPage() {
   const params = useSearchParams();

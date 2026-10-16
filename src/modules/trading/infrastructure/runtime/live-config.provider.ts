@@ -4,6 +4,7 @@ import type {
   EmpireBrowserGateway,
   TradingAccountCheck,
   TradingAccountChecker,
+  TradingHaltControl,
 } from '../../application/trading.ports.js';
 import { readPolymarketBalance } from '../../../../shared/infrastructure/trading/venue-orders.js';
 import { EmpireBalanceWatcher } from '../../../../shared/infrastructure/trading/empire-balance-watcher.js';
@@ -30,7 +31,8 @@ export class LiveConfigProvider
   implements
     TraderExecutionConfigProvider,
     EmpireBrowserGateway,
-    TradingAccountChecker
+    TradingAccountChecker,
+    TradingHaltControl
 {
   private readonly jobs = new Map<
     string,
@@ -376,18 +378,21 @@ export class LiveConfigProvider
       checkedAt: Date.now(),
     };
   }
+  async clearReconciliation(
+    accounts: readonly TradingAccount[],
+  ): Promise<string[]> {
+    if (!this.locks) throw new Error('LIVE_REDIS_REQUIRED');
+    await this.locks.connect();
+    return this.locks.clearHaltPrefix(
+      accounts.map(haltResource),
+      'LIVE_RECONCILIATION_REQUIRED',
+    );
+  }
+
   /** Lý do khóa vào lệnh của tài khoản (Redis); không đọc được Redis → null (không chặn nút kiểm tra). */
   private async haltedReason(account: TradingAccount): Promise<string | null> {
     if (!this.locks) return null;
-    const resource =
-      account.config.venue === 'polymarket'
-        ? accountResource(
-            'polymarket',
-            (
-              account.config.funderAddress ?? account.config.walletAddress
-            ).toLowerCase(),
-          )
-        : accountResource('csgoempire', account.config.browserProfile);
+    const resource = haltResource(account);
     try {
       await this.locks.connect();
       return await this.locks.halted([resource]);
@@ -405,4 +410,16 @@ export class LiveConfigProvider
       this.locks?.close();
     }
   }
+}
+
+/** Khóa Redis của tài khoản — cùng khóa mà worker đặt (csgoempire: hồ sơ; polymarket: ví funder, chữ thường). */
+function haltResource(account: TradingAccount) {
+  return account.config.venue === 'polymarket'
+    ? accountResource(
+        'polymarket',
+        (
+          account.config.funderAddress ?? account.config.walletAddress
+        ).toLowerCase(),
+      )
+    : accountResource('csgoempire', account.config.browserProfile);
 }

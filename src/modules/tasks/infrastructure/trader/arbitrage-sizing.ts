@@ -234,3 +234,17 @@ export function depthSummary(
     maxStakeAtEdge: r6(sharesAtEdge * bookUnit),
   };
 }
+
+/**
+ * Số share lớn nhất ≤ `shares` mà lệnh MUA FOK của Polymarket nhận: share tối đa 4 số lẻ (dùng bước
+ * 0.01) và tiền (share × giá giới hạn) tối đa 2 số lẻ. 0 = không có mức hợp lệ gần đó.
+ */
+export function polymarketBuyShares(shares: number, price: number): number {
+  const cents = (v: number) => Math.abs(v * 100 - Math.round(v * 100)) < 1e-6;
+  let units = Math.floor(shares * 100 + 1e-6);
+  for (let i = 0; i < 10_000 && units > 0; i++, units--) {
+    const s = units / 100;
+    if (cents(s * price)) return s;
+  }
+  return 0;
+}

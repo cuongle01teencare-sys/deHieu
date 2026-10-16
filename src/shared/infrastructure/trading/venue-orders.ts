@@ -143,6 +143,30 @@ export function hedgeBet(
   return null;
 }
 
+/** Số có tối đa `n` chữ số thập phân (dung sai dấu phẩy động). */
+export function fitsDecimals(v: number, n: number) {
+  const scaled = v * 10 ** n;
+  return Math.abs(scaled - Math.round(scaled)) < 1e-6;
+}
+
+/**
+ * Lỗi mà sàn ĐÃ trả lời từ chối (HTTP 4xx, gồm 429): lệnh không vào sổ. 5xx / mạng / quá hạn KHÔNG
+ * tính — có thể lệnh đã vào, phải đối soát.
+ */
+function rejectedByVenue(
+  e: unknown,
+): e is Error & { name: string; status?: number } {
+  if (!(e instanceof Error)) return false;
+  if (e.name === 'RateLimitError') return true;
+  const status = (e as { status?: unknown }).status;
+  return (
+    e.name === 'RequestRejectedError' &&
+    typeof status === 'number' &&
+    status >= 400 &&
+    status < 500
+  );
+}
+
 /** Đường dẫn API (không query) để biết endpoint nào lỗi. */
 function endpoint(url: string) {
   try {
@@ -580,6 +604,13 @@ export class ApiVenueOrders implements VenueOrders {
     const signedShares = Number(order.takerAmount) / 1e6;
     if (Math.abs(signedShares - p.shares) > 1e-6)
       throw new Error('POLYMARKET_SIZE_PRECISION');
+    // Lệnh mua FOK (lệnh thị trường) của Polymarket: tiền USDC (maker) tối đa 2 số lẻ, share (taker)
+    // tối đa 4 số lẻ — sai là sàn từ chối. Kiểm TRƯỚC khi gửi để hủy gọn cả cặp, không phải đối soát.
+    const makerUsd = Number(order.makerAmount) / 1e6;
+    if (!fitsDecimals(makerUsd, 2) || !fitsDecimals(signedShares, 4))
+      throw new Error(
+        `POLYMARKET_AMOUNT_PRECISION: ${signedShares} share × ${p.polyLimit} = ${makerUsd}$ — Polymarket chỉ nhận tiền 2 số lẻ, share 4 số lẻ`,
+      );
     signal.throwIfAborted();
     return {
       cash,
@@ -587,7 +618,27 @@ export class ApiVenueOrders implements VenueOrders {
       account,
       submit: async () => {
         const sentAt = Date.now();
-        const response = await client.postOrder(order);
+        let response: Awaited<ReturnType<typeof client.postOrder>>;
+        try {
+          response = await client.postOrder(order);
+        } catch (e) {
+          // Sàn TRẢ LỜI từ chối (4xx: sai dữ liệu, hạn chế, quá tải): lệnh chắc chắn không vào sổ →
+          // "bị từ chối" (hủy gọn cả cặp), không phải "không rõ kết quả" (phải đối soát).
+          if (rejectedByVenue(e))
+            return {
+              status: 'rejected',
+              orderRef: null,
+              filledAmount: 0,
+              avgPrice: 0,
+              fee: 0,
+              cost: 0,
+              sentAt,
+              ackedAt: Date.now(),
+              filledAt: null,
+              error: `POLYMARKET_REJECTED:${e.name} ${e.status ?? ''} — ${maskSecrets(e.message).slice(0, 200)}`,
+            };
+          throw e;
+        }
         const ackedAt = Date.now();
         if (!response.ok)
           return {

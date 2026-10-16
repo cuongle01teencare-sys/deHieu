@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import {
+  LockOpen,
   MoreHorizontal,
   Pencil,
   Play,
@@ -117,6 +118,8 @@ export function TraderProfiles() {
   const mutate = useMutate();
   const [editing, setEditing] = useState<TraderProfile | 'new' | null>(null);
   const [removing, setRemoving] = useState<TraderProfile | null>(null);
+  // "Đã đối soát — gỡ khóa": hỏi xác nhận trước khi cho bot chạy lại
+  const [reconciling, setReconciling] = useState<TraderProfile | null>(null);
   const [viewing, setViewing] = useState<string | null>(null);
   const accountLink = (id: string) => (
     <button
@@ -171,6 +174,22 @@ export function TraderProfiles() {
           ? `${p.name}: đang xét lại các kèo còn sống`
           : `${p.name}: không có task trader nào đang chạy`,
       );
+  };
+  const confirmReconcile = async () => {
+    if (!reconciling) return;
+    setBusy(true);
+    const r = await mutate<{ cleared: string[] }>(
+      `trading/profiles/${encodeURIComponent(reconciling.id)}/reconciled`,
+      { method: 'POST' },
+    );
+    setBusy(false);
+    if (r) {
+      toast.success(
+        `${reconciling.name}: đã gỡ ${r.cleared.length} khóa đối soát — bot chạy lại trong giây lát`,
+      );
+      setReconciling(null);
+      void profiles.reload();
+    }
   };
   const stop = async (t: TaskRecord) => {
     const r = await mutate(
@@ -295,7 +314,11 @@ export function TraderProfiles() {
                   </span>
                 </span>
                 <span className="w-full md:w-48">
-                  <RuntimeState profileId={p.id} task={t} />
+                  <RuntimeState
+                    profileId={p.id}
+                    task={t}
+                    onReconcile={manage ? undefined : () => setReconciling(p)}
+                  />
                 </span>
                 <span className="ml-auto flex items-center gap-1 md:ml-0">
                   <AccountCheckButton
@@ -350,6 +373,13 @@ export function TraderProfiles() {
                     >
                       Xét lại kèo đang sống
                     </MenuItem>
+                    <MenuItem
+                      icon={<LockOpen />}
+                      disabledReason={manage}
+                      onSelect={() => setReconciling(p)}
+                    >
+                      Đã đối soát — gỡ khóa
+                    </MenuItem>
                     <MenuSeparator />
                     <MenuItem
                       icon={<Trash2 />}
@@ -379,6 +409,16 @@ export function TraderProfiles() {
           setEditing(null);
           void profiles.reload();
         }}
+      />
+      <Confirm
+        open={!!reconciling}
+        onOpenChange={(v) => !v && setReconciling(null)}
+        tone="danger"
+        title={`Đã đối soát ${reconciling?.name ?? ''}?`}
+        description="Chỉ bấm khi đã kiểm tra hai chân của lệnh gây khóa trên csgoempire (My bets) và Polymarket (Activity), và đã tự xử lý chân lẻ nếu có (bù tay hoặc bán lại share). Gỡ khóa đối soát trên cả hai tài khoản của profile, bot vào lệnh lại ngay. Khóa phiên hết hạn không gỡ ở đây — bấm Đăng nhập."
+        confirmLabel="Đã đối soát, gỡ khóa"
+        loading={busy}
+        onConfirm={() => void confirmReconcile()}
       />
       <Confirm
         open={!!removing}
@@ -411,9 +451,12 @@ export function TraderProfiles() {
 function RuntimeState({
   profileId,
   task,
+  onReconcile,
 }: {
   profileId: string;
   task: TaskRecord | null;
+  /** Có = profile đang đứng yên vì khóa đối soát thì hiện nút gỡ khóa ngay tại đây. */
+  onReconcile?: () => void;
 }) {
   const cfg = useApi<TraderRuntimeConfig>(
     `trading/profiles/${encodeURIComponent(profileId)}/runtime-config`,
@@ -432,9 +475,24 @@ function RuntimeState({
         {task.spec.taskId}
       </span>
       {reason ? (
-        <Hint content="Worker vẫn nhận kèo nhưng bỏ qua và ghi lý do">
-          <span className="block truncate text-warn">Đứng yên: {reason}</span>
-        </Hint>
+        <>
+          <Hint content="Worker vẫn nhận kèo nhưng bỏ qua và ghi lý do">
+            <span className="block truncate text-warn">Đứng yên: {reason}</span>
+          </Hint>
+          {onReconcile &&
+          (cfg.data?.inactiveReason ?? '').startsWith(
+            'LIVE_RECONCILIATION_REQUIRED',
+          ) ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-1"
+              onClick={onReconcile}
+            >
+              <LockOpen aria-hidden /> Đã đối soát — gỡ khóa
+            </Button>
+          ) : null}
+        </>
       ) : task.lastError ? (
         <Hint content={task.lastError}>
           <span className="block truncate text-critical/85">

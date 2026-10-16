@@ -72,8 +72,13 @@ const ERROR_LABEL: Record<string, string> = {
 function haltText(reason: string) {
   const head = reason.split(':')[0].trim();
   const rest = reason.slice(head.length + 1).trim();
-  if (head === 'LIVE_RECONCILIATION_REQUIRED')
-    return 'Có lệnh chưa rõ kết quả — đối soát hai chân trên sàn rồi chạy pnpm trading:resume … --reconciled';
+  if (head === 'LIVE_RECONCILIATION_REQUIRED') {
+    // "<mã lệnh> — <chuyện gì xảy ra> (khóa lúc …)": hiện đủ để biết khóa của lệnh nào, lúc nào
+    const dashAt = rest.indexOf(' — ');
+    const id = (dashAt >= 0 ? rest.slice(0, dashAt) : rest).trim();
+    const what = dashAt >= 0 ? rest.slice(dashAt + 3) : '';
+    return `Có lệnh chưa rõ kết quả${id ? ` (lệnh ${id.slice(0, 8)}…)` : ''}${what ? `: ${what}` : ''} — đối soát hai chân trên sàn rồi chạy pnpm trading:resume … --reconciled`;
+  }
   const dash = rest.indexOf(' — ');
   const extra =
     dash >= 0 ? rest.slice(dash + 3) : ERROR_LABEL[head] ? '' : rest;

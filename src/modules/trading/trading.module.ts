@@ -24,6 +24,8 @@ import {
   EMPIRE_BROWSER_GATEWAY,
   TRADING_ACCOUNT_CHECKER,
   type TradingAccountChecker,
+  TRADING_HALT_CONTROL,
+  type TradingHaltControl,
   type SecretCipher,
   type StakeTierSource,
   type TradeAttemptRepository,
@@ -47,6 +49,12 @@ import { SupervisorTraderTaskGateway } from './infrastructure/runtime/supervisor
 import { LiveConfigProvider } from './infrastructure/runtime/live-config.provider.js';
 import { EmpireLoginAdmin } from './application/empire-login-admin.js';
 import { AccountCheckAdmin } from './application/account-check-admin.js';
+import { ReconcileAdmin } from './application/reconcile-admin.js';
+import { ReconcileAlerts } from './application/reconcile-alerts.js';
+import {
+  OPS_EVENT_BUS,
+  type OpsEventBus,
+} from '../../shared/application/ops-event-bus.js';
 import { AccountReportAdmin } from './application/account-report-admin.js';
 import {
   POLYMARKET_RESOLUTION_SOURCE,
@@ -100,6 +108,48 @@ const ONE_CLICK_SWEEP_MS = 10_000;
     LiveConfigProvider,
     { provide: EMPIRE_BROWSER_GATEWAY, useExisting: LiveConfigProvider },
     { provide: TRADING_ACCOUNT_CHECKER, useExisting: LiveConfigProvider },
+    { provide: TRADING_HALT_CONTROL, useExisting: LiveConfigProvider },
+    {
+      provide: ReconcileAdmin,
+      inject: [
+        TRADER_PROFILE_REPOSITORY,
+        TRADING_ACCOUNT_REPOSITORY,
+        TRADING_HALT_CONTROL,
+        TraderConfigSync,
+        ReconcileAlerts,
+      ],
+      useFactory: (
+        profiles: TraderProfileRepository,
+        accounts: TradingAccountRepository,
+        halts: TradingHaltControl,
+        sync: TraderConfigSync,
+        alerts: ReconcileAlerts,
+      ) => new ReconcileAdmin(profiles, accounts, halts, sync, alerts),
+    },
+    {
+      provide: ReconcileAlerts,
+      inject: [
+        OPS_EVENT_BUS,
+        PUSH_SENDER,
+        TRADER_PROFILE_REPOSITORY,
+        ConfigService,
+      ],
+      useFactory: (
+        ops: OpsEventBus,
+        sender: PushSender | null,
+        profiles: TraderProfileRepository,
+        cfg: ConfigService<Env, true>,
+      ) => {
+        const log = new Logger('ReconcileAlerts');
+        return new ReconcileAlerts(
+          ops,
+          sender,
+          async (id) => (await profiles.get(id))?.name ?? null,
+          cfg.get('WEB_APP_URL', { infer: true }) ?? null,
+          (e) => log.warn(`báo cần đối soát lỗi: ${String(e)}`),
+        );
+      },
+    },
     {
       provide: AccountCheckAdmin,
       inject: [TRADING_ACCOUNT_REPOSITORY, TRADING_ACCOUNT_CHECKER],
@@ -311,6 +361,7 @@ const ONE_CLICK_SWEEP_MS = 10_000;
         OneClickBoard,
         OneClickHistoryRecorder,
         OneClickNotifier,
+        ReconcileAlerts,
       ],
       useFactory: (
         r: TradeAttemptRepository,
@@ -318,14 +369,22 @@ const ONE_CLICK_SWEEP_MS = 10_000;
         b: OneClickBoard,
         h: OneClickHistoryRecorder,
         n: OneClickNotifier,
+        a: ReconcileAlerts,
       ) => {
         const log = new Logger('OneClickPush');
         if (!n.enabled)
           log.log(
             'chưa đặt ONESIGNAL_APP_ID / ONESIGNAL_REST_API_KEY: không báo kèo On click về điện thoại',
           );
-        return new TraderDataHandler(r, s, undefined, b, h, n, (e) =>
-          log.warn(`gửi thông báo On click lỗi: ${String(e)}`),
+        return new TraderDataHandler(
+          r,
+          s,
+          undefined,
+          b,
+          h,
+          n,
+          (e) => log.warn(`gửi thông báo On click lỗi: ${String(e)}`),
+          a,
         );
       },
     },

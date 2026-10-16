@@ -126,6 +126,16 @@ export interface TradingAccountCheck {
 }
 
 export const TRADING_ACCOUNT_CHECKER = Symbol('TRADING_ACCOUNT_CHECKER');
+
+export const TRADING_HALT_CONTROL = Symbol('TRADING_HALT_CONTROL');
+/** Khóa vào lệnh trên tài khoản (Redis). */
+export interface TradingHaltControl {
+  /**
+   * Người vận hành xác nhận ĐÃ đối soát hai chân trên sàn: gỡ khóa "lệnh chưa rõ kết quả" của các tài
+   * khoản này (khóa khác như phiên hết hạn giữ nguyên). Trả lý do các khóa đã gỡ.
+   */
+  clearReconciliation(accounts: readonly TradingAccount[]): Promise<string[]>;
+}
 export interface TradingAccountChecker {
   /** Ném lỗi có mã (vd CSGOEMPIRE_SESSION_EXPIRED) khi không đọc được. */
   check(account: TradingAccount): Promise<TradingAccountCheck>;

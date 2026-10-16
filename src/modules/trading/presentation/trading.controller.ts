@@ -37,6 +37,7 @@ import { STAKE_TRENDS } from '../domain/stake-plan.js';
 import { TRADER_MODES } from '../domain/trader-profile.js';
 import { unwrap } from './http-errors.js';
 import { EmpireLoginAdmin } from '../application/empire-login-admin.js';
+import { ReconcileAdmin } from '../application/reconcile-admin.js';
 import { AccountCheckAdmin } from '../application/account-check-admin.js';
 import { AccountReportAdmin } from '../application/account-report-admin.js';
 import {
@@ -248,6 +249,7 @@ export class TradingController {
     @Inject(AccountReportAdmin)
     private readonly _accountReport: AccountReportAdmin,
     @Inject(SettlementAdmin) private readonly _settlement: SettlementAdmin,
+    @Inject(ReconcileAdmin) private readonly _reconcile: ReconcileAdmin,
   ) {}
 
   // ------------------------------------------------------------- tài khoản
@@ -450,6 +452,18 @@ export class TradingController {
   })
   async reevaluateProfile(@Param('id') id: string) {
     return unwrap(await this._admin.reevaluateProfile(id));
+  }
+
+  @Post('profiles/:id/reconciled')
+  @HttpCode(200)
+  @RequirePermissions(P.MANAGE)
+  @ApiOperation({
+    summary: 'Đã đối soát — gỡ khóa vào lệnh của profile',
+    description:
+      'Quyền: trading:manage. Dùng SAU KHI đã kiểm tra hai chân trên sàn (và tự xử lý chân lẻ nếu có). Gỡ khóa "lệnh chưa rõ kết quả" (LIVE_RECONCILIATION_REQUIRED) trên cả hai tài khoản của profile rồi gửi lại cấu hình cho worker. Khóa phiên hết hạn không gỡ ở đây (bấm Đăng nhập). Trả { cleared } = lý do các khóa đã gỡ; không có khóa nào → 400 NO_RECONCILIATION_HALT.',
+  })
+  async reconciled(@Param('id') id: string) {
+    return unwrap(await this._reconcile.resume(id));
   }
 
   @Delete('profiles/:id')

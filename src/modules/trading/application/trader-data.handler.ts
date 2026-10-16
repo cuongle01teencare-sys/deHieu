@@ -4,6 +4,7 @@ import type { TraderConfigSync } from './trader-config.sync.js';
 import type { OneClickHistoryRecorder } from './one-click-history.js';
 import type { OneClickNotifier } from './one-click-notifier.js';
 import type { OneClickBoard } from './one-click-board.js';
+import type { ReconcileAlerts } from './reconcile-alerts.js';
 
 /** Kind của task trader (khai báo ở danh mục task). */
 export const TRADER_TASK_KIND = 'trader.arbitrage';
@@ -40,6 +41,8 @@ export class TraderDataHandler {
     private readonly _history: OneClickHistoryRecorder | null = null,
     private readonly _notifier: OneClickNotifier | null = null,
     private readonly _onNotifyError: (e: unknown) => void = () => undefined,
+    /** Lệnh thật cần đối soát → báo (sự cố + push). */
+    private readonly _alerts: Pick<ReconcileAlerts, 'trade'> | null = null,
   ) {}
 
   async execute(msg: TraderDataMessage): Promise<void> {
@@ -64,7 +67,10 @@ export class TraderDataHandler {
       // database chập chờn: thử lại để không mất lệnh (ghi trùng id được bỏ qua)
       for (let attempt = 1; ; attempt++) {
         try {
-          return await this._trades.record(t);
+          await this._trades.record(t);
+          // không chặn luồng dữ liệu; ReconcileAlerts tự nuốt lỗi
+          void this._alerts?.trade(t);
+          return;
         } catch (e) {
           if (attempt >= this._retries.attempts) throw e;
           await this._retries.sleep(

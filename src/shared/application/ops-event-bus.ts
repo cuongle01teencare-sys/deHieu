@@ -123,6 +123,17 @@ export type OpsEvent =
       }
     >
   | Base<
+      'trading.reconcile_required',
+      {
+        profileId: string;
+        profileName: string;
+        tradeId: string;
+        /** "csgoempire: … · Polymarket: …" — chân nào khớp, chân nào lỗi. */
+        summary: string;
+      }
+    >
+  | Base<'trading.reconciled', { profileId: string; cleared: number }>
+  | Base<
       'audit.recorded',
       {
         principalId: string | null;

@@ -451,6 +451,66 @@ describe('direct venue APIs', () => {
     ).toBeNull();
   });
 
+  it('Polymarket: tiền lệnh quá 2 số lẻ → hủy gọn lúc chuẩn bị; sàn trả 4xx → "bị từ chối" (không phải không rõ)', async () => {
+    vi.stubEnv('TRADING_SECRET_KEY', 'unit-test-key-not-a-real-wallet-key');
+    const c = {
+      walletAddress: '0xsigner',
+      funderAddress: null,
+      secretCipher: new AesGcmSecretCipher(
+        process.env.TRADING_SECRET_KEY,
+      ).encrypt('test-private-key'),
+    };
+    mocks.cash.mockResolvedValue({
+      balance: '100000000',
+      allowances: { exchange: 1000000000n },
+    });
+    const client = {
+      account: { signer: '0xsigner', signerType: 'OWNER', wallet: '0xsigner' },
+      createLimitOrder: vi.fn(() =>
+        Promise.resolve({ takerAmount: '20500000', makerAmount: '7585000' }),
+      ),
+      postOrder: vi.fn(),
+    };
+    mocks.create.mockResolvedValue(client);
+    await expect(
+      new ApiVenueOrders().polymarket(
+        c,
+        { ...plan, shares: 20.5, polyLimit: 0.37 },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('POLYMARKET_AMOUNT_PRECISION');
+    expect(client.postOrder).not.toHaveBeenCalled();
+
+    client.createLimitOrder.mockResolvedValue({
+      takerAmount: '20000000',
+      makerAmount: '8000000',
+    });
+    const rejected = Object.assign(new Error('invalid amounts'), {
+      name: 'RequestRejectedError',
+      status: 400,
+    });
+    client.postOrder.mockRejectedValueOnce(rejected);
+    const order = await new ApiVenueOrders().polymarket(
+      c,
+      plan,
+      new AbortController().signal,
+    );
+    expect(await order.submit()).toMatchObject({
+      status: 'rejected',
+      error: expect.stringContaining(
+        'RequestRejectedError 400 — invalid amounts',
+      ) as string,
+    });
+    // 5xx: có thể đã vào → không đoán, để bên ngoài coi là KHÔNG RÕ
+    client.postOrder.mockRejectedValueOnce(
+      Object.assign(new Error('bad gateway'), {
+        name: 'RequestRejectedError',
+        status: 502,
+      }),
+    );
+    await expect(order.submit()).rejects.toThrow('bad gateway');
+  });
+
   it('Polymarket reads collateral cash of the funder, ignores portfolio, and uses FOK', async () => {
     vi.stubEnv('TRADING_SECRET_KEY', 'unit-test-key-not-a-real-wallet-key');
     const signed = { takerAmount: '20000000', makerAmount: '8000000' };

@@ -75,7 +75,9 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
         href:
           i.kind === 'odds.mass_removal'
             ? '/ingest?tenant=polymarket'
-            : taskId
+            : i.kind === 'trading.reconcile'
+              ? '/giao-dich'
+              : taskId
               ? `/publisher?task=${encodeURIComponent(taskId)}`
               : i.kind.startsWith('consumer')
                 ? '/consumer'
