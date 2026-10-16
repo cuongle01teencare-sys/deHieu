@@ -250,6 +250,11 @@ describe('live pair execution', () => {
       hedge: { shares: 20, cost: 8.5 },
     });
     expect(r.timing?.preparedAt).toBeGreaterThanOrEqual(r.timing!.startedAt);
+    // thời gian chuẩn bị từng sàn (chạy song song) để biết sàn nào chậm
+    expect(Object.keys(r.timing?.prepare ?? {}).sort()).toEqual([
+      'csgoempire',
+      'polymarket',
+    ]);
     expect(s.halted.size).toBe(0);
   });
 

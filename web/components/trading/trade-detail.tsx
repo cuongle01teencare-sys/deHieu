@@ -136,6 +136,19 @@ function explain(t: TradeAttempt, d: Detail): string {
 }
 
 const msv = (v: number | null) => (v === null ? '—' : `${v} ms`);
+const PREP_STEP: Record<string, string> = {
+  cash: 'số dư',
+  limit: 'hạn mức BetBy',
+  client: 'kết nối',
+  sign: 'ký lệnh',
+};
+/** "412 ms (số dư 3 ms · hạn mức BetBy 410 ms)" */
+const prepText = (p: { totalMs: number; steps: Record<string, number> }) => {
+  const steps = Object.entries(p.steps)
+    .map(([k, v]) => `${PREP_STEP[k] ?? k} ${v} ms`)
+    .join(' · ');
+  return `${p.totalMs} ms${steps ? ` (${steps})` : ''}`;
+};
 const usd = (n: number) => `${n < 0 ? '-' : ''}${Math.abs(n).toFixed(2)}$`;
 
 /** "Trận 8/12 · iem-cologne" theo một sàn. */
@@ -549,6 +562,14 @@ export function TradeDetailPanel({
                           'Chuẩn bị lệnh thật (số dư, hạn mức, ký)',
                           msv(d.execution.prepareMs),
                         ],
+                        ...(['csgoempire', 'polymarket'] as const).flatMap(
+                          (v): [string, string][] => {
+                            const prep = d.execution?.prepare?.[v];
+                            return prep
+                              ? [[`  · chuẩn bị ${v}`, prepText(prep)]]
+                              : [];
+                          },
+                        ),
                         [
                           'Tuổi kèo lúc bắn Polymarket',
                           msv(d.execution.fireAgeMs),

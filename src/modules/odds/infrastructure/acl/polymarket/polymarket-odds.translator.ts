@@ -256,11 +256,17 @@ export class PolymarketOddsTranslator implements RawOddsTranslator {
         ];
 
         const startsAt = Date.parse(startIso);
-        // trạng thái live lấy từ danh sách trận; thiếu thì suy theo giờ bắt đầu
-        const phase: Phase =
-          (ev.data.state?.live ?? startsAt <= msg.sentAt) ? 'live' : 'prematch';
         this._cycleSeen.get(msg.taskId)?.add(m.conditionId);
         let route = this._markets.get(m.conditionId);
+        // LIVE khi: Polymarket báo live, HOẶC đã quá giờ bắt đầu, HOẶC trước đó đã live. Cờ live của
+        // Polymarket hay trễ (trận esports đang đánh mà trang vẫn chưa gắn live) — tin giờ bắt đầu, và
+        // không bao giờ quay ngược live → prematch.
+        const phase: Phase =
+          ev.data.state?.live === true ||
+          startsAt <= msg.sentAt ||
+          route?.phase === 'live'
+            ? 'live'
+            : 'prematch';
         const eventUrl = ev.data.slug
           ? `https://polymarket.com/event/${encodeURIComponent(ev.data.slug)}`
           : '';

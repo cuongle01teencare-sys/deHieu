@@ -7,6 +7,7 @@ import {
   SignerType,
 } from '@polymarket/client';
 import {
+  fetchOrder,
   fetchBalanceAllowance,
   fetchPortfolioValue,
   updateBalanceAllowance,
@@ -60,6 +61,8 @@ export interface PreparedOrder {
   cash: number;
   requiredCash: number;
   account: VenueAccountIdentity;
+  /** Thời gian từng bước chuẩn bị (ms), vd { cash: 3, limit: 410 } — để biết bước nào chậm. */
+  timing?: Record<string, number>;
   /**
    * Gửi lệnh. csgoempire: `hedge` = chân Polymarket ĐÃ khớp (share, chi phí thật). Vé ở odds gốc bị
    * từ chối (thường do odds giảm) thì đặt lại MỘT lần với tiền cược + odds sàn tính từ hedgeBet.
@@ -141,6 +144,46 @@ export function hedgeBet(
       return { odds, stake };
   }
   return null;
+}
+
+/** Chờ tối đa bấy lâu cho lệnh "delayed" (độ trễ khớp của market thể thao) ra kết quả cuối. */
+export const DELAY_WAIT_MS = 15_000;
+const TERMINAL =
+  /^(matched|canceled|cancelled|unmatched|expired|killed|filled)$/i;
+
+/**
+ * Hỏi lại lệnh FOK đang "delayed" tới khi có kết quả cuối: khớp đủ / khớp một phần / bị giết; hết
+ * giờ chờ = chưa rõ ("pending").
+ */
+async function settleDelayed(
+  client: Awaited<ReturnType<typeof polymarketClient>>,
+  orderId: string,
+  shares: number,
+  waitMs = DELAY_WAIT_MS,
+  sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)),
+): Promise<{
+  kind: 'filled' | 'partial' | 'killed' | 'pending';
+  matched: number;
+  price: number;
+  status: string;
+}> {
+  const deadline = Date.now() + waitMs;
+  let last = { matched: 0, price: 0, status: '' };
+  for (;;) {
+    await sleep(500);
+    const o = await fetchOrder(client, { orderId }).catch(() => null);
+    if (o) {
+      last = {
+        matched: Number(o.sizeMatched) || 0,
+        price: Number(o.price) || 0,
+        status: o.status,
+      };
+      if (last.matched >= shares - 1e-6) return { kind: 'filled', ...last };
+      if (TERMINAL.test(o.status))
+        return { kind: last.matched > 0 ? 'partial' : 'killed', ...last };
+    }
+    if (Date.now() >= deadline) return { kind: 'pending', ...last };
+  }
 }
 
 /** Số có tối đa `n` chữ số thập phân (dung sai dấu phẩy động). */
@@ -325,6 +368,37 @@ async function polymarketClient(c: LiveTradingConfig['polymarket']) {
   return client;
 }
 
+/** Kết nối Polymarket đã xác thực, giữ theo (ví, key đã mã hóa): tạo mới mất hàng giây. */
+const POLY_CLIENT_TTL_MS = 30 * 60_000;
+const polyClients = new Map<
+  string,
+  { at: number; client: ReturnType<typeof polymarketClient> }
+>();
+const polyKey = (c: LiveTradingConfig['polymarket']) =>
+  createHash('sha256')
+    .update(`${c.walletAddress}|${c.funderAddress ?? ''}|${c.secretCipher}`)
+    .digest('hex');
+
+/** Kết nối giữ sẵn (≤ 30 phút); tạo lỗi thì không giữ. Đổi key / ví → khóa khác → tạo mới. */
+function cachedPolymarketClient(c: LiveTradingConfig['polymarket']) {
+  const key = polyKey(c);
+  const hit = polyClients.get(key);
+  if (hit && Date.now() - hit.at < POLY_CLIENT_TTL_MS) return hit.client;
+  const client = polymarketClient(c);
+  polyClients.set(key, { at: Date.now(), client });
+  client.catch(() => {
+    if (polyClients.get(key)?.client === client) polyClients.delete(key);
+  });
+  return client;
+}
+export function forgetPolymarketClient(c: LiveTradingConfig['polymarket']) {
+  polyClients.delete(polyKey(c));
+}
+/** Chỉ dùng trong test. */
+export function resetPolymarketClients() {
+  polyClients.clear();
+}
+
 async function polymarketCash(
   client: Awaited<ReturnType<typeof polymarketClient>>,
   c: LiveTradingConfig['polymarket'],
@@ -356,7 +430,7 @@ export async function readPolymarketBalance(
   signal: AbortSignal,
 ): Promise<VenueBalance & { allowance: number; positions: number | null }> {
   signal.throwIfAborted();
-  const client = await polymarketClient(c);
+  const client = await cachedPolymarketClient(c);
   const [balance, positions] = await Promise.all([
     polymarketCash(client, c, true),
     // Giá trị vị thế đang mở: CHỈ để hiển thị, không bao giờ dùng để tính tiền vào lệnh.
@@ -458,29 +532,41 @@ export class ApiVenueOrders implements VenueOrders {
       ],
     };
     signal.throwIfAborted();
-    const { cash, account, resource } = await this.empireCash(c.browserProfile);
-    if (cash < p.stake) return insufficientCash(cash, p.stake, account);
-    const limit = await json(
-      `${c.apiUrl}/api/v1/coupon/max`,
-      { method: 'POST', headers, body: JSON.stringify(coupon) },
-      signal,
-    ).catch((e: unknown) => {
-      // 401 khi JWT còn hạn = JWT bị BetBy vô hiệu (không phải hết giờ): ghi kèm thời hạn để phân biệt
-      if (
-        e instanceof Error &&
-        e.message.startsWith('CSGOEMPIRE_SESSION_EXPIRED')
+    // Số dư (Redis) và hạn mức BetBy (HTTP) độc lập nhau: đọc SONG SONG cho nhanh.
+    const t0 = Date.now();
+    const timing: Record<string, number> = {};
+    const [{ cash, account, resource }, limit] = await Promise.all([
+      this.empireCash(c.browserProfile).finally(() => {
+        timing.cash = Date.now() - t0;
+      }),
+      json(
+        `${c.apiUrl}/api/v1/coupon/max`,
+        { method: 'POST', headers, body: JSON.stringify(coupon) },
+        signal,
       )
-        throw new Error(
-          `${e.message} · JWT còn ${Math.round((c.expiresAt - Date.now()) / 60_000)} phút`,
-        );
-      throw e;
-    });
+        .finally(() => {
+          timing.limit = Date.now() - t0;
+        })
+        .catch((e: unknown) => {
+          // 401 khi JWT còn hạn = JWT bị BetBy vô hiệu (không phải hết giờ): ghi kèm thời hạn để phân biệt
+          if (
+            e instanceof Error &&
+            e.message.startsWith('CSGOEMPIRE_SESSION_EXPIRED')
+          )
+            throw new Error(
+              `${e.message} · JWT còn ${Math.round((c.expiresAt - Date.now()) / 60_000)} phút`,
+            );
+          throw e;
+        }),
+    ]);
+    if (cash < p.stake) return insufficientCash(cash, p.stake, account);
     if (finite(limit.max_bet) < p.stake)
       throw new Error('CSGOEMPIRE_BET_LIMIT');
     return {
       cash,
       requiredCash: p.stake,
       account,
+      timing,
       submit: async (options = {}) => {
         // Một lần đặt vé ở odds `k` (BetBy nhận nếu odds hiện tại ≥ k, nhờ odds_change "higher").
         const place = async (k: number, stake: number, requestId: string) => {
@@ -585,20 +671,43 @@ export class ApiVenueOrders implements VenueOrders {
     signal: AbortSignal,
   ): Promise<PreparedOrder> {
     signal.throwIfAborted();
-    const client = await polymarketClient(c);
-    const { cash, allowance, account } = await polymarketCash(client, c);
+    const t0 = Date.now();
+    const timing: Record<string, number> = {};
+    // Kết nối đã xác thực được GIỮ SẴN theo ví (không tạo lại mỗi lệnh — bước chậm nhất).
+    const client = await cachedPolymarketClient(c);
+    timing.client = Date.now() - t0;
+    const t1 = Date.now();
+    let cashInfo: Awaited<ReturnType<typeof polymarketCash>>;
+    let signed: Awaited<ReturnType<typeof client.createLimitOrder>>;
+    try {
+      // Số dư (HTTP) và ký lệnh độc lập nhau: làm SONG SONG. Ký trước không gửi gì lên sàn.
+      [cashInfo, signed] = await Promise.all([
+        polymarketCash(client, c).finally(() => {
+          timing.cash = Date.now() - t1;
+        }),
+        client
+          .createLimitOrder({
+            assetId: p.tokenId,
+            side: OrderSide.BUY,
+            price: p.polyLimit,
+            size: p.shares,
+          })
+          .finally(() => {
+            timing.sign = Date.now() - t1;
+          }),
+      ]);
+    } catch (e) {
+      // kết nối giữ sẵn có thể đã hỏng (khóa API hết hạn…): bỏ để lần sau tạo lại
+      forgetPolymarketClient(c);
+      throw e;
+    }
+    const { cash, allowance, account } = cashInfo;
     const requiredCash =
       Math.ceil((p.shares * p.polyLimit + p.polyFee) * 1e6) / 1e6;
     if (cash < requiredCash)
       return insufficientCash(cash, requiredCash, account);
     if (cash >= requiredCash && allowance < requiredCash)
       throw new Error('POLYMARKET_ALLOWANCE_INSUFFICIENT');
-    const signed = await client.createLimitOrder({
-      assetId: p.tokenId,
-      side: OrderSide.BUY,
-      price: p.polyLimit,
-      size: p.shares,
-    });
     // orderType is submission policy, outside the signed EIP-712 order fields.
     const order = { ...signed, orderType: OrderType.FOK };
     const signedShares = Number(order.takerAmount) / 1e6;
@@ -616,6 +725,7 @@ export class ApiVenueOrders implements VenueOrders {
       cash,
       requiredCash,
       account,
+      timing,
       submit: async () => {
         const sentAt = Date.now();
         let response: Awaited<ReturnType<typeof client.postOrder>>;
@@ -654,9 +764,57 @@ export class ApiVenueOrders implements VenueOrders {
             // giữ cả lời giải thích của sàn (vd FOK không khớp đủ) để biết vì sao chân này hỏng
             error: `POLYMARKET_REJECTED:${response.code} — ${maskSecrets(response.message).slice(0, 200)}`,
           };
+        const fee = p.polyFee;
+        if (response.status === OrderPostStatus.DELAYED) {
+          // Market thể thao có ĐỘ TRỄ KHỚP: lệnh vào hàng chờ vài giây rồi mới khớp / bị giết (FOK).
+          // Chờ kết quả cuối thay vì coi là "chưa rõ" (phải đối soát).
+          const final = await settleDelayed(client, response.orderId, p.shares);
+          const ackedAt2 = Date.now();
+          if (final.kind === 'killed')
+            return {
+              status: 'rejected',
+              orderRef: response.orderId,
+              filledAmount: 0,
+              avgPrice: 0,
+              fee: 0,
+              cost: 0,
+              sentAt,
+              ackedAt: ackedAt2,
+              filledAt: null,
+              error: `POLYMARKET_REJECTED:delayed_${final.status} — FOK không khớp sau độ trễ khớp của market`,
+            };
+          if (final.kind === 'filled' || final.kind === 'partial')
+            return {
+              status: final.kind,
+              orderRef: response.orderId,
+              filledAmount: final.matched,
+              // giá giới hạn = giá xấu nhất có thể khớp (giá khớp thật có thể tốt hơn)
+              avgPrice: final.price,
+              fee,
+              cost: final.matched * final.price + fee,
+              sentAt,
+              ackedAt: ackedAt2,
+              filledAt: final.kind === 'filled' ? ackedAt2 : null,
+              error:
+                final.kind === 'filled'
+                  ? null
+                  : `POLYMARKET_FILL_UNCONFIRMED: sau độ trễ khớp chỉ khớp ${final.matched}/${p.shares} share (${final.status})`,
+            };
+          return {
+            status: 'accepted',
+            orderRef: response.orderId,
+            filledAmount: 0,
+            avgPrice: 0,
+            fee: 0,
+            cost: 0,
+            sentAt,
+            ackedAt: ackedAt2,
+            filledAt: null,
+            error: `POLYMARKET_FILL_UNCONFIRMED: lệnh vào hàng chờ (delayed) mà sau ${DELAY_WAIT_MS / 1000} giây chưa có kết quả${final.status ? ` (trạng thái ${final.status})` : ''}`,
+          };
+        }
         const filledAmount = finite(response.takingAmount);
         const notional = finite(response.makingAmount);
-        const fee = p.polyFee;
         let status: VenueFill['status'] =
           response.status === OrderPostStatus.MATCHED &&
           filledAmount >= p.shares - 1e-6

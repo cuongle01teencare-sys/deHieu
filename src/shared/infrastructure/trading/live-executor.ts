@@ -24,7 +24,15 @@ export interface ExecutionResult {
     account?: VenueAccountIdentity;
   }[];
   /** Mốc thời gian (ms epoch): bắt đầu khóa + chuẩn bị, chuẩn bị xong (đọc số dư, coupon/max, ký lệnh). */
-  timing?: { startedAt: number; preparedAt: number };
+  timing?: {
+    startedAt: number;
+    preparedAt: number;
+    /** Chuẩn bị từng sàn: tổng (ms) + từng bước (vd cash, limit, client, sign). */
+    prepare?: Record<
+      string,
+      { totalMs: number; steps: Record<string, number> }
+    >;
+  };
 }
 export interface LiveExecutor {
   execute(
@@ -84,10 +92,22 @@ export class LiveOrderExecutor implements LiveExecutor {
         // Both preparations are read-only (cash, limits, signing); neither submits an order.
         let prepared;
         let preparedAt: number;
+        const legPrep: Record<string, number> = {};
         try {
+          const timed = async <T>(name: string, run: Promise<T>) => {
+            const t = Date.now();
+            try {
+              return await run;
+            } finally {
+              legPrep[name] = Date.now() - t;
+            }
+          };
           prepared = await Promise.all([
-            this.venues.empire(c.empire, p, signal),
-            this.venues.polymarket(c.polymarket, p, signal),
+            timed('csgoempire', this.venues.empire(c.empire, p, signal)),
+            timed(
+              'polymarket',
+              this.venues.polymarket(c.polymarket, p, signal),
+            ),
           ]);
           preparedAt = Date.now();
         } catch (e) {
@@ -210,7 +230,20 @@ export class LiveOrderExecutor implements LiveExecutor {
           submitted: true,
           fills,
           cash,
-          timing: { startedAt, preparedAt },
+          timing: {
+            startedAt,
+            preparedAt,
+            prepare: {
+              csgoempire: {
+                totalMs: legPrep.csgoempire ?? 0,
+                steps: bookOrder.timing ?? {},
+              },
+              polymarket: {
+                totalMs: legPrep.polymarket ?? 0,
+                steps: polyOrder.timing ?? {},
+              },
+            },
+          },
         };
         await this.locks.saveResult(p.id, { plan: p, result });
         // giữ khóa kèm lý do đọc được (vẫn gỡ được bằng resume / clearHalt theo marker)

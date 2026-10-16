@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiVenueOrders,
   readPolymarketBalance,
+  resetPolymarketClients,
   hedgeBet,
   empireCoins,
   empireBalanceFrom,
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   cash: vi.fn(),
   refresh: vi.fn(),
   portfolio: vi.fn(),
+  order: vi.fn(),
   signer: vi.fn(),
 }));
 vi.mock('@polymarket/client', async (original) => ({
@@ -24,6 +26,7 @@ vi.mock('@polymarket/client/actions', () => ({
   fetchBalanceAllowance: mocks.cash,
   updateBalanceAllowance: mocks.refresh,
   fetchPortfolioValue: mocks.portfolio,
+  fetchOrder: mocks.order,
 }));
 vi.mock('@polymarket/client/viem', () => ({ privateKey: mocks.signer }));
 const plan: OrderPlan = {
@@ -49,6 +52,8 @@ const session = {
   cookie: 'test-cookie',
 };
 afterEach(() => {
+  // kết nối Polymarket được giữ theo ví: mỗi test dùng client giả riêng
+  resetPolymarketClients();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
@@ -509,6 +514,111 @@ describe('direct venue APIs', () => {
       }),
     );
     await expect(order.submit()).rejects.toThrow('bad gateway');
+  });
+
+  it('Polymarket "delayed" (độ trễ khớp của market thể thao): chờ kết quả cuối — khớp đủ / bị giết', async () => {
+    vi.stubEnv('TRADING_SECRET_KEY', 'unit-test-key-not-a-real-wallet-key');
+    const c = {
+      walletAddress: '0xsigner',
+      funderAddress: null,
+      secretCipher: new AesGcmSecretCipher(
+        process.env.TRADING_SECRET_KEY,
+      ).encrypt('test-private-key'),
+    };
+    mocks.cash.mockResolvedValue({
+      balance: '100000000',
+      allowances: { exchange: 1000000000n },
+    });
+    const client = {
+      account: { signer: '0xsigner', signerType: 'OWNER', wallet: '0xsigner' },
+      createLimitOrder: vi.fn(() =>
+        Promise.resolve({ takerAmount: '20000000', makerAmount: '8000000' }),
+      ),
+      postOrder: vi.fn(() =>
+        Promise.resolve({
+          ok: true,
+          orderId: 'poly-delayed',
+          status: 'delayed',
+          takingAmount: '0',
+          makingAmount: '0',
+        }),
+      ),
+      waitForOrderFillSettlement: vi.fn(),
+    };
+    mocks.create.mockResolvedValue(client);
+    const order = await new ApiVenueOrders().polymarket(
+      c,
+      plan,
+      new AbortController().signal,
+    );
+    mocks.order
+      .mockResolvedValueOnce({
+        status: 'DELAYED',
+        sizeMatched: '0',
+        price: '0.4',
+      })
+      .mockResolvedValueOnce({
+        status: 'MATCHED',
+        sizeMatched: '20',
+        price: '0.4',
+      });
+    expect(await order.submit()).toMatchObject({
+      status: 'filled',
+      orderRef: 'poly-delayed',
+      filledAmount: 20,
+      cost: 8.5,
+      error: null,
+    });
+    expect(mocks.order).toHaveBeenCalledWith(client, {
+      orderId: 'poly-delayed',
+    });
+    mocks.order.mockResolvedValueOnce({
+      status: 'CANCELED',
+      sizeMatched: '0',
+      price: '0.4',
+    });
+    const killed = await order.submit();
+    expect(killed).toMatchObject({ status: 'rejected', cost: 0 });
+    expect(killed.error).toContain('delayed_CANCELED');
+  });
+
+  it('Polymarket: GIỮ kết nối đã xác thực theo ví (không tạo lại mỗi lệnh); lỗi thì bỏ để tạo lại; ghi thời gian từng bước', async () => {
+    vi.stubEnv('TRADING_SECRET_KEY', 'unit-test-key-not-a-real-wallet-key');
+    const c = {
+      walletAddress: '0xsigner',
+      funderAddress: null,
+      secretCipher: new AesGcmSecretCipher(
+        process.env.TRADING_SECRET_KEY,
+      ).encrypt('test-private-key'),
+    };
+    mocks.cash.mockResolvedValue({
+      balance: '100000000',
+      allowances: { exchange: 1000000000n },
+    });
+    const client = {
+      account: { signer: '0xsigner', signerType: 'OWNER', wallet: '0xsigner' },
+      createLimitOrder: vi.fn(() =>
+        Promise.resolve({ takerAmount: '20000000', makerAmount: '8000000' }),
+      ),
+      postOrder: vi.fn(),
+    };
+    mocks.create.mockResolvedValue(client);
+    const venues = new ApiVenueOrders();
+    const signal = new AbortController().signal;
+    const first = await venues.polymarket(c, plan, signal);
+    await venues.polymarket(c, plan, signal);
+    expect(mocks.create).toHaveBeenCalledOnce();
+    expect(Object.keys(first.timing ?? {}).sort()).toEqual([
+      'cash',
+      'client',
+      'sign',
+    ]);
+    client.createLimitOrder.mockRejectedValueOnce(new Error('api key expired'));
+    await expect(venues.polymarket(c, plan, signal)).rejects.toThrow(
+      'api key expired',
+    );
+    await venues.polymarket(c, plan, signal);
+    expect(mocks.create).toHaveBeenCalledTimes(2);
   });
 
   it('Polymarket reads collateral cash of the funder, ignores portfolio, and uses FOK', async () => {

@@ -246,6 +246,8 @@ export interface TradeDetail {
     polymarketMs: number | null;
     csgoempireMs: number | null;
     gapMs: number | null;
+    /** Chuẩn bị từng sàn (song song): tổng + từng bước (ms). */
+    prepare?: Record<string, { totalMs: number; steps: Record<string, number> }> | null;
   };
   signalAgeMs?: number;
   targetStake?: number | null;

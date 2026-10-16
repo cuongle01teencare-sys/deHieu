@@ -349,6 +349,43 @@ describe('PolymarketOddsTranslator', () => {
     );
   });
 
+  it('đã quá giờ bắt đầu thì là LIVE dù Polymarket chưa gắn cờ live; đã live không quay lại prematch', async () => {
+    const t = new PolymarketOddsTranslator(teams);
+    const start = Date.parse('2026-09-25T09:00:00Z');
+    const descriptor = (sentAt: number, live: boolean) =>
+      msg({
+        tenant: 'polymarket',
+        kind: 'polymarket.descriptor',
+        sentAt,
+        payload: [{ ...events[0], state: { live } }],
+      });
+    const [before] = await t.translate(descriptor(start - 60_000, false));
+    expect(before?.type === 'set' && before.line.props.phase).toBe('prematch');
+    // trận đang đánh mà Polymarket vẫn live=false
+    const after = await t.translate(descriptor(start + 60_000, false));
+    expect(
+      after.some((c) => c.type === 'set' && c.line.props.phase === 'live'),
+    ).toBe(true);
+    // giờ bắt đầu bị lùi lại sau (trận trễ giờ) cũng không quay về prematch
+    const later = await t.translate(
+      msg({
+        tenant: 'polymarket',
+        kind: 'polymarket.descriptor',
+        sentAt: start + 120_000,
+        payload: [
+          {
+            ...events[0],
+            schedule: { startTime: '2026-09-25T10:00:00Z' },
+            state: { live: false },
+          },
+        ],
+      }),
+    );
+    expect(
+      later.some((c) => c.type === 'set' && c.line.props.phase === 'prematch'),
+    ).toBe(false);
+  });
+
   it('thứ tự trận trong giải theo series của event → ref tour/tno/tof', async () => {
     const t = new PolymarketOddsTranslator(teams);
     const ev = (id: string, start: string, cond: string) => ({

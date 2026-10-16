@@ -252,7 +252,14 @@ const tournamentOf = (l: HubLeg) => {
 function executionTiming(
   issuedAt: number,
   e: {
-    timing?: { startedAt: number; preparedAt: number };
+    timing?: {
+      startedAt: number;
+      preparedAt: number;
+      prepare?: Record<
+        string,
+        { totalMs: number; steps: Record<string, number> }
+      >;
+    };
     fills: { sentAt: number; ackedAt: number }[];
   },
 ) {
@@ -261,6 +268,8 @@ function executionTiming(
     f && f.sentAt > 0 ? f.ackedAt - f.sentAt : null;
   return {
     prepareMs: e.timing ? e.timing.preparedAt - e.timing.startedAt : null,
+    /** Chuẩn bị từng sàn (chạy song song): tổng + từng bước, vd polymarket { client, cash, sign }. */
+    prepare: e.timing?.prepare ?? null,
     /** Tuổi kèo (từ lúc publisher phát) khi lệnh Polymarket rời app. */
     fireAgeMs: poly && poly.sentAt > 0 ? poly.sentAt - issuedAt : null,
     polymarketMs: leg(poly),
@@ -657,6 +666,8 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
       tierName: pick?.row.tierName ?? other?.row.tierName ?? null,
     };
     let marketDataAt: number | null = null;
+    /** Lúc tính xong lệnh (TRƯỚC khi chuẩn bị / gửi lệnh thật). null = chưa tới bước đó. */
+    let decidedAt: number | null = null;
     /**
      * Gỡ kèo khỏi bảng On click (kết quả mới không còn là "chờ người vào"), kèm lý do cho lịch sử:
      * `manual:<status>[:<mã>]` = người bấm vào lệnh, `result:<status>[:<mã>]` = bot xét lại ra kết quả khác.
@@ -737,7 +748,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           signalIssuedAt: s.issuedAt,
           receivedAt: startedAt,
           marketDataAt,
-          decidedAt: Date.now(),
+          decidedAt: decidedAt ?? Date.now(),
         },
         legs: r.legs ?? [],
       };
@@ -937,6 +948,7 @@ export class TraderArbitrageTask implements Task<TraderArbitrageParams> {
           netMargin: profit / totalCost,
         };
       }
+      decidedAt = Date.now();
       const filled: Result = {
         stake: d.stake,
         tokenId,
