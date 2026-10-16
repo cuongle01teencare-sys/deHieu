@@ -40,4 +40,35 @@ describe('sự cố "cần đối soát lệnh thật"', () => {
     });
     expect(incidents.clear).toHaveBeenCalledWith('trading.reconcile:p1');
   });
+
+  it('mất phiên csgoempire (tự lấy bỏ cuộc) → sự cố nghiêm trọng theo hồ sơ; lấy lại được → đóng', () => {
+    const ops = new InMemoryOpsEventBus();
+    const incidents = { raise: vi.fn(), clear: vi.fn() };
+    new TradingReconcileIncidentRelay(
+      ops,
+      incidents as unknown as IncidentTracker,
+    ).start();
+    ops.publish({
+      type: 'trading.session_lost',
+      topic: 'alerts',
+      at: 1,
+      data: { browserProfile: 'empire-test', error: 'x', attempts: 4 },
+    });
+    const [key, sig] = incidents.raise.mock.calls[0] as [
+      string,
+      { kind: string; severity: string },
+    ];
+    expect(key).toBe('trading.session:empire-test');
+    expect(sig).toMatchObject({
+      kind: 'trading.session',
+      severity: 'critical',
+    });
+    ops.publish({
+      type: 'trading.session_restored',
+      topic: 'alerts',
+      at: 2,
+      data: { browserProfile: 'empire-test' },
+    });
+    expect(incidents.clear).toHaveBeenCalledWith('trading.session:empire-test');
+  });
 });

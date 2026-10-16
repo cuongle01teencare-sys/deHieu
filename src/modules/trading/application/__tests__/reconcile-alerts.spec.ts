@@ -101,6 +101,27 @@ describe('báo khi bot dừng chờ đối soát', () => {
     });
   });
 
+  it('tự lấy phiên bỏ cuộc → sự kiện + push nhắc đăng nhập; lấy lại được → sự kiện đóng', async () => {
+    const s = setup();
+    await s.alerts.sessionLost('empire-test', 'CSGOEMPIRE_SESSION_EXPIRED', 4);
+    expect(s.events[0]).toMatchObject({
+      type: 'trading.session_lost',
+      data: { browserProfile: 'empire-test', attempts: 4 },
+    });
+    expect(s.push.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Cần đăng nhập lại csgoempire (empire-test)',
+        url: 'https://arb.example/giao-dich',
+        collapseId: 'session:empire-test',
+      }),
+    );
+    s.alerts.sessionRestored('empire-test');
+    expect(s.events[1]).toMatchObject({
+      type: 'trading.session_restored',
+      data: { browserProfile: 'empire-test' },
+    });
+  });
+
   it('push lỗi không làm hỏng luồng ghi lệnh', async () => {
     const onError = vi.fn();
     const alerts = new ReconcileAlerts(

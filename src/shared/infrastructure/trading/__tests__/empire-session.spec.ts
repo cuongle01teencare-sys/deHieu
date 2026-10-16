@@ -427,6 +427,54 @@ describe('csgoempire session refresh', () => {
     expect(s.close).toHaveBeenCalledOnce();
   });
 
+  it('tự lấy phiên hỏng: thử lại sau 1, 2, 5 phút (không mở Chrome mỗi nhịp); hết lượt thì bỏ cuộc + báo; đăng nhập tay xong thì báo đã ổn', async () => {
+    const s = setup();
+    s.identify.mockResolvedValue(Response.json({}, { status: 403 }));
+    const health = vi.fn();
+    const sessions = new EmpireSessions(
+      s.locks as unknown as AccountLock,
+      undefined,
+      undefined,
+      undefined,
+      health,
+    );
+    const fail = () =>
+      expect(sessions.get('empire-test')).rejects.toThrow(
+        'CSGOEMPIRE_SESSION_IDENTIFY_FAILED',
+      );
+    await fail();
+    expect(mocks.launch).toHaveBeenCalledTimes(1);
+    await fail(); // chưa tới lượt: không mở Chrome
+    expect(mocks.launch).toHaveBeenCalledTimes(1);
+    for (const [wait, launches] of [
+      [60_000, 2],
+      [120_000, 3],
+      [300_000, 4],
+    ] as const) {
+      vi.setSystemTime(Date.now() + wait);
+      await fail();
+      expect(mocks.launch).toHaveBeenCalledTimes(launches);
+    }
+    expect(health).toHaveBeenCalledOnce();
+    expect(health).toHaveBeenCalledWith(
+      'empire-test',
+      expect.objectContaining({ type: 'gave_up', attempts: 4 }) as unknown,
+    );
+    // bỏ cuộc: không tự thử nữa, nói rõ phải bấm Đăng nhập
+    vi.setSystemTime(Date.now() + 3_600_000);
+    await expect(sessions.get('empire-test')).rejects.toThrow(
+      'CSGOEMPIRE_SESSION_GAVE_UP',
+    );
+    expect(mocks.launch).toHaveBeenCalledTimes(4);
+    // người bấm Đăng nhập (force) thành công → báo đã ổn, dùng phiên mới
+    s.identify.mockResolvedValue(Response.json({ currency: 'USD' }));
+    const session = await sessions.get('empire-test', { force: true });
+    expect(health).toHaveBeenLastCalledWith('empire-test', {
+      type: 'recovered',
+    });
+    expect(await sessions.get('empire-test')).toBe(session);
+  });
+
   it('distinguishes an identify rejection from an expired login and exposes only the HTTP status', async () => {
     const s = setup();
     s.identify.mockResolvedValue(Response.json({}, { status: 403 }));

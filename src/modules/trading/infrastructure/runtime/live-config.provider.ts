@@ -81,8 +81,29 @@ export class LiveConfigProvider
                 release: (profile) => this.balances!.resume(profile),
               }
             : undefined,
+          (profile, event) => {
+            if (event.type === 'gave_up')
+              this.logger.error(
+                `csgoempire ${profile}: tự lấy phiên hỏng ${event.attempts} lần liên tiếp (${event.error}) — dừng, chờ bấm Đăng nhập`,
+              );
+            else
+              this.logger.log(`csgoempire ${profile}: đã lấy lại được phiên`);
+            for (const l of this.sessionListeners) l(profile, event);
+          },
         )
       : null;
+  }
+
+  private readonly sessionListeners: ((
+    browserProfile: string,
+    event:
+      | { type: 'gave_up'; error: string; attempts: number }
+      | { type: 'recovered' },
+  ) => void)[] = [];
+
+  /** Nghe khi tự lấy phiên csgoempire bỏ cuộc / lấy lại được (để báo người vận hành). */
+  onSessionHealth(listener: (typeof this.sessionListeners)[number]) {
+    this.sessionListeners.push(listener);
   }
   private credentials(account: TradingAccount): EmpireCredentials | undefined {
     if (!account.secretCipher) return undefined;

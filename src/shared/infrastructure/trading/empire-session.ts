@@ -24,6 +24,11 @@ const REFRESH_BEFORE_EXPIRY_MS = 10 * 60_000;
 const STALE_TOKEN_MARGIN_MS = 2 * 60_000;
 /** ...và thử làm mới lại sau chừng này (không mở Chrome liên tục khi sàn / máy đang chập chờn). */
 const RETRY_AFTER_FAILURE_MS = 60_000;
+/**
+ * Tự lấy phiên hỏng (không còn JWT dùng được): thử lại sau 1, 2, 5 phút; vẫn hỏng → bỏ cuộc, báo
+ * người vận hành bấm Đăng nhập (push + sự cố). Tổng 4 lần thử trong khoảng 8 phút.
+ */
+export const SESSION_RETRY_DELAYS_MS = [60_000, 120_000, 300_000] as const;
 /** Chờ khóa tài khoản (vd đang có lệnh đặt) thay vì báo bận ngay. */
 const LOCK_WAIT_MS = 20_000;
 /** Làm mới nền chờ chỗ mở Chrome tối đa chừng này; đăng nhập tay thì chờ tới khi có chỗ / bị hủy. */
@@ -372,7 +377,35 @@ export class EmpireSessions {
       acquire(browserProfile: string): Promise<void>;
       release(browserProfile: string): void;
     },
+    /**
+     * Tự lấy phiên hỏng liên tiếp tới hết số lần thử (gave up) / lấy lại được sau đó (recovered):
+     * để báo người vận hành bấm Đăng nhập.
+     */
+    private readonly onSessionHealth?: (
+      browserProfile: string,
+      event:
+        | { type: 'gave_up'; error: string; attempts: number }
+        | { type: 'recovered' },
+    ) => void,
   ) {}
+
+  /** Lần tự lấy phiên hỏng liên tiếp theo hồ sơ (không tính đăng nhập tay). */
+  private readonly failures = new Map<
+    string,
+    {
+      revision: string;
+      count: number;
+      nextAt: number;
+      lastError: string;
+      gaveUp: boolean;
+    }
+  >();
+
+  /** Trạng thái tự lấy phiên (cho trang Tài khoản / chẩn đoán). */
+  sessionFailures(browserProfile: string) {
+    const f = this.failures.get(browserProfile);
+    return f ? { ...f } : null;
+  }
 
   /**
    * Worker báo BetBy từ chối JWT này (401 khi còn hạn): nếu đó vẫn là JWT đang giữ thì lần get() kế
@@ -401,8 +434,31 @@ export class EmpireSessions {
     const revision = `${await readRevision(browserProfile)}:${options.credentialsVersion ?? ''}`;
     const cached = this.cache.get(browserProfile);
     const now = Date.now();
+    const failed = this.failures.get(browserProfile);
+    if (failed && failed.revision !== revision)
+      this.failures.delete(browserProfile);
+    const fail = this.failures.get(browserProfile);
+    if (!options.force && fail) {
+      // đã thử đủ số lần: dừng, chờ người bấm Đăng nhập (không mở Chrome mỗi nhịp 30 giây)
+      if (fail.gaveUp)
+        throw new Error(
+          `CSGOEMPIRE_SESSION_GAVE_UP: tự lấy phiên hỏng ${fail.count} lần liên tiếp (${fail.lastError}) — bấm Đăng nhập`,
+        );
+      // chưa tới lượt thử lại: không mở Chrome; còn JWT dùng được thì dùng, không thì báo lỗi lần trước
+      if (now < fail.nextAt) {
+        if (
+          cached?.session &&
+          cached.revision === revision &&
+          usable(cached.session, now)
+        )
+          return cached.session;
+        throw new Error(fail.lastError);
+      }
+    }
     if (!options.force && cached?.revision === revision) {
-      if (cached.error) throw new Error(cached.error);
+      // lỗi lâu dài đã ghi: chỉ thử lại khi tới lượt (tối đa SESSION_RETRY_DELAYS_MS lần)
+      if (cached.error && !(fail && now >= fail.nextAt))
+        throw new Error(cached.error);
       if (cached.session && now < cached.refreshAt) return cached.session;
       // vừa làm mới hỏng: chưa thử lại, dùng tiếp token cũ còn hạn
       if (
@@ -424,6 +480,20 @@ export class EmpireSessions {
       revision,
       options,
       this.cache.get(browserProfile),
+    ).then(
+      (session) => {
+        // lấy được phiên (tự động hay đăng nhập tay): xóa đếm lỗi; trước đó đã bỏ cuộc → báo đã ổn
+        const before = this.failures.get(browserProfile);
+        this.failures.delete(browserProfile);
+        if (before?.gaveUp)
+          this.onSessionHealth?.(browserProfile, { type: 'recovered' });
+        return session;
+      },
+      (e: unknown) => {
+        if (!options.force && !options.signal?.aborted)
+          this.countFailure(browserProfile, revision, e);
+        throw e;
+      },
     );
     this.inflight.set(browserProfile, job);
     try {
@@ -432,6 +502,34 @@ export class EmpireSessions {
       if (this.inflight.get(browserProfile) === job)
         this.inflight.delete(browserProfile);
     }
+  }
+
+  /** Một lần tự lấy phiên hỏng: hẹn lần thử kế (giãn dần); hết lượt → bỏ cuộc và báo. */
+  private countFailure(browserProfile: string, revision: string, e: unknown) {
+    const code =
+      e instanceof Error
+        ? e.message.split(':')[0].trim()
+        : 'CSGOEMPIRE_SESSION_REFRESH_FAILED';
+    const prev = this.failures.get(browserProfile);
+    const count = (prev?.revision === revision ? prev.count : 0) + 1;
+    // cần người thật (CAPTCHA / xác minh): thử lại vô ích → bỏ cuộc ngay
+    const hopeless = code === 'CSGOEMPIRE_VERIFICATION_REQUIRED';
+    const gaveUp = hopeless || count > SESSION_RETRY_DELAYS_MS.length;
+    this.failures.set(browserProfile, {
+      revision,
+      count,
+      nextAt:
+        Date.now() +
+        (SESSION_RETRY_DELAYS_MS[count - 1] ?? SESSION_RETRY_DELAYS_MS.at(-1)!),
+      lastError: e instanceof Error ? e.message : code,
+      gaveUp,
+    });
+    if (gaveUp && !prev?.gaveUp)
+      this.onSessionHealth?.(browserProfile, {
+        type: 'gave_up',
+        error: e instanceof Error ? e.message : code,
+        attempts: count,
+      });
   }
 
   /**

@@ -406,9 +406,17 @@ export class TradingModule implements OnModuleInit, OnApplicationShutdown {
     @Inject(OneClickHistoryRecorder)
     private readonly _ocHistory: OneClickHistoryRecorder,
     @Inject(SettlementAdmin) private readonly _settlement: SettlementAdmin,
+    @Inject(LiveConfigProvider) private readonly _live: LiveConfigProvider,
+    @Inject(ReconcileAlerts) private readonly _alerts: ReconcileAlerts,
   ) {}
 
   async onModuleInit() {
+    // tự lấy phiên csgoempire bỏ cuộc → báo bấm Đăng nhập; lấy lại được → đóng báo
+    this._live.onSessionHealth((profile, event) => {
+      if (event.type === 'gave_up')
+        void this._alerts.sessionLost(profile, event.error, event.attempts);
+      else this._alerts.sessionRestored(profile);
+    });
     // bảng On click nằm trong bộ nhớ: app khởi động lại → kèo đang mở trong lịch sử coi như rời bảng
     // (trader gửi lại kèo còn sống → dòng được mở lại)
     try {

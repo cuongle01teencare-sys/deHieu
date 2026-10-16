@@ -134,6 +134,11 @@ export type OpsEvent =
     >
   | Base<'trading.reconciled', { profileId: string; cleared: number }>
   | Base<
+      'trading.session_lost',
+      { browserProfile: string; error: string; attempts: number }
+    >
+  | Base<'trading.session_restored', { browserProfile: string }>
+  | Base<
       'audit.recorded',
       {
         principalId: string | null;

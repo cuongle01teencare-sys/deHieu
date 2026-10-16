@@ -78,6 +78,47 @@ export class ReconcileAlerts {
     }
   }
 
+  /** Tự lấy phiên csgoempire hỏng đủ số lần → cần người bấm Đăng nhập: sự cố + push. Không ném lỗi. */
+  async sessionLost(
+    browserProfile: string,
+    error: string,
+    attempts: number,
+  ): Promise<void> {
+    try {
+      this._ops?.publish({
+        type: 'trading.session_lost',
+        topic: 'alerts',
+        at: this._now(),
+        data: { browserProfile, error: error.slice(0, 300), attempts },
+      });
+      await this._push?.send({
+        title: `Cần đăng nhập lại csgoempire (${browserProfile})`,
+        body: `App tự lấy phiên hỏng ${attempts} lần liên tiếp: ${error.slice(0, 160)}\nProfile dùng tài khoản này đang đứng yên. Mở Auto trade → Tài khoản → Mở Chromium & đăng nhập.`,
+        url: this._webUrl
+          ? `${this._webUrl.replace(/\/+$/, '')}/giao-dich`
+          : null,
+        collapseId: `session:${browserProfile}`.slice(0, 64),
+        ttlSec: 24 * 3600,
+      });
+    } catch (e) {
+      this._onError(e);
+    }
+  }
+
+  /** Đã lấy lại được phiên (đăng nhập tay / tự động) sau khi bỏ cuộc → đóng sự cố. */
+  sessionRestored(browserProfile: string): void {
+    try {
+      this._ops?.publish({
+        type: 'trading.session_restored',
+        topic: 'alerts',
+        at: this._now(),
+        data: { browserProfile },
+      });
+    } catch (e) {
+      this._onError(e);
+    }
+  }
+
   /** Đã gỡ khóa đối soát (nút trên web) → đóng sự cố. */
   resolved(profileId: string, cleared: number): void {
     try {

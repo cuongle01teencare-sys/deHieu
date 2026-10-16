@@ -14,6 +14,21 @@ export class TradingReconcileIncidentRelay {
   /** Trả về hàm hủy đăng ký. */
   start(): () => void {
     return this._ops.subscribe((e) => {
+      if (e.type === 'trading.session_restored')
+        return this._incidents.clear(
+          `trading.session:${e.data.browserProfile}`,
+        );
+      if (e.type === 'trading.session_lost')
+        return this._incidents.raise(
+          `trading.session:${e.data.browserProfile}`,
+          {
+            kind: 'trading.session',
+            severity: 'critical',
+            title: `Cần đăng nhập lại csgoempire (hồ sơ ${e.data.browserProfile})`,
+            message: `App tự lấy phiên hỏng ${e.data.attempts} lần liên tiếp: ${e.data.error}. Profile dùng tài khoản này đang đứng yên — mở Auto trade → Tài khoản → Mở Chromium & đăng nhập.`,
+            details: { ...e.data },
+          },
+        );
       if (e.type === 'trading.reconciled')
         return this._incidents.clear(`trading.reconcile:${e.data.profileId}`);
       if (e.type !== 'trading.reconcile_required') return;
