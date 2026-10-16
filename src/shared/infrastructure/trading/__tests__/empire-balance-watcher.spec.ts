@@ -113,6 +113,9 @@ function browser(...scenarios: Scenario[]) {
     isClosed: () => false,
   };
   const context = {
+    route: vi.fn((_match: (u: URL) => boolean, _handler: unknown) =>
+      Promise.resolve(),
+    ),
     pages: () => [page],
     newPage: () => Promise.resolve(page),
     close: vi.fn(() => Promise.resolve()),
@@ -230,6 +233,31 @@ describe('Chrome nền đọc số dư csgoempire', () => {
     );
     expect((await w.readNow('empire-11')).cash).toBe(50);
     expect(b.page.goto).toHaveBeenCalledTimes(2);
+    await w.closeAll();
+  });
+
+  it('Chrome nền chặn trang xin phiên BetBy mới (không làm vô hiệu JWT bot đang dùng), vẫn cho API số dư', async () => {
+    const b = browser(ok);
+    const w = new EmpireBalanceWatcher(sink());
+    await w.readNow('empire-12');
+    expect(b.context.route).toHaveBeenCalledOnce();
+    const match = b.context.route.mock.calls[0][0];
+    const blocked = (u: string) => match(new URL(u));
+    expect(
+      blocked(
+        'https://csgoempire.com/api/v2/match-betting/betby/user-session/abc',
+      ),
+    ).toBe(true);
+    expect(
+      blocked(
+        'https://api-h-c7818b61-608.sptpub.com/api/v2/auth/brand/1/identify',
+      ),
+    ).toBe(true);
+    expect(blocked('https://csgoempire.com/api/v2/metadata')).toBe(false);
+    expect(
+      blocked('https://csgoempire.com/api/v2/metadata/exchange-rates'),
+    ).toBe(false);
+    expect(blocked('https://csgoempire.com/match-betting')).toBe(false);
     await w.closeAll();
   });
 

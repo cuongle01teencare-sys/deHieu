@@ -239,6 +239,26 @@ describe('direct venue APIs', () => {
     ).rejects.toThrow(/lần đọc gần nhất lỗi CSGOEMPIRE_BALANCE_READ_FAILED/);
   });
 
+  it('BetBy 401 khi JWT còn hạn: lý do ghi endpoint, HTTP, lời sàn và thời hạn JWT còn lại', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve(
+          Response.json({ message: 'Unauthorized' }, { status: 401 }),
+        ),
+      ),
+    );
+    await expect(
+      new ApiVenueOrders(store({ cash: 100 })).empire(
+        session,
+        plan,
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(
+      /CSGOEMPIRE_SESSION_EXPIRED: .*BetBy \/api\/v1\/coupon\/max HTTP 401 — Unauthorized · JWT còn 30 phút/,
+    );
+  });
+
   it('zero csgoempire cash is returned even if max_bet is zero', async () => {
     vi.stubGlobal(
       'fetch',

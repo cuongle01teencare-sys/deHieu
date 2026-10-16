@@ -405,7 +405,17 @@ export class ApiVenueOrders implements VenueOrders {
       `${c.apiUrl}/api/v1/coupon/max`,
       { method: 'POST', headers, body: JSON.stringify(coupon) },
       signal,
-    );
+    ).catch((e: unknown) => {
+      // 401 khi JWT còn hạn = JWT bị BetBy vô hiệu (không phải hết giờ): ghi kèm thời hạn để phân biệt
+      if (
+        e instanceof Error &&
+        e.message.startsWith('CSGOEMPIRE_SESSION_EXPIRED')
+      )
+        throw new Error(
+          `${e.message} · JWT còn ${Math.round((c.expiresAt - Date.now()) / 60_000)} phút`,
+        );
+      throw e;
+    });
     if (finite(limit.max_bet) < p.stake)
       throw new Error('CSGOEMPIRE_BET_LIMIT');
     return {

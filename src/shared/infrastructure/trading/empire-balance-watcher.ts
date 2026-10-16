@@ -20,6 +20,8 @@ interface ApiRead {
 }
 
 const PAGE = 'https://csgoempire.com/match-betting';
+/** Trang xin JWT BetBy (luồng phiên của bot dùng); Chrome nền KHÔNG được gọi. */
+const BETBY_SESSION_PATH = '/api/v2/match-betting/betby/user-session/';
 const META = '/api/v2/metadata';
 const RATES = '/api/v2/metadata/exchange-rates';
 
@@ -111,6 +113,8 @@ interface Watched {
   page: Page | null;
   opening: Promise<void> | null;
   reading: Promise<EmpireBalanceSnapshot> | null;
+  /** Số request phiên BetBy / sptpub đã chặn (chẩn đoán). */
+  blockedBetby: number;
   /** Header riêng của trang (lấy từ request trang tự gửi); null = chưa có, phải mở lại trang. */
   headers: Record<string, string> | null;
   /** Tài khoản đã lưu (username/email, chữ thường) mà hồ sơ này PHẢI đang đăng nhập; null = không kiểm. */
@@ -209,6 +213,7 @@ export class EmpireBalanceWatcher {
         reading: null,
         headers: null,
         expected: null,
+        blockedBetby: 0,
         last: null,
       };
       this.watched.set(profile, w);
@@ -259,7 +264,7 @@ export class EmpireBalanceWatcher {
           }
         }
         if (!meta || !rates || !good(meta) || !good(rates))
-          ({ meta, rates } = await this.reloadPage(page, w));
+          ({ meta, rates } = await this.reloadPage(profile, page, w));
         if (!good(meta))
           throw new Error(
             `CSGOEMPIRE_BALANCE_READ_FAILED: metadata (trang tự gọi) HTTP ${meta.status}${meta.json ? '' : ` (${meta.type ?? 'không rõ kiểu'})`}`,
@@ -316,6 +321,7 @@ export class EmpireBalanceWatcher {
 
   /** Mở lại trang Match betting: lấy phản hồi metadata/tỷ giá trang tự gọi + header của nó. */
   private async reloadPage(
+    profile: string,
     page: Page,
     w: Watched,
   ): Promise<{ meta: ApiRead; rates: ApiRead }> {
@@ -327,6 +333,7 @@ export class EmpireBalanceWatcher {
     const ratesRes = page
       .waitForResponse((r) => isApi(r, RATES), { timeout: 45_000 })
       .catch(() => null);
+    const blockedBefore = w.blockedBetby;
     await page.goto(PAGE, { waitUntil: 'domcontentloaded', timeout: 45_000 });
     const metaR = await metaRes.catch(() => {
       throw new Error(
@@ -334,6 +341,10 @@ export class EmpireBalanceWatcher {
       );
     });
     const meta = await toRead(metaR);
+    if (w.blockedBetby > blockedBefore)
+      this.log(
+        `csgoempire ${profile}: Chrome nền đã chặn ${w.blockedBetby - blockedBefore} request phiên BetBy của trang (giữ nguyên JWT bot đang dùng)`,
+      );
     const headers = await siteHeaders(metaR);
     if (good(meta)) w.headers = headers;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -359,6 +370,17 @@ export class EmpireBalanceWatcher {
           visible: true,
         });
         w.context = context;
+        // Chrome nền CHỈ đọc số dư: chặn trang xin phiên BetBy mới. Mỗi lần trang Match betting tải,
+        // site xin JWT BetBy mới — có thể làm vô hiệu JWT bot đang dùng (BetBy trả 401 khi vào lệnh).
+        await context.route(
+          (url) =>
+            url.pathname.startsWith(BETBY_SESSION_PATH) ||
+            /(^|\.)sptpub\.com$/.test(url.hostname),
+          (route) => {
+            w.blockedBetby++;
+            return route.abort('blockedbyclient');
+          },
+        );
         const page = context.pages()[0] ?? (await context.newPage());
         w.page = page;
       })().finally(() => {
