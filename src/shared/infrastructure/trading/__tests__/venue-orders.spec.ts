@@ -48,6 +48,28 @@ afterEach(() => {
 });
 
 describe('direct venue APIs', () => {
+  it('Cloudflare chặn (403 HTML) không bị coi là phiên hết hạn; gửi kèm User-Agent của Chrome', async () => {
+    const fetcher = vi.fn((_url: string, _init?: RequestInit) =>
+      Promise.resolve(
+        new Response('<html>Just a moment...</html>', {
+          status: 403,
+          headers: { 'content-type': 'text/html', 'cf-mitigated': 'challenge' },
+        }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetcher);
+    await expect(
+      readEmpireBalance(
+        { cookie: 'c', userAgent: 'UnitChrome/155' },
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow('CSGOEMPIRE_CLOUDFLARE_BLOCKED: HTTP 403');
+    expect(fetcher.mock.calls[0][1]!.headers).toMatchObject({
+      'User-Agent': 'UnitChrome/155',
+      Cookie: 'c',
+    });
+  });
+
   it('reports which csgoempire account the session cookie belongs to', async () => {
     vi.stubGlobal(
       'fetch',

@@ -25,6 +25,7 @@ export const TraderConfigSchema = z.object({
         sessionId: z.string(),
         minBet: nonNeg,
         cookie: z.string(),
+        userAgent: z.string().optional(),
       }),
       polymarket: z.object({
         walletAddress: z.string(),

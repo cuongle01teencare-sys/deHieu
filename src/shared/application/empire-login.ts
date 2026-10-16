@@ -29,6 +29,15 @@ export interface EmpireLoginDiagnostic {
     | 'currency_missing'
     | 'currency_unsupported'
     | 'identify_currency_unsupported';
+  /** Bước xác nhận tài khoản: vì sao không đọc được tài khoản trên sàn. */
+  accountIssue?:
+    | 'challenge' // Cloudflare / trang chống bot chặn
+    | 'not_json' // sàn trả trang HTML thay vì dữ liệu
+    | 'not_logged_in' // sàn trả success=false: trình duyệt chưa đăng nhập
+    | 'http_error'
+    | 'network';
+  /** Lý do kỹ thuật ngắn gọn (đã che thông tin đăng nhập), để hiển thị và ghi log. */
+  cause?: string;
 }
 export interface EmpireJwtPreview {
   token: string;

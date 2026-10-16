@@ -1,7 +1,11 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { chromium, type BrowserContext } from 'playwright';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  chromium,
+  type BrowserContext,
+  type Response as BrowserResponse,
+} from 'playwright';
 import type { LiveTradingConfig } from '../../application/live-trading.js';
 import { accountResource, type AccountLock } from './account-lock.js';
 import { autoLogin, assertNoVerification } from './empire-auto-login.js';
@@ -25,7 +29,12 @@ const LOCK_WAIT_MS = 20_000;
 /** Làm mới nền chờ chỗ mở Chrome tối đa chừng này; đăng nhập tay thì chờ tới khi có chỗ / bị hủy. */
 const BACKGROUND_SLOT_WAIT_MS = 60_000;
 
+/** Nội bộ: hồ sơ giữ phiên cũ / sai tài khoản, đã xóa cookie → mở lại và đăng nhập từ đầu. */
+const RELOGIN = 'CSGOEMPIRE_RELOGIN_REQUIRED';
+
 export interface EmpireSessionOptions {
+  /** Nội bộ: lần mở lại sau khi xóa phiên cũ (không xóa lần nữa). */
+  relogin?: boolean;
   credentials?: EmpireCredentials;
   credentialsVersion?: string;
   headed?: boolean;
@@ -297,6 +306,33 @@ async function readRevision(name: string) {
     () => '',
   );
 }
+/**
+ * Dấu "phiên trong hồ sơ đã xác nhận đúng tài khoản": băm email đã lưu + revision hồ sơ lúc xác nhận.
+ * Đăng nhập tay sau đó (revision đổi) hoặc đổi tài khoản lưu → dấu không còn hợp lệ.
+ */
+const verifiedPath = (name: string) =>
+  resolve(profilePath(name), '.verified-account');
+const accountHash = (username: string) =>
+  createHash('sha256').update(username.trim().toLowerCase()).digest('hex');
+async function isVerified(name: string, username: string) {
+  const mark = await readFile(verifiedPath(name), 'utf8').catch(() => '');
+  return mark === `${accountHash(username)}:${await readRevision(name)}`;
+}
+async function markVerified(name: string, username: string) {
+  await writeFile(
+    verifiedPath(name),
+    `${accountHash(username)}:${await readRevision(name)}`,
+    { mode: 0o600 },
+  );
+}
+async function clearVerified(name: string) {
+  try {
+    await writeFile(verifiedPath(name), '', { mode: 0o600 });
+  } catch {
+    // không ghi được dấu thì lần sau chỉ phải đăng nhập lại; không chặn luồng
+  }
+}
+
 export async function loginReady(name: string) {
   await writeFile(resolve(profilePath(name), '.login-ready'), randomUUID(), {
     mode: 0o600,
@@ -369,7 +405,16 @@ export class EmpireSessions {
     before: CacheEntry | undefined,
   ): Promise<EmpireSession> {
     try {
-      return await this.open(browserProfile, revision, options);
+      try {
+        return await this.open(browserProfile, revision, options);
+      } catch (e) {
+        if (!(e instanceof Error && e.message === RELOGIN)) throw e;
+        // cookie đã xóa: lần này trang hiện form, app gõ tài khoản/mật khẩu đã lưu
+        return await this.open(browserProfile, revision, {
+          ...options,
+          relogin: true,
+        });
+      }
     } catch (e) {
       const keep =
         !options.force &&
@@ -405,18 +450,27 @@ export class EmpireSessions {
       async () => {
         let context: BrowserContext | undefined;
         const signal = options.signal ?? new AbortController().signal;
-        const stage = options.onStage ?? (() => undefined);
+        /** Lần này app có gõ tài khoản/mật khẩu đã lưu vào form không (hay dùng phiên có sẵn). */
+        let typedCredentials = false;
+        const stage = (next: EmpireLoginStage) => {
+          if (next === 'signing_in') typedCredentials = true;
+          options.onStage?.(next);
+        };
         let step: EmpireLoginDiagnostic['step'] = 'browser';
+        let lastHttp: number | undefined;
         const checkpoint = (
           next: EmpireLoginDiagnostic['step'],
           httpStatus?: number,
           sessionIssue?: EmpireLoginDiagnostic['sessionIssue'],
+          extra: Pick<EmpireLoginDiagnostic, 'accountIssue' | 'cause'> = {},
         ) => {
           step = next;
+          lastHttp = httpStatus;
           options.onDiagnostic?.({
             step,
             ...(httpStatus ? { httpStatus } : {}),
             ...(sessionIssue ? { sessionIssue } : {}),
+            ...extra,
           });
         };
         const onAbort = () => {
@@ -434,6 +488,9 @@ export class EmpireSessions {
           signal.addEventListener('abort', onAbort, { once: true });
           signal.throwIfAborted();
           const page = context.pages()[0] ?? (await context.newPage());
+          // Ghi lại các API csgoempire mà CHÍNH trang gọi (đường dẫn + mã HTTP, không lưu nội dung),
+          // và giữ phản hồi /api/v2/user của trang nếu có: trang gửi đúng header sàn yêu cầu.
+          const seen = observeSiteApi(page);
           let sessionReceived = false;
           const response = page.waitForResponse(
             async (r) => {
@@ -618,38 +675,102 @@ export class EmpireSessions {
             .map((c) => `${c.name}=${c.value}`)
             .join('; ');
           if (!cookie) throw new Error('CSGOEMPIRE_SESSION_COOKIE_MISSING');
+          // Đọc ngay trong Chrome vừa đăng nhập (cùng cookie, User-Agent, TLS): request "trần" từ Node
+          // dễ bị Cloudflare chặn vì cookie chống bot gắn với chính trình duyệt đã nhận nó.
+          let inPage = seen.user() ?? (await readUserInPage(page));
+          // Vừa đăng nhập xong, cookie có thể chưa kịp có hiệu lực: đọc lại vài lần trước khi kết luận.
+          for (
+            let retry = 0;
+            retry < 3 && accountIssue(inPage) === 'not_logged_in';
+            retry++
+          ) {
+            await page.waitForTimeout(1_000);
+            inPage = seen.user() ?? (await readUserInPage(page));
+          }
+          const userAgent = inPage.userAgent || undefined;
           if (options.credentials) {
             checkpoint('account');
-            const accountResponse = await fetch(
-              'https://csgoempire.com/api/v2/user',
-              {
-                headers: { Cookie: cookie },
-                signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
-                redirect: 'error',
-              },
-            );
-            checkpoint('account', accountResponse.status);
-            if (!accountResponse.ok)
-              throw new Error(
-                accountResponse.status === 401
-                  ? SESSION_EXPIRED
-                  : 'CSGOEMPIRE_SESSION_ACCOUNT_FAILED',
-              );
-            const account = (await accountResponse.json()) as {
+            const issue = accountIssue(inPage);
+            const account = (inPage.body ?? {}) as {
               success?: boolean;
               username?: string;
               email?: string;
             };
             const expected = options.credentials.username.trim().toLowerCase();
-            if (
-              !account.success ||
+            const wrongAccount =
+              !issue &&
               ![account.username, account.email].some(
                 (value) =>
                   typeof value === 'string' &&
                   value.trim().toLowerCase() === expected,
-              )
-            )
-              throw new Error('CSGOEMPIRE_LOGIN_ACCOUNT_MISMATCH');
+              );
+            // Sàn không cho đọc thông tin tài khoản (403, trang HTML, lỗi mạng): không có dữ liệu để so.
+            const unreadable =
+              issue === 'http_error' ||
+              issue === 'challenge' ||
+              issue === 'not_json' ||
+              issue === 'network';
+            const apiNote = `API trang đã gọi: ${seen.summary() || 'không thấy'}`;
+            const verifiedBefore =
+              unreadable &&
+              !typedCredentials &&
+              (await isVerified(browserProfile, options.credentials.username));
+            if (verifiedBefore) {
+              // phiên có sẵn trong hồ sơ, đã được xác nhận ở lần đăng nhập trước: không đăng nhập lại
+              checkpoint('account', inPage.status || undefined, undefined, {
+                accountIssue: issue,
+                cause: `Không đọc được thông tin tài khoản (${inPage.detail ?? issue}); dùng phiên đã xác nhận ở lần đăng nhập trước.`,
+              });
+            } else if (unreadable && typedCredentials) {
+              // Vừa gõ đúng email/mật khẩu đã lưu và sàn cấp phiên → phiên này là của tài khoản đó.
+              checkpoint('account', inPage.status || undefined, undefined, {
+                accountIssue: issue,
+                cause:
+                  `Không đọc được thông tin tài khoản (${inPage.detail ?? issue}); đã xác nhận bằng việc đăng nhập bằng email đã lưu. ${apiNote}`.slice(
+                    0,
+                    400,
+                  ),
+              });
+            } else {
+              // Hồ sơ giữ phiên cũ (chưa đăng nhập / 401), phiên của tài khoản KHÁC, hoặc phiên có sẵn
+              // mà không đọc được tài khoản để kiểm tra: xóa cookie csgoempire rồi đăng nhập lại từ đầu
+              // bằng tài khoản đã lưu (một lần) — sau đó việc gõ đúng tài khoản là bằng chứng xác nhận.
+              const stale =
+                issue === 'not_logged_in' ||
+                inPage.status === 401 ||
+                wrongAccount ||
+                unreadable;
+              if (stale && !options.relogin) {
+                checkpoint('account', inPage.status || undefined, undefined, {
+                  cause: wrongAccount
+                    ? 'Hồ sơ đang đăng nhập tài khoản khác — xóa phiên cũ, đăng nhập lại'
+                    : unreadable
+                      ? `Không đọc được tài khoản của phiên có sẵn (${inPage.detail ?? issue}) — đăng nhập lại bằng email đã lưu để xác nhận`
+                      : 'Phiên trong hồ sơ đã cũ — xóa phiên cũ, đăng nhập lại',
+                });
+                await context.clearCookies({
+                  domain: /(^|\.)csgoempire\.com$/,
+                });
+                await clearVerified(browserProfile);
+                throw new Error(RELOGIN);
+              }
+              checkpoint('account', inPage.status || undefined, undefined, {
+                ...(issue ? { accountIssue: issue } : {}),
+                ...(issue
+                  ? {
+                      cause:
+                        `${inPage.detail ? `${inPage.detail}. ` : ''}${apiNote}`.slice(
+                          0,
+                          400,
+                        ),
+                    }
+                  : {}),
+              });
+              if (inPage.status === 401) throw new Error(SESSION_EXPIRED);
+              if (issue) throw new Error('CSGOEMPIRE_SESSION_ACCOUNT_FAILED');
+              if (wrongAccount)
+                throw new Error('CSGOEMPIRE_LOGIN_ACCOUNT_MISMATCH');
+            }
           }
           const session = {
             browserProfile,
@@ -660,12 +781,16 @@ export class EmpireSessions {
             sessionId,
             minBet: Number(who.currency_detail?.min_bet ?? '0.1'),
             cookie,
+            ...(userAgent ? { userAgent } : {}),
           };
           const issued =
             typeof payload.iat === 'number' && Number.isFinite(payload.iat)
               ? payload.iat * 1000
               : Date.now();
           if (options.headed) await loginReady(browserProfile);
+          // ghi dấu SAU loginReady để khớp revision hiện tại của hồ sơ
+          if (options.credentials)
+            await markVerified(browserProfile, options.credentials.username);
           this.cache.set(browserProfile, {
             revision: options.headed
               ? `${await readRevision(browserProfile)}:${options.credentialsVersion ?? ''}`
@@ -683,6 +808,8 @@ export class EmpireSessions {
         } catch (e) {
           if (signal.aborted)
             throw new Error('CSGOEMPIRE_LOGIN_CANCELLED', { cause: e });
+          // không ghi vào cache như lỗi lâu dài: refresh() sẽ mở lại và đăng nhập từ đầu
+          if (e instanceof Error && e.message === RELOGIN) throw e;
           if (
             e instanceof Error &&
             /^CSGOEMPIRE_(VERIFICATION_REQUIRED|LOGIN_|BROWSER_CLOSED)/.test(
@@ -706,6 +833,10 @@ export class EmpireSessions {
               { cause: e },
             );
           if (!(e instanceof Error && e.message.startsWith('CSGOEMPIRE_'))) {
+            // Lỗi ngoài dự kiến (timeout, mạng, Playwright...): giữ lý do thật để web + log hiện được.
+            checkpoint(step, lastHttp, undefined, {
+              cause: describeCause(e, options.credentials),
+            });
             throw new Error(STEP_FAILURE[step], { cause: e });
           }
           if (e.message === 'CSGOEMPIRE_SESSION_REFRESH_FAILED')
@@ -735,3 +866,161 @@ interface CacheEntry {
 
 const usable = (s: EmpireSession, now: number) =>
   s.expiresAt > now + STALE_TOKEN_MARGIN_MS;
+
+interface InPageUser {
+  status: number;
+  body: unknown;
+  /** Phản hồi là HTML thay vì JSON. */
+  html: boolean;
+  /** Dấu hiệu trang chống bot của Cloudflare. */
+  challenge: boolean;
+  userAgent: string;
+  detail: string | null;
+}
+
+/** GET /api/v2/user trong chính trang csgoempire (fetch của trình duyệt, kèm cookie của nó). */
+async function readUserInPage(page: {
+  evaluate: <R>(fn: () => Promise<R>) => Promise<R>;
+}): Promise<InPageUser> {
+  try {
+    return await page.evaluate(async () => {
+      const userAgent = navigator.userAgent;
+      try {
+        const r = await fetch('https://csgoempire.com/api/v2/user', {
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+        });
+        const text = await r.text();
+        let body: unknown = null;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          body = null;
+        }
+        const challenge =
+          r.headers.get('cf-mitigated') === 'challenge' ||
+          /just a moment|challenge-platform|cf-chl|attention required/i.test(
+            text,
+          );
+        return {
+          status: r.status,
+          body,
+          html: body === null && /<html|<!doctype/i.test(text),
+          challenge,
+          userAgent,
+          detail:
+            body === null
+              ? `HTTP ${r.status}, ${r.headers.get('content-type') ?? 'không rõ kiểu'}${
+                  /<title[^>]*>([^<]{1,100})/i.exec(text)?.[1]
+                    ? ` "${/<title[^>]*>([^<]{1,100})/i.exec(text)![1].trim()}"`
+                    : ''
+                }`
+              : null,
+        };
+      } catch (e) {
+        return {
+          status: 0,
+          body: null,
+          html: false,
+          challenge: false,
+          userAgent,
+          detail: `fetch trong trình duyệt lỗi: ${String(e).slice(0, 120)}`,
+        };
+      }
+    });
+  } catch (e) {
+    return {
+      status: 0,
+      body: null,
+      html: false,
+      challenge: false,
+      userAgent: '',
+      detail: `không chạy được script trong trang: ${
+        e instanceof Error ? e.message.split('\n')[0].slice(0, 120) : 'lỗi'
+      }`,
+    };
+  }
+}
+
+function accountIssue(
+  r: InPageUser,
+): EmpireLoginDiagnostic['accountIssue'] | null {
+  if (r.challenge) return 'challenge';
+  if (r.status === 0) return 'network';
+  if (r.status === 401) return null; // báo SESSION_EXPIRED riêng
+  if (r.status < 200 || r.status >= 300) return 'http_error';
+  if (r.body === null || typeof r.body !== 'object') return 'not_json';
+  if ((r.body as { success?: unknown }).success !== true)
+    return 'not_logged_in';
+  return null;
+}
+
+/** Dòng đầu của lỗi, cắt ngắn, che tài khoản/mật khẩu nếu lọt vào thông báo. */
+export function describeCause(
+  e: unknown,
+  credentials?: EmpireCredentials,
+): string {
+  let msg =
+    e instanceof Error
+      ? `${e.name !== 'Error' ? `${e.name}: ` : ''}${e.message}`
+      : String(e);
+  const lines = msg.split('\n').map((l) => l.trim());
+  msg = lines[0] ?? '';
+  // Playwright ghi lý do thật trong call log (vd "element is not enabled", "<div> intercepts
+  // pointer events"): lấy dòng cuối có lý do đó, không chỉ "Timeout 10000ms exceeded".
+  const reason = [...lines]
+    .reverse()
+    .find((l) =>
+      /element is not|intercepts pointer events|not enabled|not visible|not stable|disabled|detached/i.test(
+        l,
+      ),
+    );
+  if (reason && reason !== msg) msg = `${msg} — ${reason.replace(/^-\s*/, '')}`;
+  for (const secret of [credentials?.password, credentials?.username])
+    if (secret) msg = msg.split(secret).join('***');
+  return msg.slice(0, 300);
+}
+
+/**
+ * Theo dõi các request API csgoempire do chính trang gửi (đường dẫn + mã HTTP, không lưu nội dung,
+ * không lưu query). Nếu trang tự gọi /api/v2/user thành công thì giữ lại thân phản hồi để dùng.
+ */
+function observeSiteApi(page: {
+  on?: (event: 'response', fn: (r: BrowserResponse) => void) => unknown;
+}) {
+  const calls: string[] = [];
+  let user: InPageUser | null = null;
+  page.on?.('response', (r: BrowserResponse) => {
+    let url: URL;
+    try {
+      url = new URL(r.url());
+    } catch {
+      return;
+    }
+    if (
+      !/(^|\.)csgoempire\.com$/.test(url.hostname) ||
+      !url.pathname.startsWith('/api/')
+    )
+      return;
+    const path = url.pathname.replace(/\/\d{3,}(?=\/|$)/g, '/:id');
+    if (calls.length < 40) calls.push(`${path} ${r.status()}`);
+    if (url.pathname === '/api/v2/user' && r.ok())
+      void r
+        .json()
+        .then((body: unknown) => {
+          user = {
+            status: r.status(),
+            body,
+            html: false,
+            challenge: false,
+            userAgent: '',
+            detail: null,
+          };
+        })
+        .catch(() => undefined);
+  });
+  return {
+    user: () => user,
+    summary: () => [...new Set(calls)].slice(0, 15).join(', '),
+  };
+}

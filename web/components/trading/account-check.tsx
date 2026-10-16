@@ -55,10 +55,21 @@ const ERROR_LABEL: Record<string, string> = {
   TRADING_SECRET_KEY_REQUIRED: 'Backend chưa đặt TRADING_SECRET_KEY',
   LIVE_REDIS_REQUIRED: 'Backend chưa có Redis',
   CASH_UNAVAILABLE: 'Sàn không trả số dư',
+  CSGOEMPIRE_CLOUDFLARE_BLOCKED:
+    'Cloudflare của csgoempire chặn yêu cầu đọc số dư (trang chống bot)',
+  VENUE_NOT_JSON: 'Sàn trả trang web thay vì dữ liệu',
+  CSGOEMPIRE_SESSION_ACCOUNT_FAILED:
+    'Không đọc được tài khoản trên csgoempire — bấm Đăng nhập để xem lý do chi tiết',
+  CSGOEMPIRE_BROWSER_SLOTS_BUSY: 'Đang có quá nhiều Chromium mở, thử lại sau',
   ACCOUNT_BUSY: 'Tài khoản đang bận vào lệnh, thử lại sau',
 };
-const errorText = (code: string) =>
-  ERROR_LABEL[code.split(':')[0]!.trim()] ?? code;
+/** Nhãn dễ đọc + phần chi tiết sau dấu ":" (vd mã HTTP), không chỉ mã lỗi trơn. */
+const errorText = (code: string) => {
+  const head = code.split(':')[0]!.trim();
+  const rest = code.slice(head.length + 1).trim();
+  const label = ERROR_LABEL[head];
+  return label ? `${label}${rest ? ` (${rest})` : ''}` : code;
+};
 
 export async function checkAccount(accountId: string) {
   store.set(accountId, { state: 'loading' });

@@ -78,10 +78,22 @@ async function json(
     signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
     redirect: 'error',
   });
+  // Cloudflare chặn (trang chống bot, không phải API trả lời): KHÔNG phải phiên hết hạn,
+  // nên không được khóa tài khoản như phiên hết hạn.
+  const blocked =
+    response.headers.get('cf-mitigated') === 'challenge' ||
+    (!response.ok &&
+      /text\/html/i.test(response.headers.get('content-type') ?? ''));
+  if (blocked)
+    throw new Error(`CSGOEMPIRE_CLOUDFLARE_BLOCKED: HTTP ${response.status}`);
   if (response.status === 401 || response.status === 403)
     throw new Error(SESSION_EXPIRED);
   if (!response.ok) throw new Error(`VENUE_HTTP_${response.status}`);
-  return (await response.json()) as Record<string, unknown>;
+  try {
+    return (await response.json()) as Record<string, unknown>;
+  } catch {
+    throw new Error(`VENUE_NOT_JSON: HTTP ${response.status}`);
+  }
 }
 function finite(value: unknown): number {
   const n =
@@ -112,16 +124,26 @@ const text = (v: unknown): string | null =>
 
 /** Đọc tài khoản + Cash csgoempire từ chính cookie của phiên sẽ vào lệnh. */
 export async function readEmpireBalance(
-  c: Pick<LiveTradingConfig['empire'], 'cookie'>,
+  c: Pick<LiveTradingConfig['empire'], 'cookie' | 'userAgent'>,
   signal: AbortSignal,
 ): Promise<VenueBalance & { username: string | null; email: string | null }> {
+  // Cùng User-Agent với Chrome đã nhận cookie: Cloudflare gắn cookie chống bot với trình duyệt đó.
+  const browserLike = {
+    Accept: 'application/json',
+    Referer: 'https://csgoempire.com/',
+    ...(c.userAgent ? { 'User-Agent': c.userAgent } : {}),
+  };
   const [user, rates] = await Promise.all([
     json(
       'https://csgoempire.com/api/v2/user',
-      { headers: { Cookie: c.cookie } },
+      { headers: { ...browserLike, Cookie: c.cookie } },
       signal,
     ),
-    json('https://csgoempire.com/api/v2/metadata/exchange-rates', {}, signal),
+    json(
+      'https://csgoempire.com/api/v2/metadata/exchange-rates',
+      { headers: browserLike },
+      signal,
+    ),
   ]);
   if (user.success !== true) throw new Error(SESSION_EXPIRED);
   if (user.default_balance_type !== 1)

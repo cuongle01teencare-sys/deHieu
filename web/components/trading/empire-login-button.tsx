@@ -44,8 +44,27 @@ interface LoginStatus {
       | 'currency_missing'
       | 'currency_unsupported'
       | 'identify_currency_unsupported';
+    accountIssue?:
+      'challenge' | 'not_json' | 'not_logged_in' | 'http_error' | 'network';
+    /** Lý do kỹ thuật ngắn gọn từ backend (đã che thông tin đăng nhập). */
+    cause?: string;
   };
 }
+
+const accountIssues: Record<
+  NonNullable<NonNullable<LoginStatus['diagnostic']>['accountIssue']>,
+  string
+> = {
+  challenge:
+    'Cloudflare của csgoempire chặn yêu cầu đọc tài khoản (trang chống bot). Thường do IP máy chạy backend bị đánh dấu hoặc phải qua bước xác minh trình duyệt.',
+  not_json:
+    'csgoempire trả về một trang web thay vì dữ liệu tài khoản (có thể là trang lỗi hoặc trang chống bot).',
+  not_logged_in:
+    'csgoempire trả lời "chưa đăng nhập": Chromium chưa giữ được phiên đăng nhập dù đã nhận JWT.',
+  http_error: 'csgoempire trả mã lỗi HTTP khi đọc thông tin tài khoản.',
+  network:
+    'Không gọi được API tài khoản từ Chromium (lỗi mạng hoặc trang đã chuyển đi).',
+};
 const steps: Record<NonNullable<LoginStatus['diagnostic']>['step'], string> = {
   browser: 'Mở Chromium',
   page: 'Mở trang Match betting',
@@ -97,7 +116,13 @@ const errors: Record<string, string> = {
   CSGOEMPIRE_SESSION_IDENTIFY_FAILED:
     'Đã nhận JWT nhưng chưa xác thực được phiên với BetBy.',
   CSGOEMPIRE_SESSION_ACCOUNT_FAILED:
-    'Đã nhận JWT nhưng chưa đọc được thông tin để xác nhận đúng tài khoản.',
+    'Đăng nhập và lấy JWT đã xong, nhưng không đọc được thông tin tài khoản trên csgoempire để xác nhận đúng tài khoản — xem lý do bên dưới.',
+  CSGOEMPIRE_LOGIN_TYPING_FAILED:
+    'Đã gõ tài khoản/mật khẩu nhưng ô trên trang không nhận đúng nội dung (có thể gõ nhầm sang ô khác). Xem chi tiết bên dưới.',
+  CSGOEMPIRE_LOGIN_SUBMIT_DISABLED:
+    'Đã điền đủ tài khoản/mật khẩu nhưng nút Log In vẫn bị khóa sau 10 giây — thường do trang đang chờ một bước xác minh (CAPTCHA / Cloudflare). Xem cửa sổ Chromium.',
+  CSGOEMPIRE_BROWSER_SLOTS_BUSY:
+    'Đang có quá nhiều Chromium mở cùng lúc (TRADING_MAX_BROWSERS). Thử lại sau ít phút.',
   CSGOEMPIRE_SESSION_ACCESS_BLOCKED:
     'BetBy không cho phép tài khoản hoặc vị trí hiện tại sử dụng phiên này.',
   CSGOEMPIRE_SESSION_COOKIE_MISSING:
@@ -311,6 +336,24 @@ export function EmpireLoginButton({
                 ? ` · HTTP ${current.diagnostic.httpStatus}`
                 : ''}
             </p>
+          ) : null}
+          {current?.error &&
+          (current.diagnostic?.accountIssue || current.diagnostic?.cause) ? (
+            <div className="rounded-[6px] bg-hover/60 px-3 py-2 text-caption">
+              {current.diagnostic.accountIssue ? (
+                <p className="text-fg">
+                  {accountIssues[current.diagnostic.accountIssue]}
+                </p>
+              ) : null}
+              {current.diagnostic.cause ? (
+                <p className="num mt-1 break-words text-muted-fg">
+                  Chi tiết: {current.diagnostic.cause}
+                </p>
+              ) : null}
+              <p className="mt-1 text-faint">
+                Dòng này cũng được ghi vào log backend (EmpireSession).
+              </p>
+            </div>
           ) : null}
           {current?.diagnostic?.loginRequest ? (
             <p className="text-caption text-muted-fg">

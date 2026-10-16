@@ -3,11 +3,13 @@ import {
   browserSlotUsage,
   closeAllProfiles,
   closeProfile,
+  describeCause,
   EmpireSessions,
   launchProfile,
 } from '../empire-session.js';
 import type { AccountLock } from '../account-lock.js';
 import type { Response as BrowserResponse } from 'playwright';
+import { createHash } from 'node:crypto';
 
 const mocks = vi.hoisted(() => ({
   launch: vi.fn(),
@@ -33,6 +35,7 @@ vi.mock('node:fs/promises', () => ({
 function setup(lifetimeMinutes = 30) {
   let sequence = 0;
   const close = vi.fn(() => Promise.resolve());
+  const clearCookies = vi.fn((_filter?: unknown) => Promise.resolve());
   const absent = {
     first: () => absent,
     filter: () => absent,
@@ -74,6 +77,7 @@ function setup(lifetimeMinutes = 30) {
     Promise.resolve({
       pages: () => [page],
       cookies: () => Promise.resolve([{ name: 'unit-session', value: 'test' }]),
+      clearCookies,
       close,
       once: vi.fn(),
     }),
@@ -91,6 +95,7 @@ function setup(lifetimeMinutes = 30) {
     sessions: new EmpireSessions(locks as unknown as AccountLock),
     locks,
     close,
+    clearCookies,
     identify,
     page,
   };
@@ -393,7 +398,11 @@ describe('csgoempire session refresh', () => {
     await expect(
       s.sessions.get('empire-test', { onDiagnostic: diagnostic }),
     ).rejects.toThrow('CSGOEMPIRE_PAGE_NAVIGATION_FAILED');
-    expect(diagnostic).toHaveBeenLastCalledWith({ step: 'page' });
+    // lý do thật được giữ lại để web / log hiện, không chỉ mã lỗi chung
+    expect(diagnostic).toHaveBeenLastCalledWith({
+      step: 'page',
+      cause: 'net::ERR_CONNECTION_RESET',
+    });
     expect(s.close).toHaveBeenCalledOnce();
   });
 
@@ -462,102 +471,147 @@ describe('csgoempire session refresh', () => {
     },
   );
 
-  it('keeps typing and submitting after a guest response, then verifies the actual authenticated JWT', async () => {
-    const s = setup();
-    const normalResponse = s.page.waitForResponse.getMockImplementation()!;
-    type StubResponse = Awaited<ReturnType<typeof normalResponse>>;
-    let match: (response: BrowserResponse) => boolean | Promise<boolean> = () =>
-      false;
-    let received: (response: StubResponse) => void = () => {
-      throw new Error('Session response listener was not installed');
-    };
-    s.page.waitForResponse.mockImplementation((predicate) => {
-      match = predicate;
-      return new Promise<StubResponse>((resolve) => {
-        received = resolve;
+  it.each([
+    [
+      'đọc được tài khoản',
+      {
+        status: 200,
+        body: { success: true, email: 'unit@example.test' },
+        html: false,
+        challenge: false,
+        userAgent: 'UnitChrome/155',
+        detail: null,
+      },
+    ],
+    [
+      'sàn trả 403 khi đọc tài khoản — vừa gõ đúng email đã lưu nên vẫn xác nhận được',
+      {
+        status: 403,
+        body: null,
+        html: true,
+        challenge: false,
+        userAgent: 'UnitChrome/155',
+        detail: 'HTTP 403, text/html',
+      },
+    ],
+  ])(
+    'keeps typing and submitting after a guest response, then verifies the actual authenticated JWT (%s)',
+    async (_case, accountRead) => {
+      const s = setup();
+      const normalResponse = s.page.waitForResponse.getMockImplementation()!;
+      type StubResponse = Awaited<ReturnType<typeof normalResponse>>;
+      let match: (
+        response: BrowserResponse,
+      ) => boolean | Promise<boolean> = () => false;
+      let received: (response: StubResponse) => void = () => {
+        throw new Error('Session response listener was not installed');
+      };
+      s.page.waitForResponse.mockImplementation((predicate) => {
+        match = predicate;
+        return new Promise<StubResponse>((resolve) => {
+          received = resolve;
+        });
       });
-    });
-    const sessionUrl = () =>
-      'https://csgoempire.com/api/v2/match-betting/betby/user-session/en/USD/EMP';
-    s.page.goto.mockImplementation(async () => {
-      const guest = {
-        url: sessionUrl,
-        ok: () => true,
-        json: () => Promise.resolve({ success: true, data: { token: '' } }),
+      const sessionUrl = () =>
+        'https://csgoempire.com/api/v2/match-betting/betby/user-session/en/USD/EMP';
+      s.page.goto.mockImplementation(async () => {
+        const guest = {
+          url: sessionUrl,
+          ok: () => true,
+          json: () => Promise.resolve({ success: true, data: { token: '' } }),
+        };
+        expect(await match(guest as unknown as BrowserResponse)).toBe(false);
+      });
+      const element = (visible: boolean) => {
+        let value = '';
+        const locator = {
+          first: () => locator,
+          or: () => locator,
+          filter: () => locator,
+          isVisible: () => Promise.resolve(visible),
+          fill: vi.fn((text: string) => {
+            value = text;
+            return Promise.resolve();
+          }),
+          pressSequentially: vi.fn(
+            (text: string, _options: { delay: number }) => {
+              value += text;
+              return Promise.resolve();
+            },
+          ),
+          inputValue: vi.fn((_o?: unknown) => Promise.resolve(value)),
+          count: () => Promise.resolve(1),
+          click: vi.fn(() => Promise.resolve()),
+          isEnabled: vi.fn((_o?: unknown) => Promise.resolve(true)),
+        };
+        return locator;
       };
-      expect(await match(guest as unknown as BrowserResponse)).toBe(false);
-    });
-    const element = (visible: boolean) => {
-      const locator = {
-        first: () => locator,
-        or: () => locator,
-        filter: () => locator,
-        isVisible: () => Promise.resolve(visible),
-        fill: vi.fn((_text: string) => Promise.resolve()),
-        pressSequentially: vi.fn((_text: string, _options: { delay: number }) =>
-          Promise.resolve(),
+      const username = element(true);
+      const password = element(true);
+      const absent = element(false);
+      const submit = element(true);
+      submit.click.mockImplementation(async () => {
+        const response = await normalResponse(match);
+        const authenticated = { ...response, url: sessionUrl };
+        expect(await match(authenticated as unknown as BrowserResponse)).toBe(
+          true,
+        );
+        received(authenticated);
+      });
+      const page = {
+        ...s.page,
+        url: () => 'https://csgoempire.com/match-betting',
+        isClosed: () => false,
+        getByText: () => absent,
+        getByRole: (role: string) => (role === 'textbox' ? username : absent),
+        locator: (selector: string) =>
+          selector === '#auth-login-submit:visible'
+            ? submit
+            : selector.includes('input[type="password"]')
+              ? password
+              : absent,
+        waitForTimeout: () => Promise.resolve(),
+        // GET /api/v2/user chạy TRONG Chromium (cùng cookie / User-Agent với trình duyệt)
+        evaluate: vi.fn(() => Promise.resolve(accountRead)),
+      };
+      mocks.launch.mockResolvedValue({
+        pages: () => [page],
+        cookies: () =>
+          Promise.resolve([{ name: 'unit-session', value: 'test' }]),
+        close: s.close,
+        once: vi.fn(),
+      });
+      s.identify.mockImplementation((url) =>
+        Promise.resolve(
+          Response.json(
+            url.endsWith('/identify')
+              ? { currency: 'USD' }
+              : { success: true, email: 'unit@example.test' },
+          ),
         ),
-        count: () => Promise.resolve(1),
-        click: vi.fn(() => Promise.resolve()),
-      };
-      return locator;
-    };
-    const username = element(true);
-    const password = element(true);
-    const absent = element(false);
-    const submit = element(true);
-    submit.click.mockImplementation(async () => {
-      const response = await normalResponse(match);
-      const authenticated = { ...response, url: sessionUrl };
-      expect(await match(authenticated as unknown as BrowserResponse)).toBe(
-        true,
       );
-      received(authenticated);
-    });
-    const page = {
-      ...s.page,
-      url: () => 'https://csgoempire.com/match-betting',
-      isClosed: () => false,
-      getByText: () => absent,
-      getByRole: (role: string) => (role === 'textbox' ? username : absent),
-      locator: (selector: string) =>
-        selector === '#auth-login-submit:visible'
-          ? submit
-          : selector.includes('input[type="password"]')
-            ? password
-            : absent,
-      waitForTimeout: () => Promise.resolve(),
-    };
-    mocks.launch.mockResolvedValue({
-      pages: () => [page],
-      cookies: () => Promise.resolve([{ name: 'unit-session', value: 'test' }]),
-      close: s.close,
-      once: vi.fn(),
-    });
-    s.identify.mockImplementation((url) =>
-      Promise.resolve(
-        Response.json(
-          url.endsWith('/identify')
-            ? { currency: 'USD' }
-            : { success: true, email: 'unit@example.test' },
-        ),
-      ),
-    );
-    const result = await s.sessions.get('empire-test', {
-      credentials: { username: 'unit@example.test', password: 'unit-password' },
-    });
-    expect(username.pressSequentially).toHaveBeenCalledWith(
-      'unit@example.test',
-      { delay: 70 },
-    );
-    expect(password.pressSequentially).toHaveBeenCalledWith('unit-password', {
-      delay: 70,
-    });
-    expect(submit.click).toHaveBeenCalledOnce();
-    expect(result.token).toMatch(/^test\./);
-    expect(s.identify).toHaveBeenCalledTimes(2);
-    expect(s.close).toHaveBeenCalledOnce();
-  });
+      const result = await s.sessions.get('empire-test', {
+        credentials: {
+          username: 'unit@example.test',
+          password: 'unit-password',
+        },
+      });
+      expect(username.pressSequentially).toHaveBeenCalledWith(
+        'unit@example.test',
+        { delay: 70 },
+      );
+      expect(password.pressSequentially).toHaveBeenCalledWith('unit-password', {
+        delay: 70,
+      });
+      expect(submit.click).toHaveBeenCalledOnce();
+      expect(result.token).toMatch(/^test\./);
+      expect(result.userAgent).toBe('UnitChrome/155');
+      // Node chỉ gọi identify (BetBy); tài khoản csgoempire đọc trong trình duyệt
+      expect(s.identify).toHaveBeenCalledOnce();
+      expect(page.evaluate).toHaveBeenCalledOnce();
+      expect(s.close).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe('nhiều tài khoản / nhiều lời gọi cùng lúc', () => {
@@ -690,5 +744,183 @@ describe('nhiều tài khoản / nhiều lời gọi cùng lúc', () => {
     expect(manual.token).not.toBe(bg.token);
     expect(mocks.launch).toHaveBeenCalledTimes(2);
     expect(maxOpen).toBe(1);
+  });
+});
+
+describe('xác nhận tài khoản trong Chromium (đã / chưa đăng nhập)', () => {
+  const login = { username: 'me@example.test', password: 'pw-secret' };
+  const ok = { status: 200, body: { success: true, email: 'me@example.test' } };
+  const notLogged = { status: 200, body: { success: false } };
+  const other = {
+    status: 200,
+    body: { success: true, email: 'x@example.test' },
+  };
+  /** Hồ sơ có sẵn phiên (trang tự trả JWT) + lần lượt các kết quả GET /api/v2/user trong trang. */
+  const profile = (
+    s: ReturnType<typeof setup>,
+    ...results: Record<string, unknown>[]
+  ) => {
+    const issue = s.page.waitForResponse.getMockImplementation()!;
+    let ready: Promise<unknown> = Promise.resolve();
+    s.page.waitForResponse.mockImplementation((predicate) => {
+      const p = (async () => {
+        const res = Object.assign(await issue(predicate), {
+          url: () =>
+            'https://csgoempire.com/api/v2/match-betting/betby/user-session/en/USD/USD',
+        });
+        await predicate(res as unknown as BrowserResponse);
+        return res;
+      })();
+      ready = p;
+      return p;
+    });
+    s.page.goto.mockImplementation(async () => {
+      await ready;
+    });
+    const evaluate = vi.fn();
+    for (const r of results)
+      evaluate.mockResolvedValueOnce({
+        html: false,
+        challenge: false,
+        userAgent: 'UnitChrome/155',
+        detail: null,
+        body: null,
+        ...r,
+      });
+    Object.assign(s.page, {
+      evaluate,
+      url: () => 'https://csgoempire.com/match-betting',
+      isClosed: () => false,
+      waitForTimeout: vi.fn(() => Promise.resolve()),
+    });
+    return evaluate;
+  };
+
+  it('đã đăng nhập đúng tài khoản: đọc trong Chromium, không xóa phiên', async () => {
+    const s = setup();
+    profile(s, ok);
+    const session = await s.sessions.get('a1', { credentials: login });
+    expect(session.userAgent).toBe('UnitChrome/155');
+    expect(s.clearCookies).not.toHaveBeenCalled();
+    expect(mocks.launch).toHaveBeenCalledOnce();
+  });
+
+  it('vừa đăng nhập, cookie chưa kịp có hiệu lực: đọc lại rồi qua, không đăng nhập lại', async () => {
+    const s = setup();
+    const evaluate = profile(s, notLogged, notLogged, ok);
+    await s.sessions.get('a2', { credentials: login });
+    expect(evaluate).toHaveBeenCalledTimes(3);
+    expect(s.clearCookies).not.toHaveBeenCalled();
+  });
+
+  it('phiên trong hồ sơ đã cũ: xóa cookie csgoempire, mở lại và đăng nhập từ đầu', async () => {
+    const s = setup();
+    profile(s, notLogged, notLogged, notLogged, notLogged, ok);
+    const session = await s.sessions.get('a3', { credentials: login });
+    expect(session.token).toMatch(/^test\./);
+    expect(s.clearCookies).toHaveBeenCalledOnce();
+    expect(s.clearCookies.mock.calls[0][0]).toMatchObject({
+      domain: expect.any(RegExp) as unknown,
+    });
+    expect(mocks.launch).toHaveBeenCalledTimes(2);
+  });
+
+  it('hồ sơ đang đăng nhập tài khoản KHÁC: đăng xuất (xóa cookie) rồi đăng nhập đúng tài khoản', async () => {
+    const s = setup();
+    profile(s, other, ok);
+    await s.sessions.get('a4', { credentials: login });
+    expect(s.clearCookies).toHaveBeenCalledOnce();
+    expect(mocks.launch).toHaveBeenCalledTimes(2);
+  });
+
+  it('đăng nhập lại vẫn sai tài khoản / vẫn bị từ chối: dừng, báo rõ (không lặp vô hạn)', async () => {
+    const s = setup();
+    profile(s, other, other);
+    await expect(s.sessions.get('a5', { credentials: login })).rejects.toThrow(
+      'CSGOEMPIRE_LOGIN_ACCOUNT_MISMATCH',
+    );
+    const t = setup();
+    profile(t, { status: 401 }, { status: 401 });
+    await expect(t.sessions.get('a6', { credentials: login })).rejects.toThrow(
+      'CSGOEMPIRE_SESSION_EXPIRED',
+    );
+    expect(mocks.launch).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    [
+      {
+        status: 403,
+        challenge: true,
+        html: true,
+        detail: 'HTTP 403, text/html',
+      },
+      'challenge',
+    ],
+    [{ status: 200, html: true, detail: 'HTTP 200, text/html' }, 'not_json'],
+    [{ status: 403, html: true, detail: 'HTTP 403, text/html' }, 'http_error'],
+    [
+      { status: 0, detail: 'fetch trong trình duyệt lỗi: TypeError' },
+      'network',
+    ],
+  ])(
+    'phiên có sẵn mà sàn không cho đọc tài khoản: đăng nhập lại một lần để xác nhận; vẫn không được thì báo rõ (%#)',
+    async (result, issue) => {
+      const s = setup();
+      // cả hai lần đều không đọc được, và trang tự cấp phiên (không hiện form để gõ)
+      profile(s, result, result);
+      const diagnostic = vi.fn();
+      await expect(
+        s.sessions.get('acc', { credentials: login, onDiagnostic: diagnostic }),
+      ).rejects.toThrow('CSGOEMPIRE_SESSION_ACCOUNT_FAILED');
+      expect(s.clearCookies).toHaveBeenCalledOnce();
+      const last = diagnostic.mock.lastCall?.[0] as {
+        step: string;
+        accountIssue?: string;
+        cause?: string;
+      };
+      expect(last).toMatchObject({ step: 'account', accountIssue: issue });
+      expect(last.cause).toContain('API trang đã gọi');
+    },
+  );
+
+  it('phiên có sẵn đã được xác nhận ở lần trước: sàn không cho đọc tài khoản vẫn dùng tiếp, không đăng nhập lại', async () => {
+    const s = setup();
+    const hash = createHash('sha256').update('me@example.test').digest('hex');
+    mocks.revision.mockImplementation(((path: string) =>
+      Promise.resolve(
+        String(path).endsWith('.verified-account')
+          ? `${hash}:revision-1`
+          : 'revision-1',
+      )) as never);
+    profile(s, { status: 403, html: true, detail: 'HTTP 403, text/html' });
+    const session = await s.sessions.get('verified', { credentials: login });
+    expect(session.token).toMatch(/^test\./);
+    expect(s.clearCookies).not.toHaveBeenCalled();
+    expect(mocks.launch).toHaveBeenCalledOnce();
+    mocks.revision.mockImplementation(() => Promise.resolve('revision-1'));
+  });
+});
+
+describe('describeCause', () => {
+  it('lấy lý do thật trong call log của Playwright', () => {
+    const e = Object.assign(
+      new Error(
+        "locator.click: Timeout 10000ms exceeded.\nCall log:\n  - waiting for locator('#auth-login-submit:visible')\n  - element is not enabled\n  - retrying click action",
+      ),
+      { name: 'TimeoutError' },
+    );
+    expect(describeCause(e)).toBe(
+      'TimeoutError: locator.click: Timeout 10000ms exceeded. — element is not enabled',
+    );
+  });
+
+  it('chỉ dòng đầu, cắt ngắn, che tài khoản/mật khẩu', () => {
+    const e = new Error(
+      'locator.fill: typing "pw-secret" for me@example.test\ncall log: ...',
+    );
+    expect(
+      describeCause(e, { username: 'me@example.test', password: 'pw-secret' }),
+    ).toBe('locator.fill: typing "***" for ***');
   });
 });

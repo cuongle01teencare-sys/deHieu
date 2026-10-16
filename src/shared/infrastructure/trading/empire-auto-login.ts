@@ -82,6 +82,27 @@ export async function autoLogin(
         await username.pressSequentially(credentials.username, { delay: 70 });
         await password.fill('');
         await password.pressSequentially(credentials.password, { delay: 70 });
+        // Đọc lại ô đã gõ (chỉ so khớp, không ghi nội dung ra đâu): chữ gõ nhầm sang ô khác / không
+        // ăn vào ô thì form thiếu dữ liệu và nút Log In sẽ bị khóa — báo đúng ô nào.
+        for (const [field, locator, expected, label] of [
+          ['email', username, credentials.username.trim(), 'Ô email'],
+          ['password', password, credentials.password, 'Ô mật khẩu'],
+        ] as const) {
+          let actual: string | null;
+          try {
+            actual = await locator.inputValue({ timeout: 2_000 });
+          } catch {
+            actual = null; // không đọc được (không phải ô nhập chuẩn): không kết luận
+          }
+          if (actual === null) continue;
+          if ((field === 'email' ? actual.trim() : actual) !== expected) {
+            options.onDiagnostic?.({
+              step: 'login',
+              cause: `${label} không nhận đúng nội dung đã gõ (đang có ${actual.length} ký tự, cần ${expected.length}). Có thể chữ đã gõ vào ô khác trên trang.`,
+            });
+            throw new Error(`CSGOEMPIRE_LOGIN_TYPING_FAILED: ${field}`);
+          }
+        }
         await assertNoVerification(page);
         network.assertHealthy();
         options.signal.throwIfAborted();
@@ -102,6 +123,22 @@ export async function autoLogin(
                   .getByRole('dialog')
                   .getByRole('button', { name: loginName })
                   .first();
+        // Nút bị khóa (trang chờ xác minh kiểu Turnstile/CAPTCHA, hoặc form chưa hợp lệ): báo rõ
+        // thay vì để click chờ hết giờ với lỗi chung chung.
+        const enabledBy = Date.now() + 10_000;
+        for (;;) {
+          let enabled: boolean;
+          try {
+            enabled = await submit.isEnabled({ timeout: 1_000 });
+          } catch {
+            break; // không đọc được trạng thái: để click tự báo lỗi
+          }
+          if (enabled) break;
+          await assertNoVerification(page);
+          if (Date.now() >= enabledBy)
+            throw new Error('CSGOEMPIRE_LOGIN_SUBMIT_DISABLED');
+          await page.waitForTimeout(250);
+        }
         await submit.click({ timeout: 10_000 });
         // Give the submitted form its own budget. Navigation and typing must not
         // consume the time allowed for the site's authentication response.

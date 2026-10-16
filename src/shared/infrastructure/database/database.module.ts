@@ -14,8 +14,14 @@ import { Env } from '../config/env.schema.js';
     {
       provide: PG_CLIENT,
       inject: [ConfigService],
-      useFactory: (cfg: ConfigService<Env, true>) =>
-        postgres(cfg.get('DATABASE_URL'), {}),
+      useFactory: (cfg: ConfigService<Env, true>) => {
+        const url = cfg.get('DATABASE_URL', { infer: true });
+        return postgres(url, {
+          max: cfg.get('DATABASE_POOL_MAX', { infer: true }),
+          // Supabase transaction pooler (cổng 6543) không hỗ trợ prepared statement
+          ...(/:6543\//.test(url) ? { prepare: false } : {}),
+        });
+      },
     },
     {
       provide: DRIZZLE,

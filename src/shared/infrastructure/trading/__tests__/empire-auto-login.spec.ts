@@ -3,17 +3,24 @@ import type { Page } from 'playwright';
 import { autoLogin } from '../empire-auto-login.js';
 
 function element(visible: () => boolean = () => false) {
+  let value = '';
   const result = {
     first: () => result,
     or: () => result,
     filter: () => result,
     isVisible: vi.fn(() => Promise.resolve(visible())),
-    fill: vi.fn((_value: string) => Promise.resolve()),
-    pressSequentially: vi.fn((_value: string, _options: { delay: number }) =>
-      Promise.resolve(),
-    ),
+    fill: vi.fn((v: string) => {
+      value = v;
+      return Promise.resolve();
+    }),
+    pressSequentially: vi.fn((v: string, _options: { delay: number }) => {
+      value += v;
+      return Promise.resolve();
+    }),
+    inputValue: vi.fn((_o?: unknown) => Promise.resolve(value)),
     count: vi.fn(() => Promise.resolve(1)),
     click: vi.fn(() => Promise.resolve()),
+    isEnabled: vi.fn((_o?: unknown) => Promise.resolve(true)),
     getByRole: (_role: string) => result,
   };
   return result;
@@ -172,6 +179,39 @@ describe('csgoempire automatic UI login', () => {
     await expect(
       autoLogin(s.page as unknown as Page, credentials, s.options),
     ).rejects.toThrow('CSGOEMPIRE_VERIFICATION_REQUIRED');
+    expect(s.submit.click).not.toHaveBeenCalled();
+  });
+  it('email gõ không vào đúng ô: báo rõ ô nào, không bấm Log In, không lộ nội dung', async () => {
+    const s = setup();
+    s.username.inputValue.mockResolvedValue('');
+    const diagnostic = vi.fn();
+    await expect(
+      autoLogin(s.page as unknown as Page, credentials, {
+        ...s.options,
+        onDiagnostic: diagnostic,
+      }),
+    ).rejects.toThrow('CSGOEMPIRE_LOGIN_TYPING_FAILED: email');
+    expect(s.submit.click).not.toHaveBeenCalled();
+    const cause = String(
+      diagnostic.mock.calls
+        .map((c) => (c[0] as { cause?: string } | undefined)?.cause)
+        .find(Boolean),
+    );
+    expect(cause).toContain('Ô email');
+    expect(cause).not.toContain(credentials.username);
+  });
+  it('nút Log In bị khóa (trang chờ xác minh): báo rõ, không bấm, không chờ click hết giờ', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const s = setup();
+    s.submit.isEnabled.mockResolvedValue(false);
+    // mỗi lần chờ của trang = đồng hồ chạy thêm chừng đó
+    s.page.waitForTimeout = (ms: number) => {
+      vi.setSystemTime(Date.now() + ms);
+      return Promise.resolve();
+    };
+    await expect(
+      autoLogin(s.page as unknown as Page, credentials, s.options),
+    ).rejects.toThrow('CSGOEMPIRE_LOGIN_SUBMIT_DISABLED');
     expect(s.submit.click).not.toHaveBeenCalled();
   });
   it('does not retry when the login form rejects credentials', async () => {

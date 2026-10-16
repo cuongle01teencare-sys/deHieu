@@ -187,6 +187,20 @@ export class LiveConfigProvider
           expiresAt: null,
           error: code,
         };
+        if (!job.abort.signal.aborted) {
+          const d = job.state.diagnostic;
+          // chuỗi lỗi gốc (cause) đã được che tài khoản/mật khẩu ở empire-session
+          const chain: string[] = [];
+          for (
+            let c: unknown = e instanceof Error ? e.cause : undefined;
+            c instanceof Error && chain.length < 3;
+            c = c.cause
+          )
+            chain.push(c.message.split('\n')[0].slice(0, 200));
+          this.logger.warn(
+            `csgoempire ${profile}: đăng nhập lỗi ${code}${d ? ` ở bước ${d.step}` : ''}${d?.httpStatus ? ` · HTTP ${d.httpStatus}` : ''}${d?.accountIssue ? ` · ${d.accountIssue}` : ''}${d?.cause ? ` · ${d.cause}` : ''}${!d?.cause && chain.length ? ` · ${chain.join(' ← ')}` : ''}`,
+          );
+        }
       });
     return job.state;
   }

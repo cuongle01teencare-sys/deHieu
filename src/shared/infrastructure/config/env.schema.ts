@@ -2,6 +2,11 @@ import { z } from 'zod';
 
 export const envSchema = z.object({
   DATABASE_URL: z.url(),
+  /**
+   * Số kết nối Postgres tối đa của MỘT tiến trình backend. Supabase pooler cổng 5432 (session mode)
+   * giới hạn tổng client theo pool_size: chạy nhiều backend (local + server) cùng lúc thì đặt nhỏ.
+   */
+  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(50).default(5),
 
   // Store (Redis hoặc Dragonfly)
   REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
