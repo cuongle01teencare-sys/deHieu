@@ -1,0 +1,16 @@
+[Unit]
+Description=Arb Ops authenticated local VNC bridge
+Requires=arb-xvfb.service
+After=arb-xvfb.service
+ConditionPathExists=/home/arbops/.vnc/passwd
+
+[Service]
+Type=simple
+User=arbops
+Group=arbops
+ExecStart=/usr/bin/x11vnc -display :99 -auth /run/arb-xvfb/Xauthority -localhost -forever -shared -rfbport 5900 -rfbauth /home/arbops/.vnc/passwd
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

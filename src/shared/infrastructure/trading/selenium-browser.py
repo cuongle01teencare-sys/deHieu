@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--profile", required=True)
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--external-display", action="store_true")
     parser.add_argument("--binary")
     args = parser.parse_args()
     if not 0 <= args.port <= 65535:
@@ -84,6 +85,9 @@ def main():
             # CDP directly, without creating a Selenium/ChromeDriver session.
             driver = sb_cdp.Chrome(
                 headless=args.headless,
+                # On Linux, SeleniumBase otherwise creates a private random
+                # Xvfb that an external, authenticated VNC service cannot see.
+                headed=args.external_display and not args.headless,
                 user_data_dir=os.path.abspath(args.profile),
                 browser_executable_path=args.binary,
                 host="127.0.0.1",

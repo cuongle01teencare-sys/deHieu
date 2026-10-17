@@ -1,0 +1,17 @@
+[Unit]
+Description=Arb Ops authenticated virtual X11 display
+After=local-fs.target
+
+[Service]
+Type=simple
+User=arbops
+Group=arbops
+RuntimeDirectory=arb-xvfb
+RuntimeDirectoryMode=0700
+ExecStartPre=/bin/sh /opt/arb-ops/deploy/prepare-xauthority.sh /run/arb-xvfb/Xauthority :99
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1366x768x24 -nolisten tcp -noreset -auth /run/arb-xvfb/Xauthority
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

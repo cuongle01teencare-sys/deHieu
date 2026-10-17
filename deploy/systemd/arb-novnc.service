@@ -1,0 +1,15 @@
+[Unit]
+Description=Arb Ops loopback-only noVNC web bridge
+Requires=arb-x11vnc.service
+After=arb-x11vnc.service
+
+[Service]
+Type=simple
+User=arbops
+Group=arbops
+ExecStart=/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

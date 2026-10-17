@@ -40,6 +40,7 @@ function setup() {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
   vi.clearAllMocks();
 });
 
@@ -59,6 +60,19 @@ describe('SeleniumBase process ownership', () => {
     expect(s.browser.close).toHaveBeenCalledOnce();
     expect(s.child.stdin.writableEnded).toBe(true);
     expect(s.child.stdout.listenerCount('data')).toBe(0);
+  });
+
+  it('uses the configured external display for headed Chrome', async () => {
+    vi.stubEnv('TRADING_EXTERNAL_DISPLAY', '1');
+    const s = setup();
+    const starting = launchSeleniumContext('/profiles/unit', {
+      headless: false,
+    });
+    s.ready();
+    const context = await starting;
+    expect(mocks.spawn.mock.calls[0]?.[1]).toContain('--external-display');
+    expect(mocks.spawn.mock.calls[0]?.[1]).not.toContain('--headless');
+    await context.close();
   });
 
   it('reaps the helper when CDP cannot connect', async () => {

@@ -24,6 +24,9 @@ export async function launchSeleniumContext(
       '--port',
       String(options.port ?? 0),
       ...(options.headless ? ['--headless'] : []),
+      ...(process.env.TRADING_EXTERNAL_DISPLAY === '1'
+        ? ['--external-display']
+        : []),
       ...(process.env.TRADING_CHROMIUM_PATH
         ? ['--binary', process.env.TRADING_CHROMIUM_PATH]
         : []),

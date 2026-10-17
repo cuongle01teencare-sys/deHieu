@@ -278,6 +278,46 @@ Cổng 3000–3003 phải chỉ nghe trên `127.0.0.1`. systemd tự chạy sau 
 Service dùng pnpm `/home/arbops/.local/share/pnpm/bin/pnpm`, không phụ thuộc nvm/shell tương tác.
 Nếu đổi user/thư mục, sửa `User`, `Group`, `WorkingDirectory`, `PATH`, `PNPM_HOME`, `ExecStart`.
 
+### 6.1. Xem Chromium trên VPS qua noVNC
+
+SeleniumBase mặc định tự tạo Xvfb ngẫu nhiên trên Linux. Để noVNC bám đúng Chrome của backend,
+dùng display cố định `:99` với Xauthority riêng. VNC và noVNC chỉ nghe loopback; không mở cổng
+`5900` hoặc `6080` trên UFW/firewall nhà cung cấp.
+
+```bash
+sudo apt update
+sudo apt install -y xvfb xauth x11-utils x11vnc novnc websockify
+sudo -iu arbops x11vnc -storepasswd
+sudo install -m 644 /opt/arb-ops/deploy/systemd/arb-xvfb.service /etc/systemd/system/arb-xvfb.service
+sudo install -m 644 /opt/arb-ops/deploy/systemd/arb-x11vnc.service /etc/systemd/system/arb-x11vnc.service
+sudo install -m 644 /opt/arb-ops/deploy/systemd/arb-novnc.service /etc/systemd/system/arb-novnc.service
+sudo install -m 644 /opt/arb-ops/deploy/systemd/arb-backend.service /etc/systemd/system/arb-backend.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now arb-xvfb arb-x11vnc arb-novnc
+sudo systemctl restart arb-backend
+```
+
+Nếu trước đó đã chạy `websockify`, `x11vnc` hoặc Xvfb `:99` bằng `nohup`, xem PID bằng
+`sudo ss -lntp` và `ps` rồi dừng đúng tiến trình thủ công trước khi bật service để tránh `Address already in use`.
+Không dừng các Xvfb khác khi chưa xác nhận chúng thuộc ứng dụng này.
+
+```bash
+sudo systemctl status arb-xvfb arb-x11vnc arb-novnc arb-backend --no-pager
+sudo -u arbops env DISPLAY=:99 XAUTHORITY=/run/arb-xvfb/Xauthority xdpyinfo >/dev/null
+nc -vz 127.0.0.1 5900
+curl --fail http://127.0.0.1:6080/vnc.html >/dev/null
+sudo ss -lntp | grep -E ':(5900|6080)'
+```
+
+Trên máy Windows, tạo tunnel từ máy cá nhân tới loopback của VPS; không chạy lệnh này bên trong VPS:
+
+```powershell
+ssh -N -L 6081:127.0.0.1:6080 root@dehieu-api.duckdns.org
+```
+
+Mở `http://127.0.0.1:6081/vnc.html?autoconnect=1&resize=scale` và nhập mật khẩu VNC đã tạo.
+Không gửi file `/run/arb-xvfb/Xauthority`, `/home/arbops/.vnc/passwd`, cookie hoặc JWT vào log/chat.
+
 ## 7. HTTPS/WSS: chọn một proxy
 
 **Chọn Caddy hoặc Nginx, không bật cả hai trên 80/443.** Caddy tự lo chứng chỉ, Nginx dùng Certbot.

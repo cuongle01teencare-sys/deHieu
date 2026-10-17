@@ -1,7 +1,8 @@
 [Unit]
 Description=Arb Ops NestJS backend
 Wants=network-online.target docker.service
-After=network-online.target docker.service
+Requires=arb-xvfb.service
+After=network-online.target docker.service arb-xvfb.service
 StartLimitIntervalSec=60
 StartLimitBurst=10
 
@@ -13,6 +14,9 @@ WorkingDirectory=/opt/arb-ops
 Environment=NODE_ENV=production
 Environment=HTTP_BIND_HOST=127.0.0.1
 Environment=WS_BIND_HOST=127.0.0.1
+Environment=DISPLAY=:99
+Environment=XAUTHORITY=/run/arb-xvfb/Xauthority
+Environment=TRADING_EXTERNAL_DISPLAY=1
 Environment=PNPM_HOME=/home/arbops/.local/share/pnpm
 Environment=PATH=/home/arbops/.local/share/pnpm/bin:/usr/local/bin:/usr/bin:/bin
 ExecStartPre=/usr/bin/test -f /opt/arb-ops/.env
@@ -24,6 +28,7 @@ TimeoutStopSec=30
 KillMode=control-group
 NoNewPrivileges=true
 PrivateTmp=true
+BindReadOnlyPaths=/tmp/.X11-unix /run/arb-xvfb/Xauthority
 ProtectSystem=full
 UMask=0077
 
