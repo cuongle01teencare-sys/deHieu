@@ -292,7 +292,28 @@ export class EmpireBalanceWatcher {
             `CSGOEMPIRE_BALANCE_READ_FAILED: exchange-rates HTTP ${rates.status}`,
           );
         if (w.rates?.read !== rates) w.rates = { read: rates, at: Date.now() };
-        const b = empireBalanceFrom(meta.json, rates.json);
+        let b: ReturnType<typeof empireBalanceFrom>;
+        for (let attempt = 0; ; attempt++) {
+          try {
+            b = empireBalanceFrom(meta.json, rates.json);
+            break;
+          } catch (error) {
+            const guestMetadata =
+              error instanceof Error &&
+              error.message.startsWith('CSGOEMPIRE_SESSION_EXPIRED');
+            if (!guestMetadata || attempt >= 2 || !w.headers || !onEmpire(page))
+              throw error;
+            // Ngay sau login, request metadata đầu tiên đôi khi vẫn là trạng thái guest trong lúc
+            // device session vừa được gắn. Đọc lại bằng đúng header của trang trước khi kết luận hết phiên.
+            await page.waitForTimeout(750);
+            meta = await fetchInPage(page, META, w.headers);
+            if (!good(meta))
+              throw new Error(
+                `CSGOEMPIRE_BALANCE_READ_FAILED: metadata đọc lại HTTP ${meta.status}`,
+                { cause: error },
+              );
+          }
+        }
         // Đúng tài khoản đã lưu? Sàn trả username/email mà không khớp → sai tài khoản: lưu lỗi để
         // worker TỪ CHỐI vào lệnh (kiểm lại mỗi lần đọc, không chỉ lúc bấm nút kiểm tra).
         const remote = [b.username, b.email].map(norm).filter(Boolean);

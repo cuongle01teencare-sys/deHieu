@@ -24,7 +24,7 @@ export const TraderConfigSchema = z.object({
         brandId: z.literal('2432911154364948480'),
         sessionId: z.string(),
         minBet: nonNeg,
-        cookie: z.string(),
+        cookie: z.string().optional(),
         userAgent: z.string().optional(),
       }),
       polymarket: z.object({

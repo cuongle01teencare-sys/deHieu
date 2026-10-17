@@ -23,7 +23,7 @@ Chrome chỉ mở khi cần đăng nhập/làm mới JWT; JWT còn hạn dùng c
 ```ts
 const context = await launchProfile('empire-main', { login: true, signal });
 try {
-  const page = context.pages()[0] ?? await context.newPage();
+  const page = context.pages()[0] ?? (await context.newPage());
   // Điều khiển page bằng Playwright như hiện tại.
 } finally {
   await context.close(); // Đóng CDP và Chrome; giữ profile trên đĩa.
@@ -106,7 +106,7 @@ xvfb-run -a pnpm trading:login empire-main --har=/secure/empire.har
 
 Lệnh in SSH tunnel. Chạy tunnel trên máy cá nhân, mở `chrome://inspect/#devices`, thêm `localhost:9222`, chọn **Inspect**, đăng nhập và mở Match betting trên tab Chromium của server. Nhấn Enter ở terminal server để đóng Chromium và lưu phiên. Trình quản lý mật khẩu Chromium bị tắt. Đây là luồng thủ công tùy chọn; luồng tự động dùng thông tin mã hóa trong database.
 
-App dùng chính luồng phiên của trang để nhận JWT mới, gọi identify bằng API, rồi gửi phiên trong lệnh `config` riêng cho worker. JWT/cookie được giữ trong bộ nhớ của backend/worker, còn cookie đăng nhập được giữ trong hồ sơ Chromium; không xuất hiện ở API cấu hình cho web. Khi có worker live đang chạy, phiên được kiểm tra theo nhịp đối chiếu 30 giây và làm mới khi còn khoảng **10 phút** trước hạn `exp` (JWT 30 phút được làm mới ở phút thứ 20). Nếu sàn cấp JWT sống không quá 10 phút, dùng mốc 80% thời hạn để tránh mở Chromium ở mọi nhịp đối chiếu. Khởi động lại backend sẽ lấy JWT từ phiên trong hồ sơ, không dùng JWT cũ lưu trên đĩa. Gặp CAPTCHA/xác minh/phiên hết hạn sẽ đứng yên với lý do **Phiên csgoempire hết hạn**. Đăng nhập lại bằng nút hoặc lệnh trên; không tự vượt xác minh. Có thể chạy app dưới Xvfb với `TRADING_BROWSER_HEADED=1` nếu cần Chromium có giao diện.
+App dùng chính luồng phiên của trang để nhận JWT mới, gọi identify bằng API, rồi gửi phiên trong lệnh `config` riêng cho worker. JWT được giữ trong bộ nhớ của backend/worker; cookie và device session đăng nhập chỉ nằm trong hồ sơ Chromium, không bị sao chép sang cấu hình worker và không xuất hiện ở API cấu hình cho web. Khi có worker live đang chạy, phiên được kiểm tra theo nhịp đối chiếu 30 giây và làm mới khi còn khoảng **10 phút** trước hạn `exp` (JWT 30 phút được làm mới ở phút thứ 20). Nếu sàn cấp JWT sống không quá 10 phút, dùng mốc 80% thời hạn để tránh mở Chromium ở mọi nhịp đối chiếu. Khởi động lại backend sẽ lấy JWT từ phiên trong hồ sơ, không dùng JWT cũ lưu trên đĩa. Gặp CAPTCHA/xác minh/phiên hết hạn sẽ đứng yên với lý do **Phiên csgoempire hết hạn**. Đăng nhập lại bằng nút hoặc lệnh trên; không tự vượt xác minh. Có thể chạy app dưới Xvfb với `TRADING_BROWSER_HEADED=1` nếu cần Chromium có giao diện.
 
 ## Cash và kết quả hai chân
 

@@ -817,10 +817,6 @@ export class EmpireSessions {
             throw new Error('CSGOEMPIRE_SESSION_ACCESS_BLOCKED');
           if (who.currency !== 'USD')
             invalidSession('identify_currency_unsupported', identify.status);
-          const cookie = (await context.cookies('https://csgoempire.com'))
-            .map((c) => `${c.name}=${c.value}`)
-            .join('; ');
-          if (!cookie) throw new Error('CSGOEMPIRE_SESSION_COOKIE_MISSING');
           // Đọc ngay trong Chrome vừa đăng nhập (cùng cookie, User-Agent, TLS): request "trần" từ Node
           // dễ bị Cloudflare chặn vì cookie chống bot gắn với chính trình duyệt đã nhận nó.
           let inPage = seen.user() ?? (await readUserInPage(page));
@@ -931,7 +927,6 @@ export class EmpireSessions {
             brandId,
             sessionId,
             minBet: Number(who.currency_detail?.min_bet ?? '0.1'),
-            cookie,
             ...(userAgent ? { userAgent } : {}),
           };
           const issued =

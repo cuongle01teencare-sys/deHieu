@@ -402,13 +402,13 @@ describe('csgoempire session refresh', () => {
     expect(mocks.launch).toHaveBeenCalledTimes(2);
   });
 
-  it('reuses saved browser cookies after a backend restart but obtains a fresh JWT', async () => {
+  it('reuses the saved browser profile after a backend restart but obtains a fresh JWT', async () => {
     const s = setup();
     const first = await s.sessions.get('empire-test');
     const restarted = new EmpireSessions(s.locks as unknown as AccountLock);
     const next = await restarted.get('empire-test');
     expect(next.token).not.toBe(first.token);
-    expect(next.cookie).toBe('unit-session=test');
+    expect(next).not.toHaveProperty('cookie');
     expect(mocks.launch).toHaveBeenCalledTimes(2);
   });
 

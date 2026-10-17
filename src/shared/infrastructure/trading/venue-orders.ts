@@ -505,9 +505,12 @@ export class ApiVenueOrders implements VenueOrders {
     if (p.stake < c.minBet) throw new Error('CSGOEMPIRE_BELOW_MIN_BET');
     const headers = {
       Authorization: `Bearer ${c.token}`,
+      Accept: 'application/json',
       'Content-Type': 'application/json',
       'X-Session-Id': c.sessionId,
       Origin: 'https://csgoempire.com',
+      Referer: 'https://csgoempire.com/',
+      ...(c.userAgent ? { 'User-Agent': c.userAgent } : {}),
     };
     const coupon = {
       type: '1/1',

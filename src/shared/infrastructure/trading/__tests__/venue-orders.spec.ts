@@ -385,6 +385,30 @@ describe('direct venue APIs', () => {
     ).toMatchObject({ cash: 0 });
   });
 
+  it('BetBy requests reuse the browser User-Agent without forwarding CSGOEmpire cookies', async () => {
+    const fetcher = vi.fn(() =>
+      Promise.resolve(Response.json({ max_bet: '30' })),
+    );
+    vi.stubGlobal('fetch', fetcher);
+    await new ApiVenueOrders(store({ cash: 100 })).empire(
+      { ...session, userAgent: 'UnitChrome/155' },
+      plan,
+      new AbortController().signal,
+    );
+    const headers = fetcher.mock.calls[0]?.[1]?.headers as Record<
+      string,
+      string
+    >;
+    expect(headers).toMatchObject({
+      Accept: 'application/json',
+      Origin: 'https://csgoempire.com',
+      Referer: 'https://csgoempire.com/',
+      'User-Agent': 'UnitChrome/155',
+      'X-Session-Id': 'session',
+    });
+    expect(headers).not.toHaveProperty('Cookie');
+  });
+
   it('API trả trang HTML lỗi: báo "sàn từ chối", không coi là phiên hết hạn; Cloudflare chỉ khi có dấu Cloudflare', async () => {
     const html = (headers: Record<string, string>) =>
       vi.fn(() =>

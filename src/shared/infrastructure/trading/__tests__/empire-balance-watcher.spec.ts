@@ -110,6 +110,7 @@ function browser(...scenarios: Scenario[]) {
     /** Địa chỉ hiện tại: about:blank tới khi goto. */
     current: 'about:blank',
     url: () => page.current,
+    waitForTimeout: vi.fn(() => Promise.resolve()),
     isClosed: () => false,
   };
   const context = {
@@ -157,6 +158,18 @@ describe('Chrome nền đọc số dư csgoempire', () => {
     expect(saved[0]).toMatch(/^csgoempire:/);
     expect(saved[1]).toMatchObject({ cash: 50, coins: 100 });
     expect(JSON.stringify(saved[1])).not.toContain('me@example.test');
+    await w.closeAll();
+  });
+
+  it('metadata đầu tiên còn guest ngay sau login: đọc lại trước khi báo phiên hết hạn', async () => {
+    const b = browser({ meta: [200, {}], rates: [200, rates] });
+    const s = sink();
+    const w = new EmpireBalanceWatcher(s);
+    const r = await w.readNow('empire-guest-race');
+    expect(r).toMatchObject({ cash: 50, email: 'me@example.test' });
+    expect(b.page.waitForTimeout).toHaveBeenCalledWith(750);
+    expect(b.page.evaluate).toHaveBeenCalledOnce();
+    expect(s.saveEmpireBalanceError).not.toHaveBeenCalled();
     await w.closeAll();
   });
 

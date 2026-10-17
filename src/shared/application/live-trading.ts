@@ -8,9 +8,9 @@ export interface LiveTradingConfig {
     brandId: string;
     sessionId: string;
     minBet: number;
-    /** Cookie header for direct balance requests; held in memory only. */
-    cookie: string;
-    /** User-Agent của chính Chrome đã lấy cookie: gửi kèm để Cloudflare không coi là trình duyệt khác. */
+    /** Tương thích cấu hình worker cũ; phiên mới không còn sao chép cookie khỏi Chromium. */
+    cookie?: string;
+    /** User-Agent của chính Chrome đã lấy JWT, dùng cho request BetBy. */
     userAgent?: string;
   };
   polymarket: {
