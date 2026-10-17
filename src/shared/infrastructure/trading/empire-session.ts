@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   chromium,
   type BrowserContext,
+  type Page,
   type Response as BrowserResponse,
 } from 'playwright';
 import type { LiveTradingConfig } from '../../application/live-trading.js';
@@ -371,10 +372,18 @@ export class EmpireSessions {
     private readonly onProbe?: (browserProfile: string, info: string) => void,
     /**
      * Hồ sơ đang được dùng ở nơi khác trong tiến trình (Chrome nền đọc số dư): `acquire` đóng nó
-     * trước khi mở Chrome làm mới phiên, `release` cho mở lại sau đó.
+     * trước khi mở Chrome làm mới phiên. Sau khi lấy JWT thành công, `adopt` có thể nhận luôn
+     * context/tab vừa đăng nhập; `release` kết thúc thời gian nhường hồ sơ.
      */
     private readonly profileHooks?: {
       acquire(browserProfile: string): Promise<void>;
+      adopt?(
+        browserProfile: string,
+        context: BrowserContext,
+        page: Page,
+        expected?: string,
+        headers?: Record<string, string>,
+      ): Promise<boolean>;
       release(browserProfile: string): void;
     },
     /**
@@ -589,6 +598,7 @@ export class EmpireSessions {
       async () => {
         let context: BrowserContext | undefined;
         let acquired = false;
+        let adopted = false;
         const signal = options.signal ?? new AbortController().signal;
         /** Lần này app có gõ tài khoản/mật khẩu đã lưu vào form không (hay dùng phiên có sẵn). */
         let typedCredentials = false;
@@ -955,6 +965,16 @@ export class EmpireSessions {
               browserProfile,
               `identify BetBy gồm: ${identifyFields || '—'} || API trang đã gọi: ${seen.summary() || 'không thấy'} || trường giống số dư: ${seen.balances() || 'không thấy'}`,
             );
+          if (this.profileHooks?.adopt)
+            adopted = await this.profileHooks
+              .adopt(
+                browserProfile,
+                context,
+                page,
+                options.credentials?.username,
+                await seen.headers(),
+              )
+              .catch(() => false);
           return session;
         } catch (e) {
           if (signal.aborted)
@@ -997,7 +1017,7 @@ export class EmpireSessions {
           throw new Error(error, { cause: e });
         } finally {
           signal.removeEventListener('abort', onAbort);
-          await context?.close();
+          if (!adopted) await context?.close();
           if (acquired) this.profileHooks?.release(browserProfile);
         }
       },
@@ -1196,6 +1216,7 @@ function observeSiteApi(page: {
   const calls: string[] = [];
   const balances: string[] = [];
   let user: InPageUser | null = null;
+  let headers = Promise.resolve<Record<string, string>>({});
   page.on?.('response', (r: BrowserResponse) => {
     let url: URL;
     try {
@@ -1210,7 +1231,18 @@ function observeSiteApi(page: {
     if (!empire && !betby) return;
     const label = `${betby ? 'betby' : 'empire'}${apiPath(url)}`;
     if (calls.length < 60) calls.push(`${label} ${r.status()}`);
-    if (empire && url.pathname === '/api/v2/metadata' && r.ok())
+    if (empire && url.pathname === '/api/v2/metadata' && r.ok()) {
+      headers = r
+        .request()
+        .allHeaders()
+        .then((all) =>
+          Object.fromEntries(
+            Object.entries(all).filter(([key]) =>
+              /^x-(empire|env)-/i.test(key),
+            ),
+          ),
+        )
+        .catch(() => ({}));
       void r
         .json()
         .then((meta: { user?: unknown } | null) => {
@@ -1226,6 +1258,7 @@ function observeSiteApi(page: {
           };
         })
         .catch(() => undefined);
+    }
     const type = r.headers()['content-type'] ?? '';
     if (r.ok() && /json/i.test(type) && balances.length < 12)
       void r
@@ -1238,6 +1271,7 @@ function observeSiteApi(page: {
   });
   return {
     user: () => user,
+    headers: () => headers,
     summary: () => [...new Set(calls)].slice(0, 25).join(', '),
     balances: () => [...new Set(balances)].join(' | '),
   };

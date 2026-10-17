@@ -195,6 +195,43 @@ export class EmpireBalanceWatcher {
     if (!w.paused && w.wantedUntil > Date.now()) void this.tick(profile);
   }
 
+  /**
+   * Nhận luôn Chrome/tab vừa lấy JWT thành công. Route bảo vệ được gắn trước khi watcher sở hữu
+   * context; nếu không gắn được thì trả false để EmpireSessions đóng context theo luồng cũ.
+   */
+  async adopt(
+    profile: string,
+    context: BrowserContext,
+    page: Page,
+    expected?: string,
+    headers?: Record<string, string>,
+  ): Promise<boolean> {
+    const w = this.entry(profile);
+    if (w.context && w.context !== context) return false;
+    try {
+      await this.protectJwt(context, w);
+      if (page.isClosed()) return false;
+      w.context = context;
+      w.page = page;
+      w.headers =
+        headers && Object.keys(headers).length ? { ...headers } : null;
+      w.failures = 0;
+      w.nextAt = 0;
+      if (expected !== undefined) w.expected = norm(expected);
+      w.wantedUntil = Math.max(w.wantedUntil, Date.now() + this.idleMs);
+      this.start();
+      await page.bringToFront().catch(() => undefined);
+      return true;
+    } catch (error) {
+      const code =
+        error instanceof Error ? error.message : 'BROWSER_HANDOFF_FAILED';
+      this.log(
+        `csgoempire ${profile}: không thể giữ lại Chrome đăng nhập để đọc số dư — ${code}`,
+      );
+      return false;
+    }
+  }
+
   /** Số Chrome nền đang mở (theo dõi). */
   get openCount() {
     return [...this.watched.values()].filter((w) => w.context).length;
@@ -421,15 +458,7 @@ export class EmpireBalanceWatcher {
           visible: true,
         });
         w.context = context;
-        // Chrome nền CHỈ đọc số dư: chặn trang xin phiên BetBy mới. Mỗi lần trang Match betting tải,
-        // site xin JWT BetBy mới — có thể làm vô hiệu JWT bot đang dùng (BetBy trả 401 khi vào lệnh).
-        await context.route(
-          (url) => url.pathname.startsWith(BETBY_SESSION_PATH),
-          (route) => {
-            w.blockedBetby++;
-            return route.abort('blockedbyclient');
-          },
-        );
+        await this.protectJwt(context, w);
         // Hồ sơ persistent có thể khôi phục tab roulette của lần chạy trước. Dùng một tab mới sau
         // khi route bảo vệ đã được gắn, rồi đóng các tab khởi động để chúng không chạy nền hoặc
         // xin một phiên BetBy khác trước tab mà watcher kiểm soát.
@@ -447,6 +476,17 @@ export class EmpireBalanceWatcher {
       });
     await w.opening;
     return w.page!;
+  }
+
+  /** Chặn riêng endpoint cấp JWT BetBy mới; vẫn cho Sptpub và API số dư hoạt động. */
+  private protectJwt(context: BrowserContext, w: Watched) {
+    return context.route(
+      (url) => url.pathname.startsWith(BETBY_SESSION_PATH),
+      (route) => {
+        w.blockedBetby++;
+        return route.abort('blockedbyclient');
+      },
+    );
   }
 
   private async closeBrowser(profile: string, w: Watched) {

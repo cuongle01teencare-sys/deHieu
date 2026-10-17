@@ -46,6 +46,7 @@ function setup(lifetimeMinutes = 30) {
   const page = {
     on: vi.fn(),
     off: vi.fn(),
+    isClosed: () => false,
     getByRole: (_role: string) => absent,
     getByText: (_text: RegExp) => absent,
     locator: (_selector: string) => absent,
@@ -1080,5 +1081,33 @@ describe('dùng chung hồ sơ với Chrome nền đọc số dư', () => {
       'close',
       'release:shared',
     ]);
+  });
+
+  it('bàn giao context/tab vừa lấy JWT thành công thay vì đóng rồi mở Chrome thứ hai', async () => {
+    const s = setup();
+    const adopt = vi.fn(() => Promise.resolve(true));
+    const release = vi.fn();
+    const sessions = new EmpireSessions(
+      s.locks as unknown as AccountLock,
+      undefined,
+      undefined,
+      {
+        acquire: () => Promise.resolve(),
+        adopt,
+        release,
+      },
+    );
+    await sessions.get('shared-handoff');
+    expect(adopt).toHaveBeenCalledWith(
+      'shared-handoff',
+      expect.anything(),
+      s.page,
+      undefined,
+      {},
+    );
+    expect(s.close).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledWith('shared-handoff');
+    await closeProfile('shared-handoff');
+    expect(s.close).toHaveBeenCalledOnce();
   });
 });

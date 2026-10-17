@@ -292,6 +292,30 @@ describe('Chrome nền đọc số dư csgoempire', () => {
     await w.closeAll();
   });
 
+  it('nhận luôn tab vừa lấy JWT để đọc số dư, không mở Chrome thứ hai', async () => {
+    const b = browser(ok);
+    b.page.current = 'https://csgoempire.com/match-betting';
+    const w = new EmpireBalanceWatcher(sink());
+    expect(
+      await w.adopt(
+        'empire-handoff',
+        b.context as never,
+        b.page as never,
+        'me@example.test',
+        {
+          'x-empire-device-identifier': 'dev-123',
+          'x-env-class': 'blue',
+        },
+      ),
+    ).toBe(true);
+    expect((await w.readNow('empire-handoff')).cash).toBe(50);
+    expect(mocks.launch).not.toHaveBeenCalled();
+    expect(b.context.route).toHaveBeenCalledOnce();
+    expect(b.page.goto).not.toHaveBeenCalled();
+    expect(b.page.evaluate).toHaveBeenCalledTimes(2);
+    await w.closeAll();
+  });
+
   it('đọc nhanh (mặc định 2 giây); lỗi liên tiếp thì giãn nhịp 4s → 8s… để không dội sàn, đọc được thì về nhịp thường', async () => {
     vi.useFakeTimers();
     browser({ meta: [403, null] });

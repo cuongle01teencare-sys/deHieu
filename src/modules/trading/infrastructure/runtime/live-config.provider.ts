@@ -74,10 +74,19 @@ export class LiveConfigProvider
             this.logger.log(
               `csgoempire ${profile}: thăm dò sau đăng nhập — ${info}`,
             ),
-          // làm mới phiên / đăng nhập dùng chung hồ sơ với Chrome nền: tạm đóng Chrome nền
+          // làm mới phiên / đăng nhập dùng chung hồ sơ với Chrome nền: tạm đóng Chrome nền,
+          // rồi bàn giao luôn tab vừa lấy JWT để đọc số dư (không mở Chrome thứ hai)
           this.balances
             ? {
                 acquire: (profile) => this.balances!.pause(profile),
+                adopt: (profile, context, page, expected, headers) =>
+                  this.balances!.adopt(
+                    profile,
+                    context,
+                    page,
+                    expected,
+                    headers,
+                  ),
                 release: (profile) => this.balances!.resume(profile),
               }
             : undefined,
