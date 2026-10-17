@@ -123,7 +123,7 @@ interface Watched {
   failures: number;
   /** Nhịp đọc nền kế tiếp không sớm hơn mốc này (giãn khi lỗi). */
   nextAt: number;
-  /** Số request phiên BetBy / sptpub đã chặn (chẩn đoán). */
+  /** Số request cấp phiên BetBy mới đã chặn (chẩn đoán). */
   blockedBetby: number;
   /** Header riêng của trang (lấy từ request trang tự gửi); null = chưa có, phải mở lại trang. */
   headers: Record<string, string> | null;
@@ -424,15 +424,23 @@ export class EmpireBalanceWatcher {
         // Chrome nền CHỈ đọc số dư: chặn trang xin phiên BetBy mới. Mỗi lần trang Match betting tải,
         // site xin JWT BetBy mới — có thể làm vô hiệu JWT bot đang dùng (BetBy trả 401 khi vào lệnh).
         await context.route(
-          (url) =>
-            url.pathname.startsWith(BETBY_SESSION_PATH) ||
-            /(^|\.)sptpub\.com$/.test(url.hostname),
+          (url) => url.pathname.startsWith(BETBY_SESSION_PATH),
           (route) => {
             w.blockedBetby++;
             return route.abort('blockedbyclient');
           },
         );
-        const page = context.pages()[0] ?? (await context.newPage());
+        // Hồ sơ persistent có thể khôi phục tab roulette của lần chạy trước. Dùng một tab mới sau
+        // khi route bảo vệ đã được gắn, rồi đóng các tab khởi động để chúng không chạy nền hoặc
+        // xin một phiên BetBy khác trước tab mà watcher kiểm soát.
+        const startupPages = context.pages();
+        const page = await context.newPage();
+        await Promise.allSettled(
+          startupPages
+            .filter((candidate) => candidate !== page)
+            .map((p) => p.close()),
+        );
+        await page.bringToFront();
         w.page = page;
       })().finally(() => {
         w.opening = null;

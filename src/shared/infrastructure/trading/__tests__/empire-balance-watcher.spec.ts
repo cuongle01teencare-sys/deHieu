@@ -111,6 +111,8 @@ function browser(...scenarios: Scenario[]) {
     current: 'about:blank',
     url: () => page.current,
     waitForTimeout: vi.fn(() => Promise.resolve()),
+    bringToFront: vi.fn(() => Promise.resolve()),
+    close: vi.fn(() => Promise.resolve()),
     isClosed: () => false,
   };
   const context = {
@@ -250,7 +252,7 @@ describe('Chrome nền đọc số dư csgoempire', () => {
     await w.closeAll();
   });
 
-  it('Chrome nền chặn trang xin phiên BetBy mới (không làm vô hiệu JWT bot đang dùng), vẫn cho API số dư', async () => {
+  it('Chrome nền chặn đúng endpoint cấp phiên BetBy mới, vẫn cho API số dư và Sptpub tải giao diện', async () => {
     const b = browser(ok);
     const w = new EmpireBalanceWatcher(sink());
     await w.readNow('empire-12');
@@ -266,12 +268,27 @@ describe('Chrome nền đọc số dư csgoempire', () => {
       blocked(
         'https://api-h-c7818b61-608.sptpub.com/api/v2/auth/brand/1/identify',
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(blocked('https://csgoempire.com/api/v2/metadata')).toBe(false);
     expect(
       blocked('https://csgoempire.com/api/v2/metadata/exchange-rates'),
     ).toBe(false);
     expect(blocked('https://csgoempire.com/match-betting')).toBe(false);
+    await w.closeAll();
+  });
+
+  it('đóng tab roulette được profile khôi phục và chỉ dùng tab mới có route bảo vệ', async () => {
+    const b = browser(ok);
+    const restored = { close: vi.fn(() => Promise.resolve()) };
+    b.context.pages = () => [restored as never];
+    const w = new EmpireBalanceWatcher(sink());
+    await w.readNow('empire-restored-roulette');
+    expect(restored.close).toHaveBeenCalledOnce();
+    expect(b.page.bringToFront).toHaveBeenCalledOnce();
+    expect(b.page.goto).toHaveBeenCalledWith(
+      'https://csgoempire.com/match-betting',
+      expect.anything(),
+    );
     await w.closeAll();
   });
 
